@@ -1,0 +1,17 @@
+{
+  "theme": {
+    "colors": {
+      "theme-brand-dark": "#7f1d1d",
+      "theme-brand-primary": "#991b1b",
+      "theme-brand-accent": "#b91c1c",
+      "theme-brand-light": "#fee2e2",
+      "theme-surface-hover": "#f9fafb"
+    },
+    "spacing": {
+      "auth-container": "calc(100vh - 8rem)"
+    },
+    "gradients": {
+      "theme-gradient-fire": "linear-gradient(to right, #facc15, #f97316, #ef4444)"
+    }
+  }
+}

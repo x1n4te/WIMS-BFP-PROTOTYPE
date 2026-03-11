@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # --- Infrastructure & Databases ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: wims-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: wims
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: wims-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.0
+    container_name: wims-keycloak
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8080
+      KC_HOSTNAME_STRICT: "false"
+    ports:
+      - "8080:8080"
+    restart: always
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: wims-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: always
+
+  # --- Applications ---
+  # (Uncomment these if you want to run them via Docker instead of locally via terminal)
+  
+  # backend:
+  #   build: ./backend
+  #   container_name: wims-backend
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - DATABASE_URL=postgresql://postgres:password@postgres:5432/wims
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - KEYCLOAK_URL=http://keycloak:8080
+  #     - OLLAMA_URL=http://ollama:11434
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #     - keycloak
+  #     - ollama
+
+  # frontend:
+  #   build: ./frontend
+  #   container_name: wims-frontend
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=http://localhost:8000
+  #   depends_on:
+  #     - backend
+
+volumes:
+  postgres_data:
+  ollama_data:

@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --theme-gradient-fire: linear-gradient(to right, #facc15, #f97316, #ef4444);
+}
+
+@theme inline {
+  --color-background: var(--background, #ffffff);
+  --color-foreground: var(--foreground, #171717);
+  --font-sans: var(--font-geist-sans, ui-sans-serif, system-ui);
+  --font-mono: var(--font-geist-mono, ui-monospace, SFMono-Regular);
+
+  --color-theme-brand-dark: #7f1d1d;
+  --color-theme-brand-primary: #991b1b;
+  --color-theme-brand-accent: #b91c1c;
+  --color-theme-brand-light: #fee2e2;
+  --color-theme-surface-hover: #f9fafb;
+
+  --color-theme-surface-subtle: #f9fafb;
+  --color-theme-on-brand: #ffffff;
+  --color-theme-surface: #ffffff;
+  --color-theme-focus-offset: #ffffff;
+  --color-theme-none: transparent;
+
+  --color-theme-accent-light: #facc15;
+  --color-theme-accent-mid: #f97316;
+  --color-theme-accent-dark: #ef4444;
+
+  --spacing-auth-container: calc(100vh - var(--spacing-32, 8rem));
+}
+
+@utility bg-theme-gradient-fire {
+  background-image: var(--theme-gradient-fire, linear-gradient(to right, currentColor, currentColor));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background, #ffffff);
+  color: var(--foreground, #171717);
+  font-family: Arial, Helvetica, sans-serif;
+}
