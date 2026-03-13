@@ -8,11 +8,24 @@ const BACKEND_URL =
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { code, code_verifier, redirect_uri } = body;
+    const { code, code_verifier, redirect_uri, access_token } = body;
+
+    // Accept access_token from client-side signinCallback() flow
+    if (access_token) {
+      const response = NextResponse.json({ user_id: 'ok' });
+      response.cookies.set('access_token', access_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24, // 24h
+      });
+      return response;
+    }
 
     if (!code || !code_verifier || !redirect_uri) {
       return NextResponse.json(
-        { error: 'Missing code, code_verifier, or redirect_uri' },
+        { error: 'Missing code, code_verifier, redirect_uri, or access_token' },
         { status: 400 }
       );
     }
@@ -32,9 +45,9 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await res.json();
-    const { access_token } = data;
+    const token = data.access_token;
 
-    if (!access_token) {
+    if (!token) {
       return NextResponse.json(
         { error: 'No access token in response' },
         { status: 500 }
@@ -42,7 +55,7 @@ export async function POST(req: NextRequest) {
     }
 
     const response = NextResponse.json({ user_id: data.user_id });
-    response.cookies.set('access_token', access_token, {
+    response.cookies.set('access_token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',

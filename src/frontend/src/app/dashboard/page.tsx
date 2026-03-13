@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { fetchRegions, fetchProvinces, fetchCities } from '@/lib/api';
 import { edgeFunctions, AnalyticsSummaryResponse } from '@/lib/edgeFunctions';
 import { RefreshCw, Download, HelpCircle, Calendar, X, Info, FileText, Upload } from 'lucide-react';
 
@@ -31,50 +32,29 @@ export default function DashboardPage() {
 
     const authorizedForAnalytics = role === 'ADMIN' || role === 'ANALYST' || role === 'SYSTEM_ADMIN' || ((role === 'ENCODER' || role === 'VALIDATOR') && !assignedRegionId);
 
-    // Fetch Regions on mount
     useEffect(() => {
-        const fetchRegions = async () => {
-            const { createClient } = await import('@/lib/supabaseClient');
-            const supabase = createClient();
-            const { data } = await supabase.from('ref_regions').select('*').order('region_id');
-            if (data) setRegions(data);
-        };
-        fetchRegions();
+        fetchRegions().then(setRegions);
     }, []);
 
-    // Fetch Provinces when Region changes
     useEffect(() => {
         if (!selectedRegion) {
             setProvinces([]);
             setSelectedProvince('');
             return;
         }
-        const fetchProvinces = async () => {
-            const { createClient } = await import('@/lib/supabaseClient');
-            const supabase = createClient();
-            const { data } = await supabase.from('ref_provinces').select('*').eq('region_id', selectedRegion).order('province_name');
-            if (data) setProvinces(data);
-            setSelectedProvince('');
-            setSelectedCity('');
-        };
-        fetchProvinces();
+        fetchProvinces(selectedRegion).then(setProvinces);
+        setSelectedProvince('');
+        setSelectedCity('');
     }, [selectedRegion]);
 
-    // Fetch Cities when Province changes
     useEffect(() => {
         if (!selectedProvince) {
             setCities([]);
             setSelectedCity('');
             return;
         }
-        const fetchCities = async () => {
-            const { createClient } = await import('@/lib/supabaseClient');
-            const supabase = createClient();
-            const { data } = await supabase.from('ref_cities').select('*').eq('province_id', selectedProvince).order('city_name');
-            if (data) setCities(data);
-            setSelectedCity('');
-        };
-        fetchCities();
+        fetchCities(selectedProvince).then(setCities);
+        setSelectedCity('');
     }, [selectedProvince]);
 
 

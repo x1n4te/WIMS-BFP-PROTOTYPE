@@ -1,39 +1,8 @@
-import { createClient } from './supabaseClient';
-
-const FUNCTION_BASE_URL = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1`;
-
-async function callEdgeFunction<T>(
-    functionName: string,
-    body: any,
-    method: 'POST' | 'GET' = 'POST'
-): Promise<T> {
-    const supabase = createClient();
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
-
-    if (!token) {
-        throw new Error('Not authenticated');
-    }
-
-    const res = await fetch(`${FUNCTION_BASE_URL}/${functionName}`, {
-        method,
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: method === 'POST' ? JSON.stringify(body) : undefined,
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-        throw new Error(json.message || json.error || json.error_code || 'Edge Function Error');
-    }
-    return json as T;
-}
+import { apiFetch } from './api';
 
 // DTOs
 export interface Incident {
-    incident_id?: number; // Optional if new
+    incident_id?: number;
     region_id: number;
     incident_nonsensitive_details: {
         alarm_level: string;
@@ -41,54 +10,46 @@ export interface Incident {
         incident_type: string;
         notification_dt: string;
         barangay: string;
-        barangay_id?: number; // Added to match schema
+        barangay_id?: number;
         city_id: number;
         district_id: number;
         province_id: number;
-        // AFOR Fields (Section A)
         fire_station_name?: string;
         responder_type?: string;
         fire_origin?: string;
-        extent_of_damage?: string; // radio selection
-        stage_of_fire?: string; // radio selection
+        extent_of_damage?: string;
+        stage_of_fire?: string;
         structures_affected?: number;
         households_affected?: number;
-        families_affected?: number; // Added
+        families_affected?: number;
         individuals_affected?: number;
-        vehicles_affected?: number; // Added
-        total_response_time_minutes?: number; // Added
-        total_gas_consumed_liters?: number; // Added
-        extent_total_floor_area_sqm?: number; // Added
-        extent_total_land_area_hectares?: number; // Added
-
-        resources_deployed?: any; // JSONB: { engines: number, ambulances: number, ..specific breakdowns.. }
-        alarm_timeline?: any; // JSONB: { first_alarm: dt, ... }
-        problems_encountered?: string[]; // JSONB Array or { problem: boolean }
+        vehicles_affected?: number;
+        total_response_time_minutes?: number;
+        total_gas_consumed_liters?: number;
+        extent_total_floor_area_sqm?: number;
+        extent_total_land_area_hectares?: number;
+        resources_deployed?: any;
+        alarm_timeline?: any;
+        problems_encountered?: string[];
         recommendations?: string;
     };
     incident_sensitive_details: {
         occupancy?: string;
-        casualties_count?: number; // derived or sum
+        casualties_count?: number;
         estimated_damage?: number;
-
-        // AFOR Fields
         receiver_name?: string;
         caller_name?: string;
         caller_number?: string;
         establishment_name?: string;
         owner_name?: string;
         occupant_name?: string;
-
-        icp_location?: string; // Added
-        is_icp_present?: boolean; // Added
-
-        personnel_on_duty?: any; // JSONB
-        other_personnel?: any; // JSONB array
-        casualty_details?: any; // JSONB breaking down Male/Female etc.
+        icp_location?: string;
+        is_icp_present?: boolean;
+        personnel_on_duty?: any;
+        other_personnel?: any;
+        casualty_details?: any;
         narrative_report?: string;
-        sketch_of_fire_scene?: string; // URL or path
-
-        // AFOR Section L
+        sketch_of_fire_scene?: string;
         disposition?: string;
         disposition_prepared_by?: string;
         disposition_noted_by?: string;
@@ -129,21 +90,27 @@ export interface AnalyticsSummaryResponse {
     by_general_category: Array<{ general_category: string; count: number }>;
 }
 
-// API Methods
 export const edgeFunctions = {
     uploadBundle: (payload: { region_id: number; incidents: Incident[] }) =>
-        callEdgeFunction<UploadBundleResponse>('upload-bundle', payload),
+        apiFetch<UploadBundleResponse>('/incidents/upload-bundle', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        }),
 
     runConflictDetection: (incidentId: number) =>
-        callEdgeFunction<ConflictDetectionResponse>('conflict-detection', {
-            incident_id: incidentId,
+        apiFetch<ConflictDetectionResponse>('/incidents/conflict-detection', {
+            method: 'POST',
+            body: JSON.stringify({ incident_id: incidentId }),
         }),
 
     commitIncident: (payload: {
         incident_id: number;
         decision: 'VERIFY' | 'REJECT' | 'MERGE';
         comments?: string;
-    }) => callEdgeFunction<CommitIncidentResponse>('commit-incident', payload),
+    }) => apiFetch<CommitIncidentResponse>('/incidents/commit', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    }),
 
     getAnalyticsSummary: (filters: {
         from_date?: string;
@@ -151,10 +118,16 @@ export const edgeFunctions = {
         region_id?: number;
         province_id?: number;
         city_id?: number;
-    }) => callEdgeFunction<AnalyticsSummaryResponse>('analytics-summary', filters),
+    }) => apiFetch<AnalyticsSummaryResponse>('/analytics-summary', {
+        method: 'POST',
+        body: JSON.stringify(filters),
+    }),
 
     securityEventAction: (payload: {
         log_id: number;
         admin_action_taken: string;
-    }) => callEdgeFunction<{ status: string; log_id: number }>('security-event-action', payload),
+    }) => apiFetch<{ status: string; log_id: number }>('/security-event-action', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    }),
 };

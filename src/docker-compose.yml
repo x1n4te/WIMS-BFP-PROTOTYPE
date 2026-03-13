@@ -120,13 +120,13 @@ services:
         NEXT_PUBLIC_API_URL: http://localhost/api
         NEXT_PUBLIC_AUTH_API_URL: http://localhost/auth
         NEXT_PUBLIC_BASE_URL: http://localhost
-        NEXT_PUBLIC_OIDC_REDIRECT_URI: http://localhost/api/auth/callback
+        NEXT_PUBLIC_OIDC_REDIRECT_URI: http://localhost/callback
     container_name: wims-frontend
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost/api
       - NEXT_PUBLIC_AUTH_API_URL=http://localhost/auth
       - NEXT_PUBLIC_BASE_URL=http://localhost
-      - NEXT_PUBLIC_OIDC_REDIRECT_URI=http://localhost/api/auth/callback
+      - NEXT_PUBLIC_OIDC_REDIRECT_URI=http://localhost/callback
       - NEXT_PUBLIC_OIDC_AUTHORITY=http://localhost/auth/realms/bfp
       - NEXT_PUBLIC_OIDC_CLIENT_ID=wims-web
       - NEXT_PUBLIC_APP_URL=http://localhost

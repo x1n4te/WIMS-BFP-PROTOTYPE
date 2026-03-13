@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useUserProfile } from '@/lib/auth';
-import { createClient } from '@/lib/supabaseClient';
+import { fetchIncidents } from '@/lib/api';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Loader2, Filter, X, FileText, Upload } from 'lucide-react';
@@ -25,84 +25,30 @@ export default function IncidentsPage() {
 
     const [incidents, setIncidents] = useState<IncidentSummary[]>([]);
     const [loading, setLoading] = useState(true);
-    const supabase = createClient();
 
-    // Read filters from URL
     const categoryFilter = searchParams.get('category');
     const fromFilter = searchParams.get('from');
     const toFilter = searchParams.get('to');
     const regionFilter = searchParams.get('region');
-    // We can also have a 'status' param if needed
 
     useEffect(() => {
         if (!authLoading) {
-            fetchIncidents();
+            loadIncidents();
         }
     }, [authLoading, categoryFilter, fromFilter, toFilter, regionFilter, assignedRegionId]);
 
-    const fetchIncidents = async () => {
+    const loadIncidents = async () => {
         setLoading(true);
         try {
-            let query = supabase
-                .from('fire_incidents')
-                .select(`
-                    incident_id,
-                    region_id,
-                    verification_status,
-                    incident_nonsensitive_details!inner (
-                        notification_dt,
-                        barangay,
-                        general_category,
-                        alarm_level
-                    )
-                `)
-                .order('incident_id', { ascending: false })
-                .limit(100); // Increased limit for visibility
-
-            // 1. Role-based Region Lock
-            if (assignedRegionId) {
-                query = query.eq('region_id', assignedRegionId);
-            } else if (regionFilter) {
-                // If not locked to a region, allow filter
-                query = query.eq('region_id', parseInt(regionFilter));
-            }
-
-            // 2. Category Filter (Inner Join filter)
-            if (categoryFilter) {
-                query = query.eq('incident_nonsensitive_details.general_category', categoryFilter);
-            }
-
-            // 2.1 Sub-Type Filter (e.g. "Apartment Building")
-            // We'll search across multiple fields (incident_type, sub_category, specific_type) since mapping isn't strict in mock
-            const typeFilter = searchParams.get('type');
-            if (typeFilter) {
-                // Construct a text search or exact match on multiple columns if possible. 
-                // For now, simpler exact match on occupancy_type or general_category extension
-                // NOTE: PostgREST OR syntax on joined tables can be tricky.
-                // Let's assume simpler: filter on `incident_type` or `occupancy_type`
-                // Since these are in `incident_nonsensitive_details`, we need to use the relationship alias if present, 
-                // or apply standard filters. However, Supabase complex filtering on joined tables often requires 
-                // !inner join which we have.
-                // Let's try matching `specific_type` or `occupancy_type`
-                query = query.eq('incident_nonsensitive_details.incident_type', typeFilter);
-            }
-
-            // 3. Date Filters
-            if (fromFilter) {
-                query = query.gte('incident_nonsensitive_details.notification_dt', fromFilter);
-            }
-            if (toFilter) {
-                // Add time to include the full end day
-                query = query.lte('incident_nonsensitive_details.notification_dt', `${toFilter}T23:59:59`);
-            }
-
-            const { data, error } = await query;
-
-            if (error) {
-                console.error("Error fetching incidents", error);
-            } else {
-                setIncidents(data as any);
-            }
+            const regionId = assignedRegionId ?? (regionFilter ? parseInt(regionFilter) : undefined);
+            const data = await fetchIncidents({
+                region_id: regionId,
+                category: categoryFilter ?? undefined,
+                from: fromFilter ?? undefined,
+                to: toFilter ?? undefined,
+                type: searchParams.get('type') ?? undefined,
+            });
+            setIncidents((data as IncidentSummary[]) || []);
         } catch (err) {
             console.error("Unexpected error", err);
         } finally {

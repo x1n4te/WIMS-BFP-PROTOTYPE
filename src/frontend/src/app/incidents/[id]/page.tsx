@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useUserProfile } from '@/lib/auth';
-import { createClient } from '@/lib/supabaseClient';
+import { fetchIncident } from '@/lib/api';
 import { edgeFunctions, ConflictDetectionResponse } from '@/lib/edgeFunctions';
 import { Loader2, CheckCircle, XCircle } from 'lucide-react';
 
@@ -17,31 +17,16 @@ export default function IncidentDetailPage() {
     const [conflictData, setConflictData] = useState<ConflictDetectionResponse | null>(null);
     const [processing, setProcessing] = useState(false);
 
-    const supabase = createClient();
-
-    useEffect(() => {
-        if (!isNaN(id)) fetchIncident();
+    const loadIncident = useCallback(async () => {
+        setLoading(true);
+        const data = await fetchIncident(id);
+        setIncident(data);
+        setLoading(false);
     }, [id]);
 
-    const fetchIncident = async () => {
-        setLoading(true);
-        const { data, error } = await supabase
-            .from('fire_incidents')
-            .select(`
-              *,
-              incident_nonsensitive_details (*),
-              incident_sensitive_details (*)
-          `)
-            .eq('incident_id', id)
-            .single();
-
-        if (error) {
-            console.error("Error fetching incident", error);
-        } else {
-            setIncident(data);
-        }
-        setLoading(false);
-    };
+    useEffect(() => {
+        if (!isNaN(id)) loadIncident();
+    }, [id, loadIncident]);
 
     const handleConflictCheck = async () => {
         setProcessing(true);

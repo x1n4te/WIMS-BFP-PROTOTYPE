@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { AuthProvider } from "@/context/AuthContext";
+import { AuthProvider as AuthContextProvider } from "@/context/AuthContext";
+import { AuthProvider as UserProfileProvider } from "@/lib/auth";
 import { LayoutShell } from "@/components/LayoutShell";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -25,15 +26,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <AuthProvider>
-          {/* We might want some pages (like login) to NOT have the full shell, 
-                but for now let's wrap everything in the shell or check path in shell.
-                Actually, simpler to just put Shell here and let it handle auth state display.
-            */}
-          <LayoutShell>
-            {children}
-          </LayoutShell>
-        </AuthProvider>
+        <AuthContextProvider>
+          <UserProfileProvider>
+            <LayoutShell>
+              {children}
+            </LayoutShell>
+          </UserProfileProvider>
+        </AuthContextProvider>
       </body>
     </html>
   );

@@ -3,13 +3,11 @@
 import { useState, useEffect } from 'react';
 import { useUserProfile } from '@/lib/auth';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
+import { fetchRegionsByRegionId, fetchProvinces, fetchCitiesByProvinces, fetchBarangays } from '@/lib/api';
 import { ChevronLeft, Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader2, Download, X, AlertTriangle, Trash2, Edit2, Save } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
-import { createClient } from '@/lib/supabaseClient';
-
-const supabase = createClient();
 
 interface MappedIncident extends Incident {
     _id: string; // Internal ID for UI tracking
@@ -48,39 +46,36 @@ export default function ImportIncidentPage() {
         }
     }, [role, loading, router]);
 
-    // Fetch Geo Data
     useEffect(() => {
-        const fetchGeoRefs = async () => {
-            if (!assignedRegionId) return;
-            setLoadingRefs(true);
+        if (!assignedRegionId) return;
+        setLoadingRefs(true);
+        (async () => {
             try {
-                const { data: regionsData } = await supabase.from('ref_regions').select('*').eq('region_id', assignedRegionId);
-                if (regionsData) setRegions(regionsData);
+                const [regionsData, provincesData] = await Promise.all([
+                    fetchRegionsByRegionId(assignedRegionId),
+                    fetchProvinces(assignedRegionId),
+                ]);
+                if (regionsData.length) setRegions(regionsData);
+                if (provincesData.length) setProvinces(provincesData);
 
-                const { data: provincesData } = await supabase.from('ref_provinces').select('*').eq('region_id', assignedRegionId);
-                const provinceIds = provincesData?.map(p => p.province_id) || [];
-                if (provincesData) setProvinces(provincesData);
-
+                const provinceIds = provincesData.map((p: any) => p.province_id);
                 let citiesData: any[] = [];
                 if (provinceIds.length > 0) {
-                    const { data } = await supabase.from('ref_cities').select('*').in('province_id', provinceIds);
-                    citiesData = data || [];
+                    citiesData = await fetchCitiesByProvinces(provinceIds);
                     setCities(citiesData);
                 }
 
                 if (citiesData.length > 0) {
-                    const cityIds = citiesData.map(c => c.city_id);
-                    const { data: barangaysData } = await supabase.from('ref_barangays').select('*').in('city_id', cityIds);
-                    if (barangaysData) setBarangays(barangaysData);
+                    const cityIds = citiesData.map((c: any) => c.city_id);
+                    const barangaysData = await fetchBarangays(cityIds);
+                    if (barangaysData.length) setBarangays(barangaysData);
                 }
-
             } catch (err) {
                 console.error("Error fetching geo refs:", err);
             } finally {
                 setLoadingRefs(false);
             }
-        };
-        fetchGeoRefs();
+        })();
     }, [assignedRegionId]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

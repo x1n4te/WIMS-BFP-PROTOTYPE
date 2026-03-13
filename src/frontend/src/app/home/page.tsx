@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useUserProfile } from '@/lib/auth';
-import { createClient } from '@/lib/supabaseClient';
+import { fetchIncidents } from '@/lib/api';
 import Link from 'next/link';
 import { Search, MapPin, Building, Users } from 'lucide-react';
 
@@ -26,44 +26,20 @@ export default function HomePage() {
     const [incidents, setIncidents] = useState<IncidentSummary[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
-    const supabase = createClient();
 
     useEffect(() => {
         if (!authLoading) {
-            fetchIncidents();
+            loadIncidents();
         }
     }, [authLoading, assignedRegionId]);
 
-    const fetchIncidents = async () => {
+    const loadIncidents = async () => {
         setLoading(true);
         try {
-            let query = supabase
-                .from('fire_incidents')
-                .select(`
-                    incident_id,
-                    region_id,
-                    verification_status,
-                    incident_nonsensitive_details!inner (
-                        notification_dt,
-                        barangay,
-                        general_category,
-                        alarm_level,
-                        specific_type,
-                        incident_type
-                    )
-                `)
-                .order('created_at', { ascending: false })
-                .limit(50);
-
-            // Region Filter
-            if (assignedRegionId) {
-                query = query.eq('region_id', assignedRegionId);
-            }
-
-            const { data, error } = await query;
-            if (error) throw error;
-            setIncidents(data as any || []);
-
+            const data = await fetchIncidents({
+                region_id: assignedRegionId ?? undefined,
+            });
+            setIncidents((data as IncidentSummary[]) || []);
         } catch (err) {
             console.error("Error fetching home incidents", err);
         } finally {
@@ -74,20 +50,20 @@ export default function HomePage() {
     // Filter Logic
     // Ongoing: Status is NOT Verified/Rejected, OR explicitly 'ONGOING' if we had that field. 
     // Using verification_status as proxy: DRAFT, PENDING = Ongoing. VERIFIED = Fire Out (for now).
+    const nonsensitive = (i: IncidentSummary) => i.incident_nonsensitive_details;
     const ongoingIncidents = incidents.filter(i =>
         ['DRAFT', 'PENDING'].includes(i.verification_status) ||
-        (i.verification_status === 'VERIFIED' && new Date(i.incident_nonsensitive_details.notification_dt).getTime() > Date.now() - 24 * 60 * 60 * 1000) // "Recent" verified
-        // This logic is a bit loose, but fits the mock requirement. Ideally we'd have a status field.
+        (i.verification_status === 'VERIFIED' && new Date(nonsensitive(i).notification_dt).getTime() > Date.now() - 24 * 60 * 60 * 1000)
     ).filter(i =>
-        i.incident_nonsensitive_details.barangay.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        i.incident_nonsensitive_details.specific_type?.toLowerCase().includes(searchTerm.toLowerCase())
+        nonsensitive(i).barangay?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (nonsensitive(i) as any).specific_type?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
     const fireOutIncidents = incidents.filter(i =>
-        i.verification_status === 'VERIFIED' || i.verification_status === 'REJECTED' // Assuming Rejected also means closed/done
+        i.verification_status === 'VERIFIED' || i.verification_status === 'REJECTED'
     ).filter(i =>
-        i.incident_nonsensitive_details.barangay.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        i.incident_nonsensitive_details.specific_type?.toLowerCase().includes(searchTerm.toLowerCase())
+        nonsensitive(i).barangay?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (nonsensitive(i) as any).specific_type?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
 

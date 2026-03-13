@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useUserProfile } from '@/lib/auth';
-import { createClient } from '@/lib/supabaseClient';
+import { fetchSecurityLogs } from '@/lib/api';
 import { edgeFunctions } from '@/lib/edgeFunctions';
 import { ShieldAlert, CheckCircle, XCircle, AlertTriangle, Eye, Search } from 'lucide-react';
 import Link from 'next/link';
@@ -42,7 +42,6 @@ export default function SecurityPage() {
     const [selectedLog, setSelectedLog] = useState<SecurityThreatLog | null>(null);
     const [actionNote, setActionNote] = useState('');
     const [isActionSubmitting, setIsActionSubmitting] = useState(false);
-    const supabase = createClient();
 
     useEffect(() => {
         if (role === 'ANALYST' || role === 'ADMIN' || role === 'SYSTEM_ADMIN') {
@@ -51,14 +50,8 @@ export default function SecurityPage() {
     }, [role]);
 
     const fetchLogs = async () => {
-        const { data, error } = await supabase
-            .from('security_threat_logs')
-            .select('*')
-            .order('timestamp', { ascending: false })
-            .limit(50);
-
-        if (error) console.error("Error fetching logs:", error);
-        if (data) setLogs(data as SecurityThreatLog[]);
+        const data = await fetchSecurityLogs();
+        setLogs(data as SecurityThreatLog[]);
     };
 
     const handleAction = async (action: string) => {

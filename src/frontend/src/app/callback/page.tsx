@@ -1,55 +1,29 @@
 'use client';
 
 import { Suspense, useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { SigninState } from 'oidc-client-ts';
-import { createUserManager, oidcConfig } from '@/lib/oidc';
+import { useRouter } from 'next/navigation';
+import { createUserManager } from '@/lib/oidc';
 
 function CallbackContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const run = async () => {
-      const code = searchParams.get('code');
-      const stateParam = searchParams.get('state');
-
-      if (!code || !stateParam) {
-        setError('Missing code or state in callback');
-        router.replace('/login');
-        return;
-      }
-
       try {
         const userManager = createUserManager();
-        const stateStore = userManager.settings.stateStore;
-        const storedStateString = await stateStore.get(stateParam);
+        const user = await userManager.signinCallback();
 
-        if (!storedStateString) {
-          setError('No matching state found');
+        if (!user?.access_token) {
+          setError('No access token in callback');
           router.replace('/login');
           return;
         }
 
-        const state = await SigninState.fromStorageString(storedStateString);
-        const code_verifier = state.code_verifier;
-
-        if (!code_verifier) {
-          setError('No code verifier in state');
-          router.replace('/login');
-          return;
-        }
-
-        const redirect_uri = oidcConfig.redirect_uri;
         const res = await fetch('/api/auth/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            code,
-            code_verifier,
-            redirect_uri,
-          }),
+          body: JSON.stringify({ access_token: user.access_token }),
         });
 
         if (!res.ok) {
@@ -59,8 +33,7 @@ function CallbackContent() {
           return;
         }
 
-        await stateStore.remove(stateParam);
-        router.replace('/dashboard');
+        router.push('/dashboard');
       } catch (err) {
         console.error('Callback error:', err);
         setError(err instanceof Error ? err.message : 'Callback failed');
@@ -69,7 +42,7 @@ function CallbackContent() {
     };
 
     run();
-  }, [searchParams, router]);
+  }, [router]);
 
   if (error) {
     return (
