@@ -21,30 +21,34 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
-from sqlalchemy.engine import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 import auth
 from auth import get_current_user
+from database import get_db
+
+from api.routes import incidents, admin, civilian, triage
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 app = FastAPI(title="WIMS-BFP Backend")
+app.include_router(incidents.router)
+app.include_router(admin.router, prefix="/api/admin")
+app.include_router(civilian.router)
+app.include_router(triage.router)
 
 logger = logging.getLogger("wims.rate_limit")
 
 # ---------------------------------------------------------------------------
 # Celery
 # ---------------------------------------------------------------------------
-celery_app = Celery("wims_worker", broker=os.environ.get("REDIS_URL", "redis://redis:6379/0"))
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-)
+from celery_config import celery_app
+
+# Import task module so tasks are registered when worker loads main
+import tasks.suricata  # noqa: F401
+
+# Re-export for celery CLI: celery -A main.celery_app
 
 # ---------------------------------------------------------------------------
 # Redis
@@ -110,25 +114,6 @@ return {0}
 
 WINDOW_SECONDS = 900
 RATE_LIMIT_THRESHOLD = 5
-
-
-# ---------------------------------------------------------------------------
-# Database (SQLAlchemy)
-# ---------------------------------------------------------------------------
-SQLALCHEMY_DATABASE_URL = os.environ.get(
-    "SQLALCHEMY_DATABASE_URL",
-    os.environ.get("DATABASE_URL", "postgresql://postgres:password@postgres:5432/wims"),
-)
-_engine = create_engine(SQLALCHEMY_DATABASE_URL)
-_SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
-
-
-def get_db() -> Session:
-    db = _SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +268,61 @@ async def auth_callback(
     }
 
 
+app.include_router(incidents.router)
+
+
 @app.get("/api/user/me")
-async def get_me(user: Annotated[dict, Depends(get_current_user)]):
-    """Protected route that returns the validated user claims."""
-    return user
+async def get_me(
+    token_payload: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Protected route that returns merged JWT + wims.users payload. JIT-provisions user if not in wims.users."""
+    keycloak_sub = token_payload.get("sub")
+    if not keycloak_sub:
+        raise HTTPException(status_code=401, detail="Invalid token: missing sub")
+
+    preferred_username = token_payload.get("preferred_username") or keycloak_sub or "unknown"
+    username = preferred_username[:50]
+
+    row = db.execute(
+        text("""
+            SELECT user_id, username, role, assigned_region_id
+            FROM wims.users
+            WHERE keycloak_id = CAST(:kid AS uuid) AND is_active = TRUE
+        """),
+        {"kid": keycloak_sub},
+    ).fetchone()
+
+    if row is None:
+        try:
+            result = db.execute(
+                text("""
+                    INSERT INTO wims.users (keycloak_id, username, role)
+                    VALUES (CAST(:kid AS uuid), :username, 'ENCODER')
+                    ON CONFLICT (keycloak_id) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        last_login = now(),
+                        updated_at = now()
+                    RETURNING user_id, username, role, assigned_region_id
+                """),
+                {"kid": keycloak_sub, "username": username},
+            ).fetchone()
+            db.commit()
+            row = result
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="JIT user provisioning failed")
+
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to upsert user")
+
+    user_id, username, role, assigned_region_id = row
+    email = token_payload.get("email") or token_payload.get("preferred_username") or ""
+
+    return {
+        "email": email,
+        "username": username,
+        "role": role,
+        "user_id": str(user_id),
+        "assigned_region_id": assigned_region_id,
+    }

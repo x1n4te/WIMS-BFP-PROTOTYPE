@@ -94,8 +94,10 @@ CREATE INDEX idx_fire_incidents_location ON wims.fire_incidents USING GIST (loca
 CREATE TABLE wims.citizen_reports (
   report_id SERIAL PRIMARY KEY,
   location GEOGRAPHY(POINT, 4326) NOT NULL,
+  description TEXT,
   reporter_phone VARCHAR,
   is_sms_verified BOOLEAN DEFAULT FALSE,
+  trust_score INTEGER DEFAULT 0 CHECK (trust_score >= -100 AND trust_score <= 100),
   status VARCHAR NOT NULL CHECK (status IN ('PENDING', 'VERIFIED', 'FALSE_ALARM', 'DUPLICATE')),
   incident_id INTEGER REFERENCES wims.fire_incidents(incident_id),
   validated_by UUID REFERENCES wims.users(user_id),
@@ -249,6 +251,7 @@ CREATE TABLE wims.security_threat_logs (
   xai_narrative VARCHAR(10000),
   xai_confidence DOUBLE PRECISION,
   admin_action_taken TEXT,
+  resolved_at TIMESTAMPTZ,
   reviewed_by UUID REFERENCES wims.users(user_id)
 );
 

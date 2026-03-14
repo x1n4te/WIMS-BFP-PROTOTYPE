@@ -21,7 +21,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!loading && !user) {
-            const publicRoutes = ['/', '/login', '/callback'];
+            const publicRoutes = ['/', '/login', '/callback', '/report'];
             const isPublic = publicRoutes.includes(pathname) || pathname.startsWith('/login');
 
             if (!isPublic) {

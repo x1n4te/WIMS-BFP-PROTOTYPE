@@ -5,7 +5,7 @@ import { useUserProfile } from '@/lib/auth';
 import { fetchIncidents } from '@/lib/api';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Loader2, Filter, X, FileText, Upload } from 'lucide-react';
+import { Loader2, Filter, X, FileText, Upload, ClipboardList } from 'lucide-react';
 
 interface IncidentSummary {
     incident_id: number;
@@ -63,36 +63,55 @@ export default function IncidentsPage() {
     return (
         <div className="space-y-6">
 
-            {/* Encoder Actions (Accessible here too) */}
-            {role === 'ENCODER' && (
+            {/* Encoder & Validator Actions */}
+            {(role === 'ENCODER' || role === 'VALIDATOR') && (
                 <div className="p-6 bg-blue-50 border border-blue-200 rounded-lg">
-                    <h3 className="text-lg font-bold text-blue-900 mb-4">Encoder Actions</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Manual Entry Card */}
-                        <Link href="/incidents/create" className="group block bg-white p-4 rounded-lg shadow-sm border border-blue-100 hover:shadow-md hover:border-blue-300 transition-all">
+                    <h3 className="text-lg font-bold text-blue-900 mb-4">
+                        {role === 'ENCODER' ? 'Encoder' : 'Validator'} Actions
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {/* Triage Queue — ENCODER & VALIDATOR */}
+                        <Link href="/incidents/triage" className="group block bg-white p-4 rounded-lg shadow-sm border border-blue-100 hover:shadow-md hover:border-blue-300 transition-all">
                             <div className="flex items-center gap-3">
-                                <div className="p-2 bg-red-100 text-red-700 rounded-full group-hover:bg-red-600 group-hover:text-white transition-colors">
-                                    <FileText className="w-5 h-5" />
+                                <div className="p-2 bg-amber-100 text-amber-700 rounded-full group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                                    <ClipboardList className="w-5 h-5" />
                                 </div>
                                 <div>
-                                    <h4 className="font-bold text-gray-800">Manual Entry</h4>
-                                    <p className="text-xs text-gray-600">Create single report</p>
+                                    <h4 className="font-bold text-gray-800">Triage Queue</h4>
+                                    <p className="text-xs text-gray-600">Promote citizen reports</p>
                                 </div>
                             </div>
                         </Link>
 
-                        {/* Import Data Card */}
-                        <Link href="/incidents/import" className="group block bg-white p-4 rounded-lg shadow-sm border border-blue-100 hover:shadow-md hover:border-blue-300 transition-all">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-blue-100 text-blue-700 rounded-full group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                                    <Upload className="w-5 h-5" />
+                        {/* Manual Entry Card — ENCODER only */}
+                        {role === 'ENCODER' && (
+                            <Link href="/incidents/create" className="group block bg-white p-4 rounded-lg shadow-sm border border-blue-100 hover:shadow-md hover:border-blue-300 transition-all">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-red-100 text-red-700 rounded-full group-hover:bg-red-600 group-hover:text-white transition-colors">
+                                        <FileText className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                        <h4 className="font-bold text-gray-800">Manual Entry</h4>
+                                        <p className="text-xs text-gray-600">Create single report</p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <h4 className="font-bold text-gray-800">Import Data</h4>
-                                    <p className="text-xs text-gray-600">Bulk upload (CSV/XLSX)</p>
+                            </Link>
+                        )}
+
+                        {/* Import Data Card — ENCODER only */}
+                        {role === 'ENCODER' && (
+                            <Link href="/incidents/import" className="group block bg-white p-4 rounded-lg shadow-sm border border-blue-100 hover:shadow-md hover:border-blue-300 transition-all">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-blue-100 text-blue-700 rounded-full group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                                        <Upload className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                        <h4 className="font-bold text-gray-800">Import Data</h4>
+                                        <p className="text-xs text-gray-600">Bulk upload (CSV/XLSX)</p>
+                                    </div>
                                 </div>
-                            </div>
-                        </Link>
+                            </Link>
+                        )}
                     </div>
                 </div>
             )}

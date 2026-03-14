@@ -1,10 +1,14 @@
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Annotated, Optional, Dict, Any
 from jose import jwt, JWTError
 import httpx
 from fastapi import Request, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from database import get_db
 
 logger = logging.getLogger("wims.auth")
 
@@ -102,3 +106,37 @@ async def get_current_user(request: Request):
         raise HTTPException(status_code=401, detail="Authentication credentials missing")
         
     return await authenticator.validate_token(token)
+
+
+async def get_current_wims_user(
+    token_payload: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """
+    Resolve JWT payload to wims.users row. Ensures only authenticated
+    Keycloak users present in wims.users can access protected routes.
+    """
+    keycloak_sub = token_payload.get("sub")
+    if not keycloak_sub:
+        raise HTTPException(status_code=401, detail="Invalid token: missing sub")
+
+    row = db.execute(
+        text("SELECT user_id, role FROM wims.users WHERE keycloak_id = CAST(:kid AS uuid) AND is_active = TRUE"),
+        {"kid": keycloak_sub},
+    ).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=403, detail="User not found in WIMS")
+
+    return {"user_id": row[0], "keycloak_id": keycloak_sub, "role": row[1]}
+
+
+async def get_system_admin(
+    current_user: Annotated[dict, Depends(get_current_wims_user)],
+) -> dict:
+    """
+    Require SYSTEM_ADMIN role. Raise 403 if current_user.role != 'SYSTEM_ADMIN'.
+    """
+    if current_user.get("role") != "SYSTEM_ADMIN":
+        raise HTTPException(status_code=403, detail="SYSTEM_ADMIN privileges required")
+    return current_user

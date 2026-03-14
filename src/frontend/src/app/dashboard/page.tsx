@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { fetchRegions, fetchProvinces, fetchCities } from '@/lib/api';
 import { edgeFunctions, AnalyticsSummaryResponse } from '@/lib/edgeFunctions';
@@ -9,9 +10,22 @@ import { RefreshCw, Download, HelpCircle, Calendar, X, Info, FileText, Upload } 
 import Link from 'next/link';
 
 export default function DashboardPage() {
+    const router = useRouter();
     const { user, loading } = useAuth();
     const role = (user as { role?: string })?.role ?? null;
+
+    // Traffic Cop: SYSTEM_ADMIN goes to Admin Hub
+    useEffect(() => {
+        if (!loading && role === 'SYSTEM_ADMIN') {
+            router.replace('/admin/system');
+        }
+    }, [loading, role, router]);
+
     const assignedRegionId = (user as { assignedRegionId?: number | null })?.assignedRegionId ?? null;
+
+    if (!loading && role === 'SYSTEM_ADMIN') {
+        return <div className="flex items-center justify-center min-h-[40vh] text-gray-500">Redirecting to Admin Hub...</div>;
+    }
     const [analytics, setAnalytics] = useState<AnalyticsSummaryResponse | null>(null);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showHelp, setShowHelp] = useState(false);

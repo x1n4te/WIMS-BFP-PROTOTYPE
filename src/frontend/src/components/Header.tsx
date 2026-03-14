@@ -57,13 +57,15 @@ export function Header() {
                 break;
             case 'ANALYST':
                 links.push({ label: 'Incidents', href: '/incidents' });
-                links.push({ label: 'Security', href: '/security' });
                 break;
             case 'ADMIN':
-            case 'SYSTEM_ADMIN':
                 links.push({ label: 'Incidents', href: '/incidents' });
-                links.push({ label: 'Security', href: '/security' });
-                // links.push({ label: 'Audit Logs', href: '/admin/audit' }); // Future
+                break;
+            case 'SYSTEM_ADMIN':
+                // Admin Hub: hide Incidents/Map; show Governance, Telemetry, System Audit
+                links.push({ label: 'Governance', href: '/admin/system#governance' });
+                links.push({ label: 'Telemetry', href: '/admin/system#telemetry' });
+                links.push({ label: 'System Audit', href: '/admin/system#audit' });
                 break;
         }
         return links;
