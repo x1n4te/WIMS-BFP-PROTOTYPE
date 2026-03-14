@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+.next/
+out/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets and local config (never commit)
+.cursor/mcp.json
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Logs and runtime
+*.log
+*.rdb
+
+# OS
+.DS_Store
+Thumbs.db
