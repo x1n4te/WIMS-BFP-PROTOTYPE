@@ -5,17 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Changed
-- `.gitignore` — added `src/suricata/logs/` to prevent runtime log tracking
-- Removed 19 tracked `__pycache__/*.pyc` files from git index (`src/backend/api/`, `src/backend/models/`)
-- Removed tracked `src/suricata/logs/eve.json` (5.3 MB runtime log) from git index
-
 ### Added
-- `CHANGELOG.md` — project changelog
-- `docs/ARCHITECTURE.md` — system architecture overview
-- `docs/API_AND_FUNCTIONS.md` — API and function reference
-- `README.md` — root project README with quick start guide
-- `.cursor/prompts/pre-push-audit-and-docs.prompt.md` — pre-push audit prompt
+- Pre-push documentation audit pass:
+  - `docs/ARCHITECTURE.md` refreshed with source-grounded stack, services, and flow details.
+  - `docs/API_AND_FUNCTIONS.md` refreshed with verified backend routes, edge functions, frontend routes, and Next route handlers.
+  - `README.md` tightened to keep documentation links and setup guidance aligned with current repository structure.
+
+### Changed
+- `.cursor/prompts/pre-push-audit-and-docs.prompt.md` was rewritten to enforce deterministic audit phases, strict write scope, and source-evidence-only documentation updates.
 
 ## [0.1.0] — 2026-03-14
 

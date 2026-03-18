@@ -8,6 +8,17 @@ A full-stack incident management platform for the Philippine Bureau of Fire Prot
 - [API & Function Reference](docs/API_AND_FUNCTIONS.md) — backend endpoints, edge functions, frontend pages
 - [Changelog](CHANGELOG.md) — version history and notable changes
 
+## Project Layout
+
+Primary implementation lives under `src/`:
+
+- `src/frontend` — Next.js app (App Router)
+- `src/backend` — FastAPI API + Celery task modules
+- `src/supabase/functions` — Deno edge functions
+- `src/postgres-init` — PostgreSQL bootstrap SQL
+- `src/keycloak` — realm import configuration
+- `src/docker-compose.yml` — local multi-service orchestration
+
 ## Prerequisites
 
 - **Docker** and **Docker Compose** (v3.8+)
@@ -74,10 +85,16 @@ cd src/backend
 pytest -v
 ```
 
-**Infrastructure config tests (no Docker required):**
+**Frontend tests (Vitest):**
 ```bash
-cd src/backend
-python -m pytest tests/test_infra_config.py -v
+cd src/frontend
+npx vitest run
+```
+
+**Frontend lint (ESLint):**
+```bash
+cd src/frontend
+npm run lint
 ```
 
 ## License

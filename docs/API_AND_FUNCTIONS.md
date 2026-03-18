@@ -1,117 +1,123 @@
-# WIMS-BFP API & Function Reference
+# WIMS-BFP API and Function Reference
 
 ## Backend API Routes (FastAPI)
 
-Source: `src/backend/main.py` and `src/backend/api/routes/`
+Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 
-### Authentication (`main.py`)
+### App-Level Auth Routes (`main.py`)
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/api/auth/login` | None | Stub endpoint; always returns 401. Rate-limited (5 req / 900s via Redis). |
-| POST | `/api/auth/callback` | None | PKCE token exchange: accepts `code` + `code_verifier`, exchanges with Keycloak, upserts user in `wims.users`, returns `access_token` + `user_id`. |
-| GET | `/api/user/me` | JWT | Returns merged JWT claims + `wims.users` profile. JIT-provisions user record if missing. |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/auth/login` | Public | Stub login endpoint; guarded by Redis sliding-window middleware. |
+| POST | `/api/auth/callback` | Public | Exchanges PKCE code with Keycloak and upserts user in `wims.users`. |
+| GET | `/api/user/me` | JWT (`get_current_user`) | Returns merged token + user profile payload; provisions user on first access if needed. |
 
-### Incidents (`api/routes/incidents.py` — prefix `/api`)
+### Incident Routes (`api/routes/incidents.py`, prefix `/api`)
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/api/incidents` | `get_current_wims_user` | Create a fire incident with geospatial intake (PostGIS POINT). |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/incidents` | `get_current_wims_user` | Creates incident with geospatial point and returns incident response payload. |
+| POST | `/api/incidents/{incident_id}/attachments` | `get_current_wims_user` | Uploads incident attachment to storage and records metadata/hash in DB. |
 
-### Civilian Reports (`api/routes/civilian.py` — prefix `/api/civilian`)
+### Civilian Reporting (`api/routes/civilian.py`, prefix `/api/civilian`)
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/api/civilian/reports` | None (public) | Submit an emergency report. `trust_score` is always 0 for public submissions. |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/civilian/reports` | Public | Submits citizen report with `PENDING` status and zero trust score. |
 
-### Triage (`api/routes/triage.py` — prefix `/api/triage`)
+### Triage (`api/routes/triage.py`, prefix `/api/triage`)
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api/triage/pending` | ENCODER / VALIDATOR | List `citizen_reports` with status `PENDING`. |
-| POST | `/api/triage/{report_id}/promote` | ENCODER / VALIDATOR | Promote a pending citizen report to an official fire incident. |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/triage/pending` | ENCODER or VALIDATOR | Lists pending citizen reports. |
+| POST | `/api/triage/{report_id}/promote` | ENCODER or VALIDATOR | Promotes a pending citizen report into official incident records. |
 
-### Admin (`api/routes/admin.py` — prefix `/api/admin`)
+### Admin (`api/routes/admin.py`, mounted with `/api/admin` in `main.py`)
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api/admin/users` | SYSTEM_ADMIN | List all users with masked Keycloak IDs. |
-| PATCH | `/api/admin/users/{user_id}` | SYSTEM_ADMIN | Update user role, `assigned_region_id`, or `is_active`. |
-| GET | `/api/admin/security-logs` | SYSTEM_ADMIN | List security threat logs ordered by timestamp descending. |
-| POST | `/api/admin/security-logs/{log_id}/analyze` | SYSTEM_ADMIN | Trigger AI analysis via Ollama; updates `xai_narrative` and `xai_confidence`. |
-| PATCH | `/api/admin/security-logs/{log_id}` | SYSTEM_ADMIN | Update `admin_action_taken` and `resolved_at` on a threat log. |
-| GET | `/api/admin/audit-logs` | SYSTEM_ADMIN | Paginated system audit trails (`limit`, `offset` params). |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/admin/users` | SYSTEM_ADMIN | Lists users with masked Keycloak IDs. |
+| PATCH | `/api/admin/users/{user_id}` | SYSTEM_ADMIN | Updates user role/assignment/active state. |
+| GET | `/api/admin/security-logs` | SYSTEM_ADMIN | Lists security telemetry entries. |
+| POST | `/api/admin/security-logs/{log_id}/analyze` | SYSTEM_ADMIN | Runs AI narrative analysis for a threat log. |
+| PATCH | `/api/admin/security-logs/{log_id}` | SYSTEM_ADMIN | Updates admin action/resolution fields. |
+| GET | `/api/admin/audit-logs` | SYSTEM_ADMIN | Returns paginated audit trail entries. |
 
-### Auth Dependencies (`auth.py`)
+### Analytics (`api/routes/analytics.py`, prefix `/api/analytics`)
 
-| Dependency | Purpose |
-|------------|---------|
-| `get_current_user` | Extracts JWT from `access_token` cookie or `Authorization: Bearer` header; validates via Keycloak JWKS. |
-| `get_current_wims_user` | Validates JWT and resolves the user record in `wims.users`; returns 403 if not found. |
-| `get_system_admin` | Requires `role == 'SYSTEM_ADMIN'`; returns 403 otherwise. |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/analytics/heatmap` | Analyst/Admin guard | Returns GeoJSON-style incident points with filter support. |
+| GET | `/api/analytics/trends` | Analyst/Admin guard | Returns bucketed count series (`daily`, `weekly`, `monthly`). |
+| GET | `/api/analytics/comparative` | Analyst/Admin guard | Returns two-range counts and variance percentage. |
+| POST | `/api/analytics/export/csv` | Analyst/Admin guard | Dispatches CSV export task and returns task id. |
 
----
+### Regional (`api/routes/regional.py`, prefix `/api/regional`)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/regional/afor/import` | `get_regional_encoder` | Parses uploaded AFOR `.xlsx/.xls/.csv` into validated preview rows. |
+| POST | `/api/regional/afor/commit` | `get_regional_encoder` | Commits validated AFOR rows as batch + incident detail records. |
+| GET | `/api/regional/incidents` | `get_regional_encoder` | Lists incidents scoped to assigned region with filters/pagination. |
+| GET | `/api/regional/incidents/{incident_id}` | `get_regional_encoder` | Fetches single incident detail scoped to assigned region. |
+| GET | `/api/regional/stats` | `get_regional_encoder` | Returns regional summary metrics. |
+
+### Reference Data (`api/routes/ref.py`, prefix `/api/ref`)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/ref/regions` | `get_current_wims_user` | Returns region reference records (optional `region_id` filter). |
 
 ## Supabase Edge Functions
 
 Source: `src/supabase/functions/`
 
-| Function | Auth | Description |
-|----------|------|-------------|
-| **analytics-summary** | ANALYST / ADMIN / SYSTEM_ADMIN (+ NHQ ENCODER/VALIDATOR) | Returns incident analytics: counts by region, alarm level, and general category. Supports date range, region, province, and city filters. |
-| **commit-incident** | VALIDATOR / ADMIN / SYSTEM_ADMIN | Changes incident status (VERIFY, REJECT, MERGE). Updates `fire_incidents`, inserts `incident_verification_history`, writes audit trail. Validators limited to their assigned region. |
-| **conflict-detection** | VALIDATOR / ADMIN / SYSTEM_ADMIN | Finds potential duplicate incidents within a 2-hour window, same region/city, and similar barangay. Writes verification history notes for each match. |
-| **security-event-action** | ADMIN / SYSTEM_ADMIN | Updates security threat logs with `admin_action_taken` and `reviewed_by`; writes audit entry to `system_audit_trails`. |
-| **upload-bundle** | ENCODER | Bulk-uploads fire incidents from XLSX/CSV import. Creates `data_import_batches` record, inserts into `fire_incidents`, `incident_nonsensitive_details`, and `incident_sensitive_details`. Enforces region matching. |
+| Function | Path | Purpose (code-verified) |
+|---|---|---|
+| analytics-summary | `analytics-summary/index.ts` | Returns analytics aggregates with auth/role checks and optional date/geo filters. |
+| commit-incident | `commit-incident/index.ts` | Applies VERIFY/REJECT/MERGE decision, writes verification history and audit trail. |
+| conflict-detection | `conflict-detection/index.ts` | Finds possible duplicate incidents in region/time/city proximity window. |
+| security-event-action | `security-event-action/index.ts` | Updates security log action metadata and writes audit entry. |
+| upload-bundle | `upload-bundle/index.ts` | Accepts encoder bundle payload, inserts batch and incident detail rows with region checks. |
 
-Shared module: `_shared/cors.ts` — common CORS headers for all functions.
+Shared helper: `_shared/cors.ts`
 
-Tests: `src/supabase/functions/tests/` — unit tests for `analytics-summary`, `commit-incident`, `conflict-detection`.
-
----
-
-## Celery Background Tasks
-
-Source: `src/backend/tasks/`
-
-| Task | Schedule | Description |
-|------|----------|-------------|
-| `tasks.suricata.ingest_suricata_eve` | Every 10 seconds (beat) | Reads Suricata EVE JSON log file, parses alert events, and inserts new entries into `wims.security_threat_logs`. |
-
----
-
-## Frontend Pages
+## Frontend Routes (Next.js App Router)
 
 Source: `src/frontend/src/app/`
 
-### Public Routes (no auth required)
-
-| Path | Component | Purpose |
-|------|-----------|---------|
-| `/` | Landing | Renders the login page |
-| `/login` | LoginPage | Keycloak OIDC login; redirects to `/dashboard` when authenticated |
-| `/callback` | CallbackPage | OIDC callback; processes Keycloak tokens, syncs session via `/api/auth/sync` |
-| `/report` | ReportPage | Public emergency report form with map picker and description field |
-
-### Protected Routes (auth required)
-
-| Path | Component | Required Role | Purpose |
-|------|-----------|---------------|---------|
-| `/dashboard` | DashboardPage | Any authenticated | BFP incident dashboard: analytics cards, date/region/province/city filters. SYSTEM_ADMIN auto-redirects to `/admin/system`. |
-| `/home` | HomePage | Any authenticated | Operations center: two-column view (On-Going vs Fire Out incidents), search, filtered by user's assigned region. |
-| `/incidents` | IncidentsPage | Any authenticated | Incidents list with filters and role-based action buttons (Triage, Manual Entry, Import). |
-| `/incidents/create` | CreatePage | ENCODER | Manual fire incident entry form using `IncidentForm`. |
-| `/incidents/import` | ImportPage | ENCODER | Bulk import from XLSX/CSV: parse, validate, review, and upload bundle. |
-| `/incidents/triage` | TriagePage | ENCODER / VALIDATOR | Triage queue for citizen reports; promote to official incidents. |
-| `/incidents/new` | NewIncidentPage | Any authenticated | Simple map-based incident report; creates incident with PENDING status. |
-| `/incidents/[id]` | IncidentDetailPage | Any authenticated | Incident detail view; validators can run conflict detection and verify/reject PENDING incidents. |
-| `/admin` | — | SYSTEM_ADMIN | Redirects to `/admin/system`. |
-| `/admin/system` | SystemAdminPage | SYSTEM_ADMIN | Admin hub: user management, Suricata threat log viewer, audit logs, AI analysis trigger for security alerts. |
-
-### Frontend API Routes (Next.js Route Handlers)
+### Public/Entry Routes
 
 | Path | Purpose |
-|------|---------|
-| `/api/auth/session` | Get current session from HttpOnly cookie |
-| `/api/auth/sync` | Sync Keycloak access token to backend |
-| `/api/auth/logout` | Clear session and logout |
+|---|---|
+| `/` | Landing route that renders login page component. |
+| `/login` | Login screen; redirects by role once authenticated. |
+| `/callback` | OIDC callback finalization and token sync to server route. |
+| `/report` | Public emergency report submission page. |
+
+### Authenticated App Routes
+
+| Path | Purpose |
+|---|---|
+| `/dashboard` | Main dashboard with role-based redirects and analytics widgets. |
+| `/dashboard/regional` | Regional encoder dashboard and quick regional summaries. |
+| `/dashboard/analyst` | Analyst heatmap/trend/comparative dashboard. |
+| `/home` | Operations center view splitting ongoing vs fire-out incidents. |
+| `/incidents` | Incident list/table with filter + role action cards. |
+| `/incidents/create` | Manual incident entry form (encoder-guarded in page logic). |
+| `/incidents/import` | Bulk incident import workflow (encoder/regional-encoder guarded). |
+| `/incidents/triage` | Triage queue and promote action flow (encoder/validator access). |
+| `/incidents/new` | Map-assisted new incident submission route for authenticated users. |
+| `/incidents/[id]` | Incident detail page. |
+| `/afor/import` | AFOR import page entry for regional workflows. |
+| `/afor/create` | AFOR create flow page. |
+| `/admin` | Redirect route to system admin page. |
+| `/admin/system` | SYSTEM_ADMIN operations hub (users, security logs, audit logs, AI analyze action). |
+
+## Next Route Handlers (`src/frontend/src/app/api/auth/`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/auth/session` | Resolves current user session by forwarding cookie to backend `/api/user/me`. |
+| POST | `/api/auth/sync` | Sets HttpOnly `access_token` cookie; also supports code exchange forwarding to backend callback. |
+| POST | `/api/auth/logout` | Clears auth cookies (`access_token`, `refresh_token`). |

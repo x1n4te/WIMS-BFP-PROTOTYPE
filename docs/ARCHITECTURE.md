@@ -1,113 +1,70 @@
 # WIMS-BFP System Architecture
 
-## Stack
+## Stack Summary
 
-| Layer | Technology | Notes |
-|-------|-----------|-------|
-| **Frontend** | Next.js 16 (App Router), React 19, TailwindCSS 4 | Standalone output, Leaflet maps |
-| **Backend** | FastAPI (Python 3.10+) | Async, Pydantic v2 |
-| **Database** | PostgreSQL 15 + PostGIS 3.4 | Geography(POINT, 4326) for all spatial data |
-| **Authentication** | Keycloak 24 (OIDC/JWT with PKCE) | **Supabase is strictly forbidden for auth** (see constitution) |
-| **AI/ML** | Qwen2.5-3B via Ollama | Local inference for security log XAI narratives |
-| **Task Queue** | Celery + Redis 7.2 | Beat scheduler for Suricata log ingestion |
-| **IDS** | Suricata | Network intrusion detection, EVE JSON log output |
-| **Edge Gateway** | Nginx (Alpine) | Reverse proxy, ports 80/443 |
+| Layer | Technology | Evidence |
+|---|---|---|
+| Frontend | Next.js 16, React 19, TypeScript, TailwindCSS 4 | `src/frontend/package.json`, `src/frontend/src/app/` |
+| Backend | FastAPI + SQLAlchemy | `src/backend/main.py`, `src/backend/api/routes/` |
+| Queue/Async | Celery + Redis | `src/backend/main.py`, `src/docker-compose.yml` |
+| Database | PostgreSQL 15 + PostGIS 3.4 | `src/docker-compose.yml`, `src/postgres-init/` |
+| Identity/Auth | Keycloak 24 with JWT/OIDC | `src/docker-compose.yml`, `src/backend/auth.py`, `src/backend/main.py` |
+| AI/XAI | Ollama service, used by backend admin analysis path | `src/docker-compose.yml`, `src/backend/services/ai_service.py`, `src/backend/api/routes/admin.py` |
+| IDS/Telemetry | Suricata + security log ingestion | `src/docker-compose.yml`, `src/backend/tasks/suricata.py` |
+| Edge Gateway | Nginx | `src/docker-compose.yml`, `src/nginx/` |
+
+> Constitution alignment: authentication is implemented around Keycloak, not Supabase auth.
 
 ## Key Directories
 
-```
-src/
-├── backend/            # FastAPI application
-│   ├── api/routes/     # HTTP route handlers (incidents, admin, civilian, triage)
-│   ├── models/         # SQLAlchemy ORM models
-│   ├── tasks/          # Celery background tasks (Suricata ingestion)
-│   ├── auth.py         # Keycloak JWT validation + role dependencies
-│   └── main.py         # App entry, middleware, router mounts
-├── frontend/           # Next.js application
-│   └── src/app/        # App Router pages (dashboard, incidents, admin, etc.)
-├── postgres-init/      # Database initialization scripts
-├── supabase/           # Edge Functions + SQL schema/migrations/seeds
-│   ├── functions/      # Deno edge functions (analytics, commit, conflict, etc.)
-│   ├── migrations/     # Incremental schema changes
-│   ├── seeds/          # Reference data (geo hierarchy, test data)
-│   └── schema_v2.sql   # Canonical schema definition
-├── keycloak/           # Keycloak realm import (bfp-realm.json)
-├── suricata/           # IDS rules and log mount point
-│   ├── rules/          # Custom Suricata rules
-│   └── logs/           # EVE JSON output (gitignored, runtime only)
-└── nginx/              # Nginx gateway configuration
-```
+| Path | Role |
+|---|---|
+| `src/backend/` | FastAPI app entry (`main.py`), auth dependencies, SQLAlchemy access, Celery task registration. |
+| `src/backend/api/routes/` | HTTP route modules for incidents, admin, civilian reporting, triage, analytics, regional, and reference endpoints. |
+| `src/frontend/src/app/` | Next.js App Router pages, including dashboards, incident flows, public report, and auth callback. |
+| `src/frontend/src/app/api/auth/` | Next route handlers for session, token sync cookie set, and logout cookie clear. |
+| `src/supabase/functions/` | Deno edge functions used for analytics/commit/conflict/security-event/bundle workflows. |
+| `src/postgres-init/` | DB bootstrap SQL and initialization scripts. |
+| `src/keycloak/` | Realm import JSON used by Keycloak container startup. |
+| `src/suricata/` | IDS rules and runtime logs mount path. |
 
-## Data Flow
+## Runtime Service Topology
 
-The system enforces a two-tier data model with triage as the bridge:
+All compose services run on `wims_internal`:
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                     COMMUNITY TIER (Unverified)              │
-│  citizen_reports: crowdsourced fire reports (trust_score=0)  │
-│  Submitted via POST /api/civilian/reports (no auth)          │
-└──────────────────┬───────────────────────────────────────────┘
-                   │
-                   ▼
-┌──────────────────────────────────────────────────────────────┐
-│                        TRIAGE LAYER                          │
-│  ENCODER/VALIDATOR reviews pending reports                   │
-│  GET /api/triage/pending → POST /api/triage/{id}/promote    │
-│  Conflict detection checks for duplicates (2hr window,      │
-│  same region/city/barangay)                                  │
-└──────────────────┬───────────────────────────────────────────┘
-                   │
-                   ▼
-┌──────────────────────────────────────────────────────────────┐
-│                 OFFICIAL TIER (Verified — SSOT)              │
-│  fire_incidents: verified incidents with PostGIS location    │
-│  incident_verification_history: chain-of-custody audit       │
-│  Status: DRAFT → PENDING → VERIFIED (or REJECTED)           │
-│  Soft-delete only (is_archived = TRUE), never hard-delete    │
-└──────────────────────────────────────────────────────────────┘
-```
+- `postgres`: primary relational and geospatial store; mounts init SQL.
+- `redis`: cache/broker for rate limiting and Celery.
+- `keycloak`: identity provider and realm host.
+- `ollama`: local model runtime for security narrative generation.
+- `backend`: FastAPI service exposing `/api/*` endpoints.
+- `celery-worker`: async worker and beat scheduler.
+- `frontend`: Next.js app.
+- `wims-suricata`: IDS sensor with EVE output.
+- `nginx-gateway`: edge reverse proxy exposing ports 80/443.
 
-## Docker Services
+## High-Level Data Flow
 
-All services run on the `wims_internal` bridge network.
+The current repository shows a civilian-to-triage-to-incident pipeline:
 
-| Service | Image | Role |
-|---------|-------|------|
-| **postgres** | `postgis/postgis:15-3.4-alpine` | Primary database with PostGIS. Init scripts from `postgres-init/` and `supabase/schema_v2.sql`. |
-| **redis** | `redis:7.2-alpine` | Celery broker and rate-limit store. |
-| **keycloak** | `quay.io/keycloak/keycloak:24.0.0` | OIDC identity provider. Imports `bfp-realm.json` on startup. Uses Postgres for its own DB. |
-| **ollama** | `ollama/ollama:latest` | Local LLM inference (Qwen2.5-3B). 2 CPU / 4 GB memory limit. |
-| **backend** | Build from `./backend` | FastAPI app. Connects to Postgres, Redis, Keycloak, Ollama. |
-| **celery-worker** | Build from `./backend` | Celery worker + beat. Ingests Suricata EVE logs every 10s. |
-| **frontend** | Build from `./frontend` | Next.js standalone. Proxied through Nginx. |
-| **wims-suricata** | `jasonish/suricata:latest` | Network IDS. Sniffs `eth0` on the Docker bridge. Logs to `suricata/logs/`. |
-| **nginx-gateway** | `nginx:alpine` | Edge gateway. Exposes ports 80 and 443. Routes to frontend, backend, and Keycloak. |
+1. Public submissions enter via `POST /api/civilian/reports` into `wims.citizen_reports` with pending status.
+2. Triage users (`ENCODER`/`VALIDATOR`) review `GET /api/triage/pending` and promote with `POST /api/triage/{report_id}/promote`.
+3. Promotion creates official records in `wims.fire_incidents` and links back to the civilian report.
+4. Regional and analyst flows read incident data through role-scoped APIs (`/api/regional/*`, `/api/analytics/*`).
+5. System-admin security workflows read/update threat logs and optional AI narratives through `/api/admin/security-logs*`.
 
-## Authentication Flow
+This aligns with glossary terms: civilian intake, validator-centered verification, and sovereign-core processing boundaries.
 
-1. User clicks Login on the frontend.
-2. Frontend redirects to Keycloak with PKCE challenge (`oidc-client-ts`).
-3. Keycloak authenticates the user and redirects back to `/callback` with an authorization code.
-4. Frontend calls `POST /api/auth/callback` with the code and code verifier.
-5. Backend exchanges the code with Keycloak for tokens and upserts the user in `wims.users`.
-6. Access token is stored in an HttpOnly cookie and used for subsequent API requests.
-7. Protected backend routes validate the JWT via `get_current_user` / `get_current_wims_user` / `get_system_admin`.
+## Auth and Access Control
 
-## User Roles
+- Frontend callback flow uses `oidc-client-ts` and then `POST /api/auth/sync` to persist `access_token` as an HttpOnly cookie.
+- Backend protects role-sensitive paths via dependency guards (`get_current_wims_user`, `get_system_admin`, `get_analyst_or_admin`, `get_regional_encoder`).
+- Role-sensitive examples:
+  - Admin hub endpoints under `/api/admin/*` require `SYSTEM_ADMIN`.
+  - Analyst endpoints under `/api/analytics/*` require analyst/admin guard.
+  - Regional endpoints under `/api/regional/*` require regional encoder context.
 
-| Role | Capabilities |
-|------|-------------|
-| **ENCODER** | Create incidents, import bulk data, access triage queue |
-| **VALIDATOR** | Verify/reject incidents, promote citizen reports, run conflict detection |
-| **ANALYST** | View analytics summaries |
-| **ADMIN** | All of the above + user management |
-| **SYSTEM_ADMIN** | Full system access: user management, security threat logs, audit trails, AI analysis |
+## Security-Relevant Mechanics
 
-## Security Architecture
-
-- **Suricata IDS** monitors the Docker bridge network for threats (e.g., False Data Injection).
-- **Celery beat** ingests Suricata EVE logs into `security_threat_logs` every 10 seconds.
-- **AI Analysis:** SYSTEM_ADMIN can trigger Qwen2.5-3B via Ollama to generate XAI narratives explaining why a packet was flagged.
-- **Rate limiting:** Redis sliding-window rate limiter on `POST /api/auth/login` (5 requests per 900s window).
-- **Immutability Law:** Core tables use soft-delete (`is_archived`) — no hard deletes permitted. Every verification action is logged in `incident_verification_history` with the acting `user_id`.
+- Login rate limiting is implemented in backend middleware for `POST /api/auth/login` using a Redis Lua sliding-window script.
+- Suricata logs are mounted into worker-accessible paths and ingested by task modules.
+- No hard-delete admin endpoint is defined in admin route modules; updates are mutation-oriented (user/log state updates and audit readout).
