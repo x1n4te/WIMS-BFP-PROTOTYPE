@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -39,15 +40,23 @@ class AforParsedRow(BaseModel):
     data: dict[str, Any]
 
 
+AforFormKind = Literal["STRUCTURAL_AFOR", "WILDLAND_AFOR"]
+WildlandRowSource = Literal["AFOR_IMPORT", "MANUAL"]
+
+
 class AforParseResponse(BaseModel):
     total_rows: int
     valid_rows: int
     invalid_rows: int
     rows: list[AforParsedRow]
+    form_kind: AforFormKind
 
 
 class AforCommitRequest(BaseModel):
+    form_kind: AforFormKind
     rows: list[dict[str, Any]]
+    # WILDLAND_AFOR: MANUAL for manual entry; omit or AFOR_IMPORT for file import.
+    wildland_row_source: WildlandRowSource | None = None
 
 
 class AforCommitResponse(BaseModel):
@@ -190,6 +199,267 @@ def _looks_like_official_afor_csv(rows: list[list[str]]) -> bool:
         "AFTER FIRE OPERATIONS REPORT" in first_column_values
         and "A. RESPONSE DETAILS" in first_column_values
     )
+
+
+def _cell_str(ws: Any, coord: str) -> str:
+    try:
+        v = ws[coord].value
+    except Exception:
+        return ""
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _sheet_has_structural_markers(ws: Any) -> bool:
+    """Official structural AFOR: title in column A row 14, section header row 18."""
+    a14 = _cell_str(ws, "A14").upper()
+    a18 = _cell_str(ws, "A18").upper()
+    return "AFTER FIRE OPERATIONS REPORT" in a14 and "A. RESPONSE DETAILS" in a18
+
+
+def _sheet_has_wildland_markers(ws: Any) -> bool:
+    """
+    Wildland workbook: main sheet title in B12 and section A header in B13.
+    Tie-break: sheet name containing 'WILDLAND FIRE AFOR' wins over structural when both match.
+    """
+    b12 = _cell_str(ws, "B12").upper()
+    b13 = _cell_str(ws, "B13").upper()
+    if "WILDLAND" in b12 and "A. DATES" in b13:
+        return True
+    if "WILDLAND FIRE" in b12:
+        return True
+    return False
+
+
+def detect_afor_template_kind(wb: Any) -> AforFormKind | None:
+    """
+    Classify uploaded workbook as structural vs wildland AFOR.
+
+    Detection:
+        Wildland markers also match when B12 contains WILDLAND FIRE even if B13 is not the usual
+        "A. DATES…" line (see `_sheet_has_wildland_markers`).
+
+    Rules (order):
+    1. If any sheet name contains 'WILDLAND FIRE AFOR' (case-insensitive) and that sheet
+       has wildland markers (B12/B13 or title containing WILDLAND) → WILDLAND_AFOR.
+    2. Else if any sheet has structural markers (A14 + A18) → STRUCTURAL_AFOR.
+    3. Else if any sheet has wildland markers without relying on sheet name → WILDLAND_AFOR.
+    4. Else None (ambiguous).
+    """
+    sheets: list[tuple[str, Any]] = [(n, wb[n]) for n in wb.sheetnames]
+
+    for name, ws in sheets:
+        if "WILDLAND FIRE AFOR" in name.upper() and _sheet_has_wildland_markers(ws):
+            return "WILDLAND_AFOR"
+
+    for name, ws in sheets:
+        if _sheet_has_structural_markers(ws):
+            return "STRUCTURAL_AFOR"
+
+    for _name, ws in sheets:
+        if _sheet_has_wildland_markers(ws):
+            return "WILDLAND_AFOR"
+
+    return None
+
+
+def _pick_structural_worksheet(wb: Any) -> Any:
+    for name in wb.sheetnames:
+        if "AFOR" in name.upper():
+            return wb[name]
+    return wb.active
+
+
+def _pick_wildland_worksheet(wb: Any) -> Any:
+    for name in wb.sheetnames:
+        if "WILDLAND" in name.upper() and "AFOR" in name.upper():
+            return wb[name]
+    for name in wb.sheetnames:
+        if _sheet_has_wildland_markers(wb[name]):
+            return wb[name]
+    return wb.active
+
+
+_WILDLAND_FIRE_TYPES_LOWER = {
+    "fire",
+    "agricultural land fire",
+    "brush fire",
+    "forest fire",
+    "grassland fire",
+    "grazing land fire",
+    "mineral land fire",
+    "peatland fire",
+}
+
+
+def _normalize_wildland_fire_type(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    t = str(raw).strip().lower()
+    if t in _WILDLAND_FIRE_TYPES_LOWER:
+        return t
+    return None
+
+
+def _parse_ha_from_area_text(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    m = re.search(r"([\d.]+)\s*ha", s, re.IGNORECASE)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+class WildlandXlsxParser:
+    """Parser for BFP wildland AFOR workbook (sheet 'WILDLAND FIRE AFOR')."""
+
+    def __init__(self, ws: Any):
+        self.ws = ws
+
+    def get(self, coord: str) -> Any:
+        val = self.ws[coord].value
+        if val is None:
+            return None
+        if isinstance(val, str):
+            return val.strip()
+        return val
+
+    def parse(self) -> dict[str, Any]:
+        def _dt_cell(coord: str) -> datetime | None:
+            v = self.get(coord)
+            if isinstance(v, datetime):
+                return v
+            return None
+
+        call_received = _dt_cell("D15")
+        fire_started = _dt_cell("D17")
+        fire_arrival = _dt_cell("D19")
+        fire_controlled = _dt_cell("D21")
+
+        extras: list[str] = []
+        for coord in ("E28", "E29"):
+            v = self.get(coord)
+            if v:
+                extras.append(str(v))
+
+        fire_behavior = {
+            "elevation_ft": _safe_float(self.get("D51"), 0.0) or None,
+            "relative_position_slope": self.get("D52"),
+            "aspect": self.get("D53"),
+            "flame_length_ft": _safe_float(self.get("D54"), 0.0) or None,
+            "rate_of_spread_chains_per_hour": _safe_float(self.get("D55"), 0.0) or None,
+        }
+
+        problems: list[str] = []
+        for r in range(76, 80):
+            line = self.get(f"B{r}")
+            if line and str(line).strip():
+                problems.append(str(line).strip())
+
+        recommendations: list[str] = []
+        for r in range(83, 87):
+            line = self.get(f"B{r}")
+            if line and str(line).strip():
+                recommendations.append(str(line).strip())
+
+        alarm_rows: list[dict[str, Any]] = []
+        for r in range(50, 65):
+            status = self.get(f"J{r}")
+            if not status or not str(status).strip():
+                continue
+            time_declared = self.get(f"K{r}")
+            commander = self.get(f"L{r}")
+            alarm_rows.append(
+                {
+                    "alarm_status": str(status).strip(),
+                    "time_declared": str(time_declared).strip() if time_declared else "",
+                    "ground_commander": str(commander).strip() if commander else "",
+                }
+            )
+
+        raw_type = self.get("G44")
+        wft = _normalize_wildland_fire_type(raw_type)
+
+        return {
+            "call_received_at": call_received,
+            "fire_started_at": fire_started,
+            "fire_arrival_at": fire_arrival,
+            "fire_controlled_at": fire_controlled,
+            "caller_transmitted_by": self.get("B33") or self.get("B32"),
+            "caller_office_address": self.get("D33") or self.get("D32"),
+            "call_received_by_personnel": self.get("F33") or self.get("F32"),
+            "engine_dispatched": self.get("D23"),
+            "incident_location_description": self.get("D31") or self.get("B31"),
+            "distance_to_fire_station_km": _safe_float(self.get("D32"), 0.0)
+            if self.get("D32") not in (None, "")
+            else None,
+            "primary_action_taken": self.get("E27"),
+            "assistance_combined_summary": " | ".join(extras) if extras else None,
+            "buildings_involved": _safe_int(self.get("B40")),
+            "buildings_threatened": _safe_int(self.get("G40")),
+            "ownership_and_property_notes": self.get("B41") or self.get("B39"),
+            "total_area_burned_display": self.get("B44"),
+            "total_area_burned_hectares": _parse_ha_from_area_text(self.get("B44")),
+            "wildland_fire_type": wft,
+            "raw_wildland_fire_type": raw_type,
+            "area_type_summary": {},
+            "causes_and_ignition_factors": {},
+            "suppression_factors": {},
+            "weather": {},
+            "fire_behavior": {k: v for k, v in fire_behavior.items() if v not in (None, "", 0.0)},
+            "peso_losses": {},
+            "casualties": {},
+            "narration": self.get("B68"),
+            "problems_encountered": problems,
+            "recommendations_list": recommendations,
+            "prepared_by": self.get("B91"),
+            "prepared_by_title": self.get("B92"),
+            "noted_by": self.get("E88") or self.get("F88"),
+            "noted_by_title": self.get("E91"),
+            "wildland_alarm_statuses": alarm_rows,
+            "wildland_assistance_rows": [],
+        }
+
+
+def parse_wildland_afor_report_data(data: dict[str, Any], region_id: int) -> AforParsedRow:
+    """Map wildland workbook dict into commit payload + validation."""
+    errors: list[str] = []
+
+    primary = (data.get("primary_action_taken") or "").strip()
+    engine = (data.get("engine_dispatched") or "").strip()
+    narration = (data.get("narration") or "").strip()
+    call_at = data.get("call_received_at")
+    wft = data.get("wildland_fire_type")
+
+    if not primary and not engine and not narration and not call_at and not wft:
+        errors.append(
+            "Missing wildland content: need at least one of call time (D15), primary action (E27), "
+            "engine (D23), narration (B68), or wildland fire type (G44)."
+        )
+
+    if data.get("raw_wildland_fire_type") and not wft:
+        errors.append(
+            f"Wildland fire type value is not allowed: {data.get('raw_wildland_fire_type')!r}. "
+            "Use the Sheet1 list (e.g. Brush Fire, Forest Fire)."
+        )
+
+    wl_payload = {k: v for k, v in data.items() if k not in ("raw_wildland_fire_type", "recommendations_list")}
+    wl_payload["recommendations"] = data.get("recommendations_list") or []
+
+    mapped: dict[str, Any] = {
+        "_form_kind": "WILDLAND_AFOR",
+        "_city_text": "",
+        "region_id": region_id,
+        "wildland": wl_payload,
+    }
+
+    status = "VALID" if not errors else "INVALID"
+    return AforParsedRow(row_index=0, status=status, errors=errors, data=mapped)
 
 
 def _combine_date_and_time(notification_dt: str | None, time_value: Any) -> str | None:
@@ -543,17 +813,19 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
         errors.append("Missing required fields: notification_dt (Check D22/D23 in XLSX)")
     if not mapped["_city_text"]:
         errors.append("Missing required fields: _city_text (City/Municipality)")
-    
+
+    mapped["_form_kind"] = "STRUCTURAL_AFOR"
+
     status = "VALID" if not errors else "INVALID"
     return AforParsedRow(row_index=0, status=status, errors=errors, data=mapped)
 
 
-def parse_csv_content(content: str, region_id: int) -> list[AforParsedRow]:
-    """Parse either the official AFOR form-style CSV or a flat tabular CSV."""
+def parse_csv_content(content: str, region_id: int) -> tuple[list[AforParsedRow], AforFormKind]:
+    """Parse either the official AFOR form-style CSV or a flat tabular CSV (structural only)."""
     rows = list(csv.reader(io.StringIO(content)))
     if _looks_like_official_afor_csv(rows):
         parser = BfpXlsxParser(CsvWorksheetAdapter(rows))
-        return [parse_afor_report_data(parser.parse(), region_id)]
+        return [parse_afor_report_data(parser.parse(), region_id)], "STRUCTURAL_AFOR"
 
     reader = csv.DictReader(io.StringIO(content))
     results = []
@@ -561,31 +833,38 @@ def parse_csv_content(content: str, region_id: int) -> list[AforParsedRow]:
         if not any(row.values()):
             continue
         results.append(parse_afor_report_data(row, region_id))
-    return results
+    return results, "STRUCTURAL_AFOR"
 
 
-def parse_xlsx_content(content: bytes, region_id: int) -> list[AforParsedRow]:
-    """Parse XLSX using BfpXlsxParser for official BFP template."""
+def parse_xlsx_content(content: bytes, region_id: int) -> tuple[list[AforParsedRow], AforFormKind]:
+    """Parse XLSX: detect structural vs wildland, then dispatch."""
     from openpyxl import load_workbook
-    
+
     wb = load_workbook(io.BytesIO(content), data_only=True)
-    # Target 'AFOR' sheet
-    ws = None
-    for name in wb.sheetnames:
-        if "AFOR" in name.upper():
-            ws = wb[name]
-            break
-    
-    if not ws:
-        # Fallback to active if no AFOR sheet found
-        ws = wb.active
-        
-    parser = BfpXlsxParser(ws)
-    report_data = parser.parse()
-    parsed_row = parse_afor_report_data(report_data, region_id)
-    
-    wb.close()
-    return [parsed_row]
+    try:
+        kind = detect_afor_template_kind(wb)
+        if kind is None:
+            raise ValueError(
+                "could not determine AFOR type. Expected either the official structural AFOR "
+                "(column A: 'AFTER FIRE OPERATIONS REPORT' and 'A. RESPONSE DETAILS') or the wildland "
+                "template (sheet 'WILDLAND FIRE AFOR' with section A dates in column B). "
+                "See public/templates/ for sample workbooks."
+            )
+
+        if kind == "STRUCTURAL_AFOR":
+            ws = _pick_structural_worksheet(wb)
+            parser = BfpXlsxParser(ws)
+            report_data = parser.parse()
+            parsed_row = parse_afor_report_data(report_data, region_id)
+            return [parsed_row], kind
+
+        ws = _pick_wildland_worksheet(wb)
+        parser = WildlandXlsxParser(ws)
+        report_data = parser.parse()
+        parsed_row = parse_wildland_afor_report_data(report_data, region_id)
+        return [parsed_row], kind
+    finally:
+        wb.close()
 
 
 # ---------------------------------------------------------------------------
@@ -618,9 +897,12 @@ async def import_afor_file(
     try:
         if ext == "csv":
             decoded = content.decode("utf-8-sig")  # Handle BOM
-            rows = parse_csv_content(decoded, region_id)
+            rows, form_kind = parse_csv_content(decoded, region_id)
         else:
-            rows = parse_xlsx_content(content, region_id)
+            rows, form_kind = parse_xlsx_content(content, region_id)
+    except ValueError as e:
+        logger.warning("AFOR type detection failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to parse AFOR file: {e}")
         raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(e)}")
@@ -635,7 +917,191 @@ async def import_afor_file(
         valid_rows=valid_count,
         invalid_rows=len(rows) - valid_count,
         rows=rows,
+        form_kind=form_kind,
     )
+
+
+_WILDLAND_ALARM_STATUS_ALLOWED = {
+    "1st Alarm",
+    "2nd Alarm",
+    "3rd Alarm",
+    "4th Alarm",
+    "Task Force Alpha",
+    "Task Force Bravo",
+    "General Alarm",
+    "Ongoing",
+    "Fire Out",
+    "Fire Under Control",
+    "Fire Out Upon Arrival",
+    "Fire Under Investigation",
+    "Late Reported",
+    "Unresponded",
+    "No Firefighting Conducted",
+}
+
+
+def _dt_for_sql(val: Any) -> Any:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.isoformat()
+    return val
+
+
+def _commit_wildland_afor_row(
+    db: Session,
+    row_data: dict[str, Any],
+    batch_id: int,
+    user_id: Any,
+    region_id: int,
+    incident_ids: list[int],
+    *,
+    source: WildlandRowSource = "AFOR_IMPORT",
+) -> None:
+    """Insert fire_incident + incident_wildland_afor + optional alarm/assistance children."""
+    wl = dict(row_data.get("wildland") or {})
+    alarm_statuses: list[dict[str, Any]] = list(wl.pop("wildland_alarm_statuses", []) or [])
+    assistance_rows: list[dict[str, Any]] = list(wl.pop("wildland_assistance_rows", []) or [])
+
+    inc_row = db.execute(
+        text("""
+            INSERT INTO wims.fire_incidents
+                (import_batch_id, encoder_id, region_id, location, verification_status)
+            VALUES
+                (:batch_id, CAST(:uid AS uuid), :region_id,
+                 ST_GeogFromText('SRID=4326;POINT(121.0 14.5)'),
+                 'DRAFT')
+            RETURNING incident_id
+        """),
+        {"batch_id": batch_id, "uid": user_id, "region_id": region_id},
+    ).fetchone()
+
+    if not inc_row:
+        return
+
+    incident_id = inc_row[0]
+    incident_ids.append(incident_id)
+
+    params = {
+        "incident_id": incident_id,
+        "batch_id": batch_id,
+        "source": source,
+        "call_received_at": _dt_for_sql(wl.get("call_received_at")),
+        "fire_started_at": _dt_for_sql(wl.get("fire_started_at")),
+        "fire_arrival_at": _dt_for_sql(wl.get("fire_arrival_at")),
+        "fire_controlled_at": _dt_for_sql(wl.get("fire_controlled_at")),
+        "caller_transmitted_by": wl.get("caller_transmitted_by") or "",
+        "caller_office_address": wl.get("caller_office_address") or "",
+        "call_received_by_personnel": wl.get("call_received_by_personnel") or "",
+        "engine_dispatched": wl.get("engine_dispatched") or "",
+        "incident_location_description": wl.get("incident_location_description") or "",
+        "distance_to_fire_station_km": wl.get("distance_to_fire_station_km"),
+        "primary_action_taken": wl.get("primary_action_taken") or "",
+        "assistance_combined_summary": wl.get("assistance_combined_summary") or "",
+        "buildings_involved": wl.get("buildings_involved") or 0,
+        "buildings_threatened": wl.get("buildings_threatened") or 0,
+        "ownership_and_property_notes": wl.get("ownership_and_property_notes") or "",
+        "total_area_burned_display": wl.get("total_area_burned_display") or "",
+        "total_area_burned_hectares": wl.get("total_area_burned_hectares"),
+        "wildland_fire_type": wl.get("wildland_fire_type") or None,
+        "area_type_summary": json.dumps(wl.get("area_type_summary") or {}),
+        "causes_and_ignition_factors": json.dumps(wl.get("causes_and_ignition_factors") or {}),
+        "suppression_factors": json.dumps(wl.get("suppression_factors") or {}),
+        "weather": json.dumps(wl.get("weather") or {}),
+        "fire_behavior": json.dumps(wl.get("fire_behavior") or {}),
+        "peso_losses": json.dumps(wl.get("peso_losses") or {}),
+        "casualties": json.dumps(wl.get("casualties") or {}),
+        "narration": wl.get("narration") or "",
+        "problems_encountered": json.dumps(wl.get("problems_encountered") or []),
+        "recommendations": json.dumps(wl.get("recommendations") or []),
+        "prepared_by": wl.get("prepared_by") or "",
+        "prepared_by_title": wl.get("prepared_by_title") or "",
+        "noted_by": wl.get("noted_by") or "",
+        "noted_by_title": wl.get("noted_by_title") or "",
+    }
+
+    iwa_row = db.execute(
+        text("""
+            INSERT INTO wims.incident_wildland_afor (
+                incident_id, import_batch_id, source,
+                call_received_at, fire_started_at, fire_arrival_at, fire_controlled_at,
+                caller_transmitted_by, caller_office_address, call_received_by_personnel,
+                engine_dispatched, incident_location_description, distance_to_fire_station_km,
+                primary_action_taken, assistance_combined_summary,
+                buildings_involved, buildings_threatened, ownership_and_property_notes,
+                total_area_burned_display, total_area_burned_hectares, wildland_fire_type,
+                area_type_summary, causes_and_ignition_factors, suppression_factors,
+                weather, fire_behavior, peso_losses, casualties,
+                narration, problems_encountered, recommendations,
+                prepared_by, prepared_by_title, noted_by, noted_by_title
+            ) VALUES (
+                :incident_id, :batch_id, :source,
+                CAST(:call_received_at AS timestamptz),
+                CAST(:fire_started_at AS timestamptz),
+                CAST(:fire_arrival_at AS timestamptz),
+                CAST(:fire_controlled_at AS timestamptz),
+                :caller_transmitted_by, :caller_office_address, :call_received_by_personnel,
+                :engine_dispatched, :incident_location_description, :distance_to_fire_station_km,
+                :primary_action_taken, :assistance_combined_summary,
+                :buildings_involved, :buildings_threatened, :ownership_and_property_notes,
+                :total_area_burned_display, :total_area_burned_hectares, :wildland_fire_type,
+                CAST(:area_type_summary AS jsonb), CAST(:causes_and_ignition_factors AS jsonb),
+                CAST(:suppression_factors AS jsonb),
+                CAST(:weather AS jsonb), CAST(:fire_behavior AS jsonb),
+                CAST(:peso_losses AS jsonb), CAST(:casualties AS jsonb),
+                :narration, CAST(:problems_encountered AS jsonb), CAST(:recommendations AS jsonb),
+                :prepared_by, :prepared_by_title, :noted_by, :noted_by_title
+            )
+            RETURNING incident_wildland_afor_id
+        """),
+        params,
+    ).fetchone()
+
+    if not iwa_row:
+        return
+
+    iwa_id = iwa_row[0]
+
+    for order, a in enumerate(alarm_statuses):
+        status = (a.get("alarm_status") or "").strip()
+        if status not in _WILDLAND_ALARM_STATUS_ALLOWED:
+            continue
+        db.execute(
+            text("""
+                INSERT INTO wims.wildland_afor_alarm_statuses (
+                    incident_wildland_afor_id, sort_order, alarm_status, time_declared, ground_commander
+                ) VALUES (
+                    :iwa_id, :sort_order, :alarm_status, :time_declared, :ground_commander
+                )
+            """),
+            {
+                "iwa_id": iwa_id,
+                "sort_order": order,
+                "alarm_status": status,
+                "time_declared": a.get("time_declared") or "",
+                "ground_commander": a.get("ground_commander") or "",
+            },
+        )
+
+    for order, row in enumerate(assistance_rows):
+        org = (row.get("organization_or_unit") or row.get("organization") or "").strip()
+        if not org:
+            continue
+        db.execute(
+            text("""
+                INSERT INTO wims.wildland_afor_assistance_rows (
+                    incident_wildland_afor_id, sort_order, organization_or_unit, detail
+                ) VALUES (
+                    :iwa_id, :sort_order, :organization_or_unit, :detail
+                )
+            """),
+            {
+                "iwa_id": iwa_id,
+                "sort_order": order,
+                "organization_or_unit": org,
+                "detail": row.get("detail") or "",
+            },
+        )
 
 
 @router.post("/afor/commit", response_model=AforCommitResponse)
@@ -654,6 +1120,29 @@ def commit_afor_import(
     if not body.rows:
         raise HTTPException(status_code=400, detail="No rows to commit")
 
+    for row_data in body.rows:
+        rk = row_data.get("_form_kind")
+        if rk != body.form_kind:
+            raise HTTPException(
+                status_code=400,
+                detail="form_kind mismatch: preview rows do not match commit form_kind",
+            )
+
+    validated_wildland_rows: list[dict[str, Any]] | None = None
+    if body.form_kind == "WILDLAND_AFOR":
+        wildland_errors: list[str] = []
+        validated_wildland_rows = []
+        for idx, row_data in enumerate(body.rows):
+            wl_dict = row_data.get("wildland") or {}
+            parsed = parse_wildland_afor_report_data(wl_dict, region_id)
+            if parsed.status != "VALID":
+                for err in parsed.errors:
+                    wildland_errors.append(f"Row {idx + 1}: {err}")
+            else:
+                validated_wildland_rows.append(parsed.data)
+        if wildland_errors:
+            raise HTTPException(status_code=400, detail=" ".join(wildland_errors))
+
     # Create import batch
     batch_row = db.execute(
         text("""
@@ -669,12 +1158,29 @@ def commit_afor_import(
 
     batch_id = batch_row[0]
     incident_ids: list[int] = []
-    
+
+    wildland_source: WildlandRowSource = (
+        "MANUAL" if body.wildland_row_source == "MANUAL" else "AFOR_IMPORT"
+    )
+
     def _group_total(groups: dict[str, Any], key: str) -> int:
         bucket = groups.get(key, {}) if isinstance(groups, dict) else {}
         return _safe_int(bucket.get("m")) + _safe_int(bucket.get("f"))
 
-    for row_data in body.rows:
+    for idx, row_data in enumerate(body.rows):
+        if body.form_kind == "WILDLAND_AFOR":
+            assert validated_wildland_rows is not None
+            _commit_wildland_afor_row(
+                db,
+                validated_wildland_rows[idx],
+                batch_id,
+                user_id,
+                region_id,
+                incident_ids,
+                source=wildland_source,
+            )
+            continue
+
         ns = row_data.get("incident_nonsensitive_details", {})
         sens = row_data.get("incident_sensitive_details", {})
         casualty_details = sens.get("casualty_details", {}) if isinstance(sens.get("casualty_details", {}), dict) else {}
@@ -711,8 +1217,6 @@ def commit_afor_import(
             {"city": city_text},
         ).fetchone()
         city_id = geo_ids[0] if geo_ids else None
-
-        import json
 
         db.execute(
             text("""

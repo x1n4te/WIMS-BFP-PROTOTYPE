@@ -12,7 +12,7 @@ A full-stack incident management platform for the Philippine Bureau of Fire Prot
 
 Primary implementation lives under `src/`:
 
-- `src/frontend` — Next.js app (App Router)
+- `src/frontend` — Next.js app (App Router); static AFOR templates under `src/frontend/public/templates/` (e.g. structural and wildland `.xlsx` files linked from `/afor/import` and `/afor/create`)
 - `src/backend` — FastAPI API + Celery task modules
 - `src/postgres-init` — PostgreSQL bootstrap SQL
 - `src/keycloak` — realm import configuration

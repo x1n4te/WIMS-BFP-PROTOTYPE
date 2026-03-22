@@ -3,14 +3,14 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Upload, FileDown, CheckCircle, AlertCircle, RefreshCw, X } from 'lucide-react';
-import { importAforFile, commitAforImport } from '@/lib/api';
+import { importAforFile, commitAforImport, type AforImportPreviewResponse } from '@/lib/api';
 
 export default function AforImportPage() {
     const router = useRouter();
     const [file, setFile] = useState<File | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [isCommitting, setIsCommitting] = useState(false);
-    const [previewData, setPreviewData] = useState<any | null>(null);
+    const [previewData, setPreviewData] = useState<AforImportPreviewResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
@@ -60,10 +60,10 @@ export default function AforImportPage() {
         setError(null);
         try {
             const validRows = previewData.rows
-                .filter((r: any) => r.status === 'VALID')
-                .map((r: any) => r.data);
-            
-            const res = await commitAforImport(validRows);
+                .filter((r) => r.status === 'VALID')
+                .map((r) => r.data);
+
+            const res = await commitAforImport(validRows, previewData.form_kind);
             if (res.status === 'ok') {
                 router.push('/dashboard/regional');
             }
@@ -91,9 +91,14 @@ export default function AforImportPage() {
                     </p>
                 </div>
                 {!previewData && (
-                    <a href="/templates/afor_template.xlsx" download className="card flex items-center gap-2 px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
-                        <FileDown className="w-4 h-4" /> Download Template (.xlsx)
-                    </a>
+                    <div className="flex flex-wrap gap-2">
+                        <a href="/templates/afor_template.xlsx" download className="card flex items-center gap-2 px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
+                            <FileDown className="w-4 h-4" /> Structural template (.xlsx)
+                        </a>
+                        <a href="/templates/wildland_afor_template.xlsx" download className="card flex items-center gap-2 px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
+                            <FileDown className="w-4 h-4" /> Wildland template (.xlsx)
+                        </a>
+                    </div>
                 )}
             </div>
 
@@ -175,6 +180,20 @@ export default function AforImportPage() {
                 </div>
             ) : (
                 <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                        <span className="font-semibold uppercase tracking-wide text-xs" style={{ color: 'var(--text-primary)' }}>
+                            Detected form
+                        </span>
+                        <span
+                            className="px-2 py-0.5 rounded border text-xs font-semibold"
+                            style={{
+                                borderColor: previewData.form_kind === 'WILDLAND_AFOR' ? '#15803d' : '#1d4ed8',
+                                color: previewData.form_kind === 'WILDLAND_AFOR' ? '#15803d' : '#1d4ed8',
+                            }}
+                        >
+                            {previewData.form_kind === 'WILDLAND_AFOR' ? 'Wildland AFOR' : 'Structural AFOR'}
+                        </span>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="card p-4 flex items-center justify-between" style={{ borderLeft: '4px solid #3b82f6' }}>
                             <div>
@@ -221,16 +240,35 @@ export default function AforImportPage() {
                                 <thead className="text-xs uppercase bg-gray-50 text-gray-700">
                                     <tr>
                                         <th className="px-4 py-3 w-10">Status</th>
-                                        <th className="px-4 py-3">Date/Time</th>
-                                        <th className="px-4 py-3">City</th>
-                                        <th className="px-4 py-3">Category</th>
-                                        <th className="px-4 py-3">Alarm</th>
+                                        {previewData.form_kind === 'WILDLAND_AFOR' ? (
+                                            <>
+                                                <th className="px-4 py-3">Call received</th>
+                                                <th className="px-4 py-3">Engine</th>
+                                                <th className="px-4 py-3">Wildland type</th>
+                                                <th className="px-4 py-3">Primary action</th>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <th className="px-4 py-3">Date/Time</th>
+                                                <th className="px-4 py-3">City</th>
+                                                <th className="px-4 py-3">Category</th>
+                                                <th className="px-4 py-3">Alarm</th>
+                                            </>
+                                        )}
                                         <th className="px-4 py-3">Errors (if any)</th>
                                         <th className="px-4 py-3 text-right">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {previewData.rows.map((row: any, i: number) => (
+                                    {previewData.rows.map((row, i) => {
+                                        const wl = row.data.wildland as Record<string, unknown> | undefined;
+                                        const callAt =
+                                            typeof wl?.call_received_at === 'string'
+                                                ? wl.call_received_at.substring(0, 16)
+                                                : wl?.call_received_at != null
+                                                  ? String(wl.call_received_at).substring(0, 16)
+                                                  : '—';
+                                        return (
                                         <tr key={i} className={`border-b ${row.status === 'INVALID' ? 'bg-red-50/30' : 'hover:bg-gray-50'}`}>
                                             <td className="px-4 py-3">
                                                 {row.status === 'VALID' ? (
@@ -239,12 +277,27 @@ export default function AforImportPage() {
                                                     <AlertCircle className="w-4 h-4 text-red-500" />
                                                 )}
                                             </td>
-                                            <td className="px-4 py-3 font-medium">
-                                                {row.data.incident_nonsensitive_details.notification_dt ? row.data.incident_nonsensitive_details.notification_dt.substring(0, 10) : 'Missing'}
-                                            </td>
-                                            <td className="px-4 py-3">{row.data._city_text || 'Missing'}</td>
-                                            <td className="px-4 py-3">{row.data.incident_nonsensitive_details.general_category}</td>
-                                            <td className="px-4 py-3">{row.data.incident_nonsensitive_details.alarm_level}</td>
+                                            {previewData.form_kind === 'WILDLAND_AFOR' ? (
+                                                <>
+                                                    <td className="px-4 py-3 font-medium">{callAt}</td>
+                                                    <td className="px-4 py-3">{String(wl?.engine_dispatched ?? '—')}</td>
+                                                    <td className="px-4 py-3">{String(wl?.wildland_fire_type ?? wl?.raw_wildland_fire_type ?? '—')}</td>
+                                                    <td className="px-4 py-3 max-w-[220px] truncate" title={String(wl?.primary_action_taken ?? '')}>
+                                                        {String(wl?.primary_action_taken ?? '—')}
+                                                    </td>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <td className="px-4 py-3 font-medium">
+                                                        {(row.data.incident_nonsensitive_details as { notification_dt?: string })?.notification_dt
+                                                            ? (row.data.incident_nonsensitive_details as { notification_dt: string }).notification_dt.substring(0, 10)
+                                                            : 'Missing'}
+                                                    </td>
+                                                    <td className="px-4 py-3">{String(row.data._city_text || 'Missing')}</td>
+                                                    <td className="px-4 py-3">{String((row.data.incident_nonsensitive_details as { general_category?: string })?.general_category ?? '')}</td>
+                                                    <td className="px-4 py-3">{String((row.data.incident_nonsensitive_details as { alarm_level?: string })?.alarm_level ?? '')}</td>
+                                                </>
+                                            )}
                                             <td className="px-4 py-3 text-red-600 text-xs truncate max-w-[200px]" title={row.errors.join(', ')}>
                                                 {row.errors.join(', ')}
                                             </td>
@@ -252,6 +305,7 @@ export default function AforImportPage() {
                                                 <button 
                                                     onClick={() => {
                                                         sessionStorage.setItem('temp_afor_review', JSON.stringify(row.data));
+                                                        sessionStorage.setItem('temp_afor_form_kind', previewData.form_kind);
                                                         router.push('/afor/create');
                                                     }}
                                                     className="text-blue-600 hover:text-blue-800 font-medium"
@@ -260,7 +314,8 @@ export default function AforImportPage() {
                                                 </button>
                                             </td>
                                         </tr>
-                                    ))}
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>

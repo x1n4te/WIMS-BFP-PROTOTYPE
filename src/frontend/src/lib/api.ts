@@ -272,7 +272,22 @@ export async function fetchRegionalStats(): Promise<any> {
   return apiFetch('/regional/stats');
 }
 
-export async function importAforFile(file: File): Promise<any> {
+export type AforFormKind = 'STRUCTURAL_AFOR' | 'WILDLAND_AFOR';
+
+export interface AforImportPreviewResponse {
+  total_rows: number;
+  valid_rows: number;
+  invalid_rows: number;
+  form_kind: AforFormKind;
+  rows: Array<{
+    row_index: number;
+    status: string;
+    errors: string[];
+    data: Record<string, unknown>;
+  }>;
+}
+
+export async function importAforFile(file: File): Promise<AforImportPreviewResponse> {
   const formData = new FormData();
   formData.append('file', file);
   const url = `${API_BASE.replace(/\/$/, '')}/regional/afor/import`;
@@ -285,13 +300,23 @@ export async function importAforFile(file: File): Promise<any> {
   if (!res.ok) {
     throw new Error((json as { message?: string; detail?: string }).message ?? (json as { detail?: string }).detail ?? `Request failed: ${res.status}`);
   }
-  return json;
+  return json as AforImportPreviewResponse;
 }
 
-export async function commitAforImport(rows: any[]): Promise<any> {
+export type WildlandRowSource = 'AFOR_IMPORT' | 'MANUAL';
+
+export async function commitAforImport(
+  rows: any[],
+  formKind: AforFormKind,
+  options?: { wildlandRowSource?: WildlandRowSource }
+): Promise<{ status: string; batch_id: number; incident_ids: number[]; total_committed: number }> {
+  const body: Record<string, unknown> = { form_kind: formKind, rows };
+  if (options?.wildlandRowSource != null) {
+    body.wildland_row_source = options.wildlandRowSource;
+  }
   return apiFetch('/regional/afor/commit', {
     method: 'POST',
-    body: JSON.stringify({ rows }),
+    body: JSON.stringify(body),
   });
 }
 

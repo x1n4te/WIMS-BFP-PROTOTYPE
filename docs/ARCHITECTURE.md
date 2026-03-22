@@ -48,8 +48,9 @@ The current repository shows a civilian-to-triage-to-incident pipeline:
 1. Public submissions enter via `POST /api/civilian/reports` into `wims.citizen_reports` with pending status.
 2. Triage users (`ENCODER`/`VALIDATOR`) review `GET /api/triage/pending` and promote with `POST /api/triage/{report_id}/promote`.
 3. Promotion creates official records in `wims.fire_incidents` and links back to the civilian report.
-4. Regional and analyst flows read incident data through role-scoped APIs (`/api/regional/*`, `/api/analytics/*`).
-5. System-admin security workflows read/update threat logs and optional AI narratives through `/api/admin/security-logs*`.
+4. Regional encoders import official AFOR workbooks via `POST /api/regional/afor/import` and commit via `POST /api/regional/afor/commit`. The backend classifies uploads as **structural** (standard AFOR cell map) or **wildland** (wildland sheet markers / sheet name); wildland commits persist to `wims.incident_wildland_afor` (and related child rows where used), with `source` distinguishing file import vs manual entry.
+5. Analyst flows read incident data through `/api/analytics/*` (and regional users through `/api/regional/*` for listings and stats).
+6. System-admin security workflows read/update threat logs and optional AI narratives through `/api/admin/security-logs*`.
 
 This aligns with glossary terms: civilian intake, validator-centered verification, and sovereign-core processing boundaries.
 

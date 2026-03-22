@@ -2,30 +2,53 @@ import csv
 import io
 from unittest.mock import MagicMock, patch
 
+from openpyxl import Workbook
+
 from api.routes.regional import (
     BfpXlsxParser,
+    detect_afor_template_kind,
     parse_afor_report_data,
     parse_csv_content,
+    parse_wildland_afor_report_data,
     parse_xlsx_content,
 )
 
 
+class _FakeSheet:
+    """Minimal worksheet: stable cell values (MagicMock subscripts are not reliable for .value)."""
+
+    def __init__(self, values: dict[str, object]):
+        self._values = values
+
+    def __getitem__(self, coord: str):
+        class _Cell:
+            pass
+
+        c = _Cell()
+        c.value = self._values.get(coord)
+        return c
+
+
 def test_bfp_xlsx_parser_mapping():
     """The worksheet parser should read the official AFOR coordinates."""
-    mock_ws = MagicMock()
-    mock_ws["B21"].value = "x"
-    mock_ws["D21"].value = "Quezon City Fire Station"
-    mock_ws["D22"].value = "2025-11-20"
-    mock_ws["D23"].value = "14:30"
-    mock_ws["D26"].value = "Quezon City"
-    mock_ws["D42"].value = "Second Alarm"
-    mock_ws["B50"].value = "/"
-    mock_ws["B60"].value = "1"
-    mock_ws["B102"].value = "x"
-    mock_ws["D102"].value = "Covered court"
-    mock_ws["D62"].value = 2
-    mock_ws["D70"].value = 3
-    mock_ws["D89"].value = "14:30"
+    mock_ws = _FakeSheet(
+        {
+            "B20": None,
+            "B21": "x",
+            "D21": "Quezon City Fire Station",
+            "D22": "2025-11-20",
+            "D23": "14:30",
+            "D26": "Quezon City",
+            "D42": "Second Alarm",
+            "B50": "/",
+            "B60": "1",
+            "B102": "x",
+            "D102": "Covered court",
+            "D62": 2,
+            "D70": 3,
+            "D89": "14:30",
+        }
+    )
 
     data = BfpXlsxParser(mock_ws).parse()
 
@@ -116,6 +139,8 @@ def test_parse_afor_report_data_maps_canonical_schema():
     assert "2025-11-20T14:42" in responding_unit["arrival_dt"]
     assert "2025-11-20T16:00" in responding_unit["return_dt"]
 
+    assert payload["_form_kind"] == "STRUCTURAL_AFOR"
+
 
 def test_parse_afor_report_data_invalid_date():
     """Invalid notification dates should invalidate the import row."""
@@ -145,32 +170,93 @@ def test_parse_csv_content_supports_official_form_layout():
     writer = csv.writer(buffer)
     writer.writerows(rows)
 
-    results = parse_csv_content(buffer.getvalue(), region_id=1)
+    rows, form_kind = parse_csv_content(buffer.getvalue(), region_id=1)
 
-    assert len(results) == 1
-    assert results[0].status == "VALID"
-    assert results[0].data["_city_text"] == "Manila"
-    assert results[0].data["incident_nonsensitive_details"]["fire_station_name"] == "Station A"
+    assert form_kind == "STRUCTURAL_AFOR"
+    assert len(rows) == 1
+    assert rows[0].status == "VALID"
+    assert rows[0].data["_city_text"] == "Manila"
+    assert rows[0].data["incident_nonsensitive_details"]["fire_station_name"] == "Station A"
 
 
 @patch("openpyxl.load_workbook")
 def test_parse_xlsx_content_flow(mock_load):
     """The XLSX flow should produce a schema-aligned preview row."""
+    mock_ws = _FakeSheet(
+        {
+            "A14": "AFTER FIRE OPERATIONS REPORT",
+            "A18": "A. RESPONSE DETAILS",
+            "B20": "x",
+            "D20": "Station",
+            "D22": "2025-11-20",
+            "D23": "14:30",
+            "D26": "Manila",
+            "D56": 500,
+            "D60": 0.5,
+        }
+    )
     mock_wb = MagicMock()
-    mock_ws = MagicMock()
     mock_wb.sheetnames = ["AFOR Sheet"]
-    mock_wb["AFOR Sheet"] = mock_ws
+    mock_wb.__getitem__.side_effect = lambda _name: mock_ws
+    mock_wb.close = MagicMock()
     mock_load.return_value = mock_wb
 
-    mock_ws["D22"].value = "2025-11-20"
-    mock_ws["D23"].value = "14:30"
-    mock_ws["D26"].value = "Manila"
-    mock_ws["D56"].value = 500
-    mock_ws["D60"].value = 0.5
+    results, form_kind = parse_xlsx_content(b"fake content", region_id=1)
 
-    results = parse_xlsx_content(b"fake content", region_id=1)
-
+    assert form_kind == "STRUCTURAL_AFOR"
     assert len(results) == 1
     assert results[0].status == "VALID"
     assert results[0].data["_city_text"] == "Manila"
     assert results[0].data["incident_nonsensitive_details"]["extent_total_floor_area_sqm"] == 500
+
+
+def test_detect_structural_workbook():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "AFOR"
+    ws["A14"] = "AFTER FIRE OPERATIONS REPORT"
+    ws["A18"] = "A. RESPONSE DETAILS"
+    assert detect_afor_template_kind(wb) == "STRUCTURAL_AFOR"
+
+
+def test_detect_wildland_workbook():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "WILDLAND FIRE AFOR"
+    ws["B12"] = "AFTER FIRE OPERATIONS REPORT OF WILDLAND FIRE "
+    ws["B13"] = "A. DATES AND TIMES"
+    assert detect_afor_template_kind(wb) == "WILDLAND_AFOR"
+
+
+def test_detect_ambiguous_workbook_returns_none():
+    wb = Workbook()
+    wb.active["A1"] = "nothing"
+    assert detect_afor_template_kind(wb) is None
+
+
+def test_parse_wildland_afor_report_data_minimal_valid():
+    """At least one of primary action, engine, narration, call time, or fire type validates."""
+    data = {
+        "primary_action_taken": "Direct attack",
+        "engine_dispatched": "",
+        "narration": "",
+        "call_received_at": None,
+        "wildland_fire_type": None,
+    }
+    result = parse_wildland_afor_report_data(data, region_id=13)
+    assert result.status == "VALID"
+    assert result.data["wildland"]["primary_action_taken"] == "Direct attack"
+
+
+def test_parse_wildland_afor_report_data_empty_invalid():
+    """Empty wildland content should invalidate (matches commit-time rejection)."""
+    data = {
+        "primary_action_taken": "",
+        "engine_dispatched": "",
+        "narration": "",
+        "call_received_at": None,
+        "wildland_fire_type": None,
+    }
+    result = parse_wildland_afor_report_data(data, region_id=13)
+    assert result.status == "INVALID"
+    assert any("Missing wildland content" in e for e in result.errors)

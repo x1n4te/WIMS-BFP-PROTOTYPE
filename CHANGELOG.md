@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Regional AFOR — wildland:** Backend detection and parsing for the BFP wildland workbook (`WILDLAND_AFOR` vs structural `STRUCTURAL_AFOR` in `detect_afor_template_kind` / `WildlandXlsxParser`), validation via `parse_wildland_afor_report_data`, and persistence into `wims.incident_wildland_afor` with optional `wildland_row_source` (`AFOR_IMPORT` | `MANUAL`) on `POST /api/regional/afor/commit` (`src/backend/api/routes/regional.py`).
+- **Frontend:** `WildlandAforManualForm` for manual wildland entry; `/afor/create` toggle between structural (`IncidentForm`) and wildland flows with session handoff from import preview; `/afor/import` wildland-aware preview columns and dual template downloads (`src/frontend/src/app/afor/create/page.tsx`, `src/frontend/src/app/afor/import/page.tsx`, `src/frontend/src/components/WildlandAforManualForm.tsx`).
+- **Static asset:** `src/frontend/public/templates/wildland_afor_template.xlsx` — downloadable wildland AFOR template linked from the import and create pages.
+- **API client:** `commitAforImport` accepts optional `wildlandRowSource`; AFOR preview types include `form_kind` (`src/frontend/src/lib/api.ts`).
+- **Tests:** `src/backend/tests/test_afor_import.py` — wildland detection and validation cases; `src/backend/tests/integration/test_regional_afor_unified_import.py` — regional import preview, commit, and `MANUAL` source (requires DB with `wims.incident_wildland_afor`).
 - **Documentation:** `README.md` — “Rebuilding Docker containers” with `docker compose build --no-cache` / `docker compose up -d` and the shorter `docker compose up --build -d` variant.
 - **Schema docs:** `SCHEMA_MERGE_NOTES.md` — canonical WIMS bootstrap, wildland AFOR mapping, archive pointer.
 - **Archive:** `archive/sql/CONSOLIDATED_UNUSED_SQL.sql` + `archive/sql/README.md` — superseded SQL (legacy migrations, seeds, stubs) consolidated for history only.

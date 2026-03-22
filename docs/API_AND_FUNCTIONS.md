@@ -56,8 +56,8 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/regional/afor/import` | `get_regional_encoder` | Parses uploaded AFOR `.xlsx/.xls/.csv` into validated preview rows. |
-| POST | `/api/regional/afor/commit` | `get_regional_encoder` | Commits validated AFOR rows as batch + incident detail records. |
+| POST | `/api/regional/afor/import` | `get_regional_encoder` | Uploads AFOR `.xlsx/.xls/.csv`, detects template kind (`STRUCTURAL_AFOR` or `WILDLAND_AFOR`), returns preview rows plus `form_kind`. CSV path supports official structural layout or flat tabular structural rows only. |
+| POST | `/api/regional/afor/commit` | `get_regional_encoder` | Commits preview rows: structural → `fire_incidents` + structural detail tables; wildland → `fire_incidents` + `wims.incident_wildland_afor`. Body: `form_kind`, `rows`, optional `wildland_row_source` (`MANUAL` marks manual entry; omit or `AFOR_IMPORT` for file-derived rows). |
 | GET | `/api/regional/incidents` | `get_regional_encoder` | Lists incidents scoped to assigned region with filters/pagination. |
 | GET | `/api/regional/incidents/{incident_id}` | `get_regional_encoder` | Fetches single incident detail scoped to assigned region. |
 | GET | `/api/regional/stats` | `get_regional_encoder` | Returns regional summary metrics. |
@@ -99,8 +99,8 @@ Source: `src/frontend/src/app/`
 | `/incidents/triage` | Triage queue and promote action flow (encoder/validator access). |
 | `/incidents/new` | Map-assisted new incident submission route for authenticated users. |
 | `/incidents/[id]` | Incident detail page. |
-| `/afor/import` | AFOR import page entry for regional workflows. |
-| `/afor/create` | AFOR create flow page. |
+| `/afor/import` | Regional AFOR file upload: parses file, shows `form_kind` (structural vs wildland), preview table, commit; links to structural and wildland `.xlsx` templates under `/templates/`. |
+| `/afor/create` | Manual AFOR entry: toggle structural (`IncidentForm`) vs wildland (`WildlandAforManualForm`); can load a preview row from import via `sessionStorage` (`temp_afor_review`, `temp_afor_form_kind`). |
 | `/admin` | Redirect route to system admin page. |
 | `/admin/system` | SYSTEM_ADMIN operations hub (users, security logs, audit logs, AI analyze action). |
 
