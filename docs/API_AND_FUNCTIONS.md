@@ -56,11 +56,13 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/regional/afor/import` | `get_regional_encoder` | Uploads AFOR `.xlsx/.xls/.csv`, detects template kind (`STRUCTURAL_AFOR` or `WILDLAND_AFOR`), returns preview rows plus `form_kind`. CSV path supports official structural layout or flat tabular structural rows only. |
-| POST | `/api/regional/afor/commit` | `get_regional_encoder` | Commits preview rows: structural → `fire_incidents` + structural detail tables; wildland → `fire_incidents` + `wims.incident_wildland_afor`. Body: `form_kind`, `rows`, optional `wildland_row_source` (`MANUAL` marks manual entry; omit or `AFOR_IMPORT` for file-derived rows). |
-| GET | `/api/regional/incidents` | `get_regional_encoder` | Lists incidents scoped to assigned region with filters/pagination. |
-| GET | `/api/regional/incidents/{incident_id}` | `get_regional_encoder` | Fetches single incident detail scoped to assigned region. |
+| POST | `/api/regional/afor/import` | `get_regional_encoder` | Uploads AFOR `.xlsx/.xls/.csv`, detects template kind (`STRUCTURAL_AFOR` or `WILDLAND_AFOR`), returns preview rows plus `form_kind` and `requires_location` (typically `true` when the file does not supply reliable WGS84 coordinates). CSV path supports official structural layout or flat tabular structural rows only. |
+| POST | `/api/regional/afor/commit` | `get_regional_encoder` | Commits preview rows: structural → `fire_incidents` + structural detail tables; wildland → `fire_incidents` + `wims.incident_wildland_afor`. Body: `form_kind`, `rows`, **`latitude` and `longitude` (JSON numbers, WGS84 / SRID 4326, required)** — PostGIS stores `POINT(longitude latitude)`; do not confuse with GeoJSON `[lat, lon]`. Optional `wildland_row_source` (`MANUAL` vs `AFOR_IMPORT`). Missing or invalid coordinates return **400** with `detail.code` **`AFOR_WGS84_INVALID`**. |
+| GET | `/api/regional/incidents` | `get_regional_encoder` | Lists incidents scoped to assigned region. Query: `limit`, `offset`, optional `category` (matches `incident_nonsensitive_details.general_category`), optional `status` (matches `fire_incidents.verification_status`). Response includes `items`, `total`, `limit`, `offset`. |
+| GET | `/api/regional/incidents/{incident_id}` | `get_regional_encoder` | Fetches single incident detail scoped to assigned region; JSON includes top-level metadata plus `nonsensitive` and `sensitive` row objects. |
 | GET | `/api/regional/stats` | `get_regional_encoder` | Returns regional summary metrics. |
+
+**Frontend client:** `fetchRegionalIncidents` and `fetchRegionalIncident` in `src/frontend/src/lib/api.ts`; `buildRegionalIncidentsQueryString` and page-size helpers in `src/frontend/src/lib/regional-incidents.ts`.
 
 ### Reference Data (`api/routes/ref.py`, prefix `/api/ref`)
 
@@ -90,7 +92,8 @@ Source: `src/frontend/src/app/`
 | Path | Purpose |
 |---|---|
 | `/dashboard` | Main dashboard with role-based redirects and analytics widgets. |
-| `/dashboard/regional` | Regional encoder dashboard and quick regional summaries. |
+| `/dashboard/regional` | Regional encoder dashboard: summary cards, paginated/filtered region incident table, link to AFOR import. |
+| `/dashboard/regional/incidents/[id]` | Region-scoped incident detail (loads via `GET /api/regional/incidents/{id}` only; separate from `/incidents/[id]`). |
 | `/dashboard/analyst` | Analyst heatmap/trend/comparative dashboard. |
 | `/home` | Operations center view splitting ongoing vs fire-out incidents. |
 | `/incidents` | Incident list/table with filter + role action cards. |

@@ -4,6 +4,18 @@ import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Upload, FileDown, CheckCircle, AlertCircle, RefreshCw, X } from 'lucide-react';
 import { importAforFile, commitAforImport, type AforImportPreviewResponse } from '@/lib/api';
+import { MapPicker } from '@/components/MapPicker';
+
+function isValidWgs84(lat: number, lng: number): boolean {
+    return (
+        Number.isFinite(lat) &&
+        Number.isFinite(lng) &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180
+    );
+}
 
 export default function AforImportPage() {
     const router = useRouter();
@@ -12,6 +24,8 @@ export default function AforImportPage() {
     const [isCommitting, setIsCommitting] = useState(false);
     const [previewData, setPreviewData] = useState<AforImportPreviewResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [commitLatStr, setCommitLatStr] = useState('');
+    const [commitLngStr, setCommitLngStr] = useState('');
 
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
@@ -47,6 +61,8 @@ export default function AforImportPage() {
         try {
             const data = await importAforFile(file);
             setPreviewData(data);
+            setCommitLatStr('');
+            setCommitLngStr('');
         } catch (err: any) {
             setError(err.message || 'Failed to upload and parse the file.');
         } finally {
@@ -54,8 +70,19 @@ export default function AforImportPage() {
         }
     };
 
+    const commitLat = parseFloat(commitLatStr);
+    const commitLng = parseFloat(commitLngStr);
+    const requiresLocation = previewData?.requires_location !== false;
+    const coordsReady = !requiresLocation || isValidWgs84(commitLat, commitLng);
+
+    const onMapPick = useCallback((lat: number, lng: number) => {
+        setCommitLatStr(String(lat));
+        setCommitLngStr(String(lng));
+    }, []);
+
     const handleCommit = async () => {
         if (!previewData || previewData.valid_rows === 0) return;
+        if (!coordsReady) return;
         setIsCommitting(true);
         setError(null);
         try {
@@ -63,7 +90,10 @@ export default function AforImportPage() {
                 .filter((r) => r.status === 'VALID')
                 .map((r) => r.data);
 
-            const res = await commitAforImport(validRows, previewData.form_kind);
+            const res = await commitAforImport(validRows, previewData.form_kind, {
+                latitude: commitLat,
+                longitude: commitLng,
+            });
             if (res.status === 'ok') {
                 router.push('/dashboard/regional');
             }
@@ -77,6 +107,8 @@ export default function AforImportPage() {
         setFile(null);
         setPreviewData(null);
         setError(null);
+        setCommitLatStr('');
+        setCommitLngStr('');
     };
 
     return (
@@ -194,6 +226,52 @@ export default function AforImportPage() {
                             {previewData.form_kind === 'WILDLAND_AFOR' ? 'Wildland AFOR' : 'Structural AFOR'}
                         </span>
                     </div>
+                    {requiresLocation && (
+                        <div className="card p-4 space-y-3">
+                            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                Incident location (WGS84)
+                            </p>
+                            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                                The AFOR file does not include reliable coordinates. Set latitude and longitude before
+                                commit (map click or numeric fields). PostGIS stores POINT(longitude latitude); not GeoJSON [lat, lon].
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-700 mb-1">Latitude (-90 to 90)</label>
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        value={commitLatStr}
+                                        onChange={(e) => setCommitLatStr(e.target.value)}
+                                        className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                        placeholder="e.g. 14.5547"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-700 mb-1">Longitude (-180 to 180)</label>
+                                    <input
+                                        type="number"
+                                        step="any"
+                                        value={commitLngStr}
+                                        onChange={(e) => setCommitLngStr(e.target.value)}
+                                        className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                                        placeholder="e.g. 121.0244"
+                                    />
+                                </div>
+                            </div>
+                            <div className="w-full rounded-md overflow-hidden border border-gray-200">
+                                <MapPicker
+                                    value={
+                                        isValidWgs84(commitLat, commitLng)
+                                            ? { lat: commitLat, lng: commitLng }
+                                            : null
+                                    }
+                                    onChange={onMapPick}
+                                />
+                            </div>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="card p-4 flex items-center justify-between" style={{ borderLeft: '4px solid #3b82f6' }}>
                             <div>
@@ -227,7 +305,7 @@ export default function AforImportPage() {
                                 </button>
                                 <button 
                                     onClick={handleCommit}
-                                    disabled={isCommitting || previewData.valid_rows === 0}
+                                    disabled={isCommitting || previewData.valid_rows === 0 || !coordsReady}
                                     className="px-6 py-2 text-sm font-bold text-white rounded-md flex items-center gap-2 transition-colors disabled:opacity-50"
                                     style={{ backgroundColor: 'var(--bfp-maroon)' }}
                                 >

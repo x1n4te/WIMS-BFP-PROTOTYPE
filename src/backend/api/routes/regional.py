@@ -10,12 +10,13 @@ import csv
 import io
 import json
 import logging
+import math
 import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -50,6 +51,8 @@ class AforParseResponse(BaseModel):
     invalid_rows: int
     rows: list[AforParsedRow]
     form_kind: AforFormKind
+    # True when the file does not supply reliable WGS84 coordinates; client must collect lat/lon before commit.
+    requires_location: bool = True
 
 
 class AforCommitRequest(BaseModel):
@@ -57,6 +60,9 @@ class AforCommitRequest(BaseModel):
     rows: list[dict[str, Any]]
     # WILDLAND_AFOR: MANUAL for manual entry; omit or AFOR_IMPORT for file import.
     wildland_row_source: WildlandRowSource | None = None
+    # WGS84 (SRID 4326). PostGIS stores POINT(longitude latitude) — not GeoJSON [lat, lon].
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class AforCommitResponse(BaseModel):
@@ -71,6 +77,46 @@ class RegionalStatsResponse(BaseModel):
     by_category: list[dict[str, Any]]
     by_alarm_level: list[dict[str, Any]]
     by_status: list[dict[str, Any]]
+
+
+AFOR_WGS84_INVALID_CODE = "AFOR_WGS84_INVALID"
+AFOR_WGS84_INVALID_MESSAGE = (
+    "AFOR commit requires valid WGS84 latitude and longitude as JSON numbers "
+    "(latitude -90..90, longitude -180..180, both finite). "
+    "PostGIS stores POINT(longitude latitude) in SRID 4326; do not confuse with GeoJSON [lat, lon]."
+)
+
+
+def _wgs84_pair_from_raw(latitude: Any, longitude: Any) -> tuple[float, float]:
+    """Return (longitude, latitude) for ST_MakePoint. Validates JSON types from the raw request body."""
+    if latitude is None or longitude is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": AFOR_WGS84_INVALID_CODE, "message": AFOR_WGS84_INVALID_MESSAGE},
+        )
+    if type(latitude) is bool or type(longitude) is bool:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": AFOR_WGS84_INVALID_CODE, "message": AFOR_WGS84_INVALID_MESSAGE},
+        )
+    if type(latitude) not in (int, float) or type(longitude) not in (int, float):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": AFOR_WGS84_INVALID_CODE, "message": AFOR_WGS84_INVALID_MESSAGE},
+        )
+    lat = float(latitude)
+    lon = float(longitude)
+    if not math.isfinite(lat) or not math.isfinite(lon):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": AFOR_WGS84_INVALID_CODE, "message": AFOR_WGS84_INVALID_MESSAGE},
+        )
+    if lat < -90.0 or lat > 90.0 or lon < -180.0 or lon > 180.0:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": AFOR_WGS84_INVALID_CODE, "message": AFOR_WGS84_INVALID_MESSAGE},
+        )
+    return lon, lat
 
 
 # ---------------------------------------------------------------------------
@@ -955,6 +1001,8 @@ def _commit_wildland_afor_row(
     user_id: Any,
     region_id: int,
     incident_ids: list[int],
+    lon: float,
+    lat: float,
     *,
     source: WildlandRowSource = "AFOR_IMPORT",
 ) -> None:
@@ -969,11 +1017,11 @@ def _commit_wildland_afor_row(
                 (import_batch_id, encoder_id, region_id, location, verification_status)
             VALUES
                 (:batch_id, CAST(:uid AS uuid), :region_id,
-                 ST_GeogFromText('SRID=4326;POINT(121.0 14.5)'),
+                 ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
                  'DRAFT')
             RETURNING incident_id
         """),
-        {"batch_id": batch_id, "uid": user_id, "region_id": region_id},
+        {"batch_id": batch_id, "uid": user_id, "region_id": region_id, "lon": lon, "lat": lat},
     ).fetchone()
 
     if not inc_row:
@@ -1105,8 +1153,8 @@ def _commit_wildland_afor_row(
 
 
 @router.post("/afor/commit", response_model=AforCommitResponse)
-def commit_afor_import(
-    body: AforCommitRequest,
+async def commit_afor_import(
+    request: Request,
     user: Annotated[dict, Depends(get_regional_encoder)],
     db: Annotated[Session, Depends(get_db)],
 ):
@@ -1114,6 +1162,14 @@ def commit_afor_import(
     Commit validated AFOR rows to the database.
     Creates a data_import_batch and inserts fire_incidents with details.
     """
+    try:
+        raw_body: dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from None
+
+    body = AforCommitRequest.model_validate(raw_body)
+    lon, lat = _wgs84_pair_from_raw(raw_body.get("latitude"), raw_body.get("longitude"))
+
     region_id = user["assigned_region_id"]
     user_id = user["user_id"]
 
@@ -1177,6 +1233,8 @@ def commit_afor_import(
                 user_id,
                 region_id,
                 incident_ids,
+                lon,
+                lat,
                 source=wildland_source,
             )
             continue
@@ -1193,11 +1251,11 @@ def commit_afor_import(
                     (import_batch_id, encoder_id, region_id, location, verification_status)
                 VALUES
                     (:batch_id, CAST(:uid AS uuid), :region_id,
-                     ST_GeogFromText('SRID=4326;POINT(121.0 14.5)'),
+                     ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
                      'DRAFT')
                 RETURNING incident_id
             """),
-            {"batch_id": batch_id, "uid": user_id, "region_id": region_id},
+            {"batch_id": batch_id, "uid": user_id, "region_id": region_id, "lon": lon, "lat": lat},
         ).fetchone()
 
         if not inc_row:

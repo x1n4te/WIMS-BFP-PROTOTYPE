@@ -154,6 +154,45 @@ def client_regional_encoder(client: TestClient, regional_user_id, db_session: Se
 
 
 # ---------------------------------------------------------------------------
+# Helpers — WGS84 / PostGIS
+# ---------------------------------------------------------------------------
+
+# Distinct from legacy placeholder POINT(121.0 14.5) used before real coords.
+SAMPLE_LAT = 14.5547
+SAMPLE_LON = 121.0244
+
+
+def _fetch_incident_wgs84(db_session: Session, incident_id: int) -> tuple[float, float]:
+    """Return (longitude, latitude) from fire_incidents.location (SRID 4326)."""
+    row = db_session.execute(
+        text(
+            """
+            SELECT ST_X(location::geometry), ST_Y(location::geometry)
+            FROM wims.fire_incidents WHERE incident_id = :id
+            """
+        ),
+        {"id": incident_id},
+    ).fetchone()
+    assert row is not None
+    return float(row[0]), float(row[1])
+
+
+def _commit_coords_body() -> dict:
+    return {"latitude": SAMPLE_LAT, "longitude": SAMPLE_LON}
+
+
+def _assert_wgs84_error(res, status: int = 400):
+    assert res.status_code == status
+    detail = res.json().get("detail")
+    if isinstance(detail, dict):
+        assert detail.get("code") == "AFOR_WGS84_INVALID"
+        assert "message" in detail
+    else:
+        assert isinstance(detail, str)
+        assert "WGS84" in detail or "latitude" in detail.lower()
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -166,6 +205,7 @@ def test_regional_import_preview_structural_form_kind(client_regional_encoder: T
     assert response.status_code == 200
     data = response.json()
     assert data.get("form_kind") == "STRUCTURAL_AFOR"
+    assert data.get("requires_location") is True
 
 
 def test_regional_import_preview_wildland_form_kind(client_regional_encoder: TestClient):
@@ -176,6 +216,7 @@ def test_regional_import_preview_wildland_form_kind(client_regional_encoder: Tes
     assert response.status_code == 200
     data = response.json()
     assert data.get("form_kind") == "WILDLAND_AFOR"
+    assert data.get("requires_location") is True
 
 
 def test_regional_import_ambiguous_returns_400(client_regional_encoder: TestClient):
@@ -206,11 +247,20 @@ def test_commit_wildland_persists_incident_wildland_afor(
 
     commit = client_regional_encoder.post(
         "/api/regional/afor/commit",
-        json={"form_kind": "WILDLAND_AFOR", "rows": rows},
+        json={
+            "form_kind": "WILDLAND_AFOR",
+            "rows": rows,
+            **_commit_coords_body(),
+        },
     )
     assert commit.status_code == 200, commit.text
     incident_ids = commit.json()["incident_ids"]
     assert incident_ids
+
+    lon, lat = _fetch_incident_wgs84(db_session, incident_ids[0])
+    assert abs(lon - SAMPLE_LON) < 1e-5
+    assert abs(lat - SAMPLE_LAT) < 1e-5
+    assert not (abs(lon - 121.0) < 1e-9 and abs(lat - 14.5) < 1e-9)
 
     src = db_session.execute(
         text(
@@ -245,11 +295,20 @@ def test_commit_wildland_manual_source_sets_manual(
     }
     commit = client_regional_encoder.post(
         "/api/regional/afor/commit",
-        json={"form_kind": "WILDLAND_AFOR", "wildland_row_source": "MANUAL", "rows": [row]},
+        json={
+            "form_kind": "WILDLAND_AFOR",
+            "wildland_row_source": "MANUAL",
+            "rows": [row],
+            **_commit_coords_body(),
+        },
     )
     assert commit.status_code == 200, commit.text
     incident_ids = commit.json()["incident_ids"]
     assert incident_ids
+
+    lon, lat = _fetch_incident_wgs84(db_session, incident_ids[0])
+    assert abs(lon - SAMPLE_LON) < 1e-5
+    assert abs(lat - SAMPLE_LAT) < 1e-5
 
     src = db_session.execute(
         text(
@@ -284,12 +343,86 @@ def test_commit_wildland_invalid_payload_returns_400(
     }
     res = client_regional_encoder.post(
         "/api/regional/afor/commit",
-        json={"form_kind": "WILDLAND_AFOR", "rows": [row]},
+        json={"form_kind": "WILDLAND_AFOR", "rows": [row], **_commit_coords_body()},
     )
     assert res.status_code == 400
     detail = res.json().get("detail", "")
     assert isinstance(detail, str)
     assert "Missing wildland content" in detail or "wildland" in detail.lower()
+
+
+def test_commit_missing_coordinates_returns_400(
+    require_wildland_schema,
+    client_regional_encoder: TestClient,
+):
+    prev = client_regional_encoder.post(
+        "/api/regional/afor/import",
+        files={"file": ("wild.xlsx", _build_wildland_afor_xlsx_bytes(), "application/octet-stream")},
+    )
+    assert prev.status_code == 200
+    rows = [r["data"] for r in prev.json()["rows"] if r["status"] == "VALID"]
+    assert rows
+    res = client_regional_encoder.post(
+        "/api/regional/afor/commit",
+        json={"form_kind": "WILDLAND_AFOR", "rows": rows},
+    )
+    _assert_wgs84_error(res)
+
+
+def test_commit_invalid_latitude_returns_400(
+    require_wildland_schema,
+    client_regional_encoder: TestClient,
+):
+    prev = client_regional_encoder.post(
+        "/api/regional/afor/import",
+        files={"file": ("wild.xlsx", _build_wildland_afor_xlsx_bytes(), "application/octet-stream")},
+    )
+    assert prev.status_code == 200
+    rows = [r["data"] for r in prev.json()["rows"] if r["status"] == "VALID"]
+    res = client_regional_encoder.post(
+        "/api/regional/afor/commit",
+        json={"form_kind": "WILDLAND_AFOR", "rows": rows, "latitude": 91.0, "longitude": 121.0},
+    )
+    _assert_wgs84_error(res)
+
+
+def test_commit_invalid_longitude_returns_400(
+    require_wildland_schema,
+    client_regional_encoder: TestClient,
+):
+    prev = client_regional_encoder.post(
+        "/api/regional/afor/import",
+        files={"file": ("wild.xlsx", _build_wildland_afor_xlsx_bytes(), "application/octet-stream")},
+    )
+    assert prev.status_code == 200
+    rows = [r["data"] for r in prev.json()["rows"] if r["status"] == "VALID"]
+    res = client_regional_encoder.post(
+        "/api/regional/afor/commit",
+        json={"form_kind": "WILDLAND_AFOR", "rows": rows, "latitude": 14.5, "longitude": 200.0},
+    )
+    _assert_wgs84_error(res)
+
+
+def test_commit_structural_persists_wgs84_coordinates(
+    client_regional_encoder: TestClient,
+    db_session: Session,
+):
+    prev = client_regional_encoder.post(
+        "/api/regional/afor/import",
+        files={"file": ("struct.xlsx", _build_structural_afor_xlsx_bytes(), "application/octet-stream")},
+    )
+    assert prev.status_code == 200
+    rows = [r["data"] for r in prev.json()["rows"] if r["status"] == "VALID"]
+    assert rows
+    commit = client_regional_encoder.post(
+        "/api/regional/afor/commit",
+        json={"form_kind": "STRUCTURAL_AFOR", "rows": rows, **_commit_coords_body()},
+    )
+    assert commit.status_code == 200, commit.text
+    iid = commit.json()["incident_ids"][0]
+    lon, lat = _fetch_incident_wgs84(db_session, iid)
+    assert abs(lon - SAMPLE_LON) < 1e-5
+    assert abs(lat - SAMPLE_LAT) < 1e-5
 
 
 def test_commit_rejects_form_kind_mismatch(
@@ -305,6 +438,6 @@ def test_commit_rejects_form_kind_mismatch(
 
     res = client_regional_encoder.post(
         "/api/regional/afor/commit",
-        json={"form_kind": "STRUCTURAL_AFOR", "rows": rows},
+        json={"form_kind": "STRUCTURAL_AFOR", "rows": rows, **_commit_coords_body()},
     )
     assert res.status_code == 400

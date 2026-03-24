@@ -4,6 +4,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, Save, Trash2 } from 'lucide-react';
 import { commitAforImport } from '@/lib/api';
+import { MapPicker } from '@/components/MapPicker';
+
+function isValidWgs84(lat: number, lng: number): boolean {
+    return (
+        Number.isFinite(lat) &&
+        Number.isFinite(lng) &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180
+    );
+}
 
 /** Match `IncidentForm` AFOR Report Entry field styling */
 const fieldClass = 'w-full border border-gray-300 rounded p-2 text-gray-900 font-medium';
@@ -317,6 +329,8 @@ export function WildlandAforManualForm({
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [debugOpen, setDebugOpen] = useState(false);
+    const [commitLatStr, setCommitLatStr] = useState('');
+    const [commitLngStr, setCommitLngStr] = useState('');
 
     useEffect(() => {
         setState(wildlandFromInitial(initialWildland ?? undefined));
@@ -329,8 +343,18 @@ export function WildlandAforManualForm({
         []
     );
 
+    const commitLat = parseFloat(commitLatStr);
+    const commitLng = parseFloat(commitLngStr);
+    const coordsReady = isValidWgs84(commitLat, commitLng);
+
+    const onMapPick = useCallback((lat: number, lng: number) => {
+        setCommitLatStr(String(lat));
+        setCommitLngStr(String(lng));
+    }, []);
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!coordsReady) return;
         setError(null);
         setLoading(true);
         try {
@@ -341,7 +365,11 @@ export function WildlandAforManualForm({
                 region_id: 0,
                 wildland,
             };
-            await commitAforImport([row], 'WILDLAND_AFOR', { wildlandRowSource: 'MANUAL' });
+            await commitAforImport([row], 'WILDLAND_AFOR', {
+                wildlandRowSource: 'MANUAL',
+                latitude: commitLat,
+                longitude: commitLng,
+            });
             router.push('/dashboard/regional');
         } catch (err: unknown) {
             setError(err instanceof Error ? err.message : 'Commit failed');
@@ -368,6 +396,47 @@ export function WildlandAforManualForm({
                         {error}
                     </div>
                 )}
+
+                <div className="space-y-3 border-b pb-4">
+                    <h3 className={sectionTitleClass}>Incident location (WGS84)</h3>
+                    <p className="text-xs text-gray-600">
+                        Required for regional commit. PostGIS stores POINT(longitude latitude); not GeoJSON [lat, lon].
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className={labelClass}>Latitude (-90 to 90)</label>
+                            <input
+                                type="number"
+                                step="any"
+                                value={commitLatStr}
+                                onChange={(e) => setCommitLatStr(e.target.value)}
+                                className={fieldClass}
+                                placeholder="e.g. 14.5547"
+                            />
+                        </div>
+                        <div>
+                            <label className={labelClass}>Longitude (-180 to 180)</label>
+                            <input
+                                type="number"
+                                step="any"
+                                value={commitLngStr}
+                                onChange={(e) => setCommitLngStr(e.target.value)}
+                                className={fieldClass}
+                                placeholder="e.g. 121.0244"
+                            />
+                        </div>
+                    </div>
+                    <div className="w-full rounded-md overflow-hidden border border-gray-200">
+                        <MapPicker
+                            value={
+                                isValidWgs84(commitLat, commitLng)
+                                    ? { lat: commitLat, lng: commitLng }
+                                    : null
+                            }
+                            onChange={onMapPick}
+                        />
+                    </div>
+                </div>
 
                 {showDebugJson && initialWildland && Object.keys(initialWildland).length > 0 && (
                     <div className="space-y-2 border-b pb-4">
@@ -842,7 +911,7 @@ export function WildlandAforManualForm({
 
                 <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || !coordsReady}
                     className="w-full bg-red-800 text-white py-3 rounded font-bold hover:bg-red-700 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg"
                 >
                     {loading ? (
