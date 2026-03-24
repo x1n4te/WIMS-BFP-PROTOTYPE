@@ -8,7 +8,7 @@ import { Sidebar } from './Sidebar';
 import { usePathname } from 'next/navigation';
 
 export function LayoutShell({ children }: { children: ReactNode }) {
-    const { user, loading, login, logout } = useAuth();
+    const { user, loading, loggingOut, login } = useAuth();
     const pathname = usePathname();
     const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -22,7 +22,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
     }, []);
 
     useEffect(() => {
-        if (!loading && !user) {
+        if (!loading && !user && !loggingOut) {
             const publicRoutes = ['/', '/login', '/callback', '/report'];
             const isPublic = publicRoutes.includes(pathname) || pathname.startsWith('/login');
 
@@ -30,7 +30,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
                 login();
             }
         }
-    }, [user, loading, pathname, login]);
+    }, [user, loading, loggingOut, pathname, login]);
 
     // Close sidebar on route change (mobile)
     useEffect(() => {

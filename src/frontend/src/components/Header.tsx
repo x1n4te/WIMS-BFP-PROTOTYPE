@@ -12,7 +12,7 @@ interface HeaderProps {
 
 export function Header({ onMenuToggle }: HeaderProps) {
     const [currentTime, setCurrentTime] = useState<string>('');
-    const { user, logout } = useAuth();
+    const { user, logout, loggingOut } = useAuth();
     const role = (user as { role?: string })?.role ?? null;
     const pathname = usePathname();
 
@@ -102,8 +102,9 @@ export function Header({ onMenuToggle }: HeaderProps) {
 
                         <button
                             onClick={logout}
+                            disabled={loggingOut}
                             className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors"
-                            title="Sign Out"
+                            title={loggingOut ? 'Signing Out...' : 'Sign Out'}
                         >
                             <LogOut className="w-4 h-4" />
                         </button>

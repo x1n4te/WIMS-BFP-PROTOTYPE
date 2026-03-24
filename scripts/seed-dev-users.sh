@@ -15,6 +15,15 @@ KC_ADMIN_USER="admin"
 KC_ADMIN_PASS="admin"
 PASSWORD="password123"
 
+# Keep docker exec path arguments Linux-style under Git Bash on Windows.
+docker_exec() {
+  if [ -n "${MSYSTEM:-}" ]; then
+    MSYS_NO_PATHCONV=1 docker exec "$@"
+  else
+    docker exec "$@"
+  fi
+}
+
 # Users: username, email, role, assigned_region_id (empty = NULL)
 # Regional Encoder -> REGIONAL_ENCODER, region 1
 # National Validator -> VALIDATOR, NULL
@@ -43,7 +52,7 @@ while [ $elapsed -lt 60 ]; do
   # Fallback: no healthcheck configured — wait for running and try kcadm
   run_status=$(docker inspect --format='{{.State.Status}}' "$KEYCLOAK_CONTAINER" 2>/dev/null || true)
   if [ "$run_status" = "running" ] && [ $elapsed -ge 5 ]; then
-    if docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh config credentials \
+    if docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh config credentials \
       --server "$KC_SERVER" --realm master --user "$KC_ADMIN_USER" --password "$KC_ADMIN_PASS" 2>/dev/null; then
       echo "Keycloak is ready (kcadm login succeeded)."
       break
@@ -59,13 +68,17 @@ if [ $elapsed -ge 60 ]; then
 fi
 
 echo "Authenticating with Keycloak Admin..."
-docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh config credentials \
+docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh config credentials \
   --server "$KC_SERVER" --realm master --user "$KC_ADMIN_USER" --password "$KC_ADMIN_PASS"
 
 echo "Creating realm roles (ignore if already exist)..."
 for role in "${ROLES[@]}"; do
-  docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh create roles -r "$KC_REALM" -s name="$role" 2>/dev/null || true
+  docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh create roles -r "$KC_REALM" -s name="$role" 2>/dev/null || true
 done
+
+# Some local DBs may not yet include NATIONAL_ANALYST in users_role_check.
+supports_national_analyst=$(docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U postgres -d wims -tA -c "SELECT CASE WHEN pg_get_constraintdef(c.oid) LIKE '%NATIONAL_ANALYST%' THEN '1' ELSE '0' END FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname='wims' AND c.conname='users_role_check' LIMIT 1;")
+supports_national_analyst=$(echo "$supports_national_analyst" | tr -d '[:space:]')
 
 echo "Creating users and syncing to PostgreSQL..."
 for entry in "${USERS[@]}"; do
@@ -73,24 +86,30 @@ for entry in "${USERS[@]}"; do
   echo "--- $username ($role) ---"
 
   # Create user (ignore if exists)
-  docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh create users -r "$KC_REALM" \
+  docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh create users -r "$KC_REALM" \
     -s username="$username" -s enabled=true -s email="$email" 2>/dev/null || true
 
   # Set password
-  docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh set-password -r "$KC_REALM" \
+  docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh set-password -r "$KC_REALM" \
     --username "$username" --new-password "$PASSWORD"
 
   # Assign role
-  docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh add-roles -r "$KC_REALM" \
+  docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh add-roles -r "$KC_REALM" \
     --uusername "$username" --rolename "$role" 2>/dev/null || true
 
   # Fetch Keycloak UUID (extract first UUID from JSON)
-  uuid=$(docker exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh get users -r "$KC_REALM" -q username="$username" 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+  uuid=$(docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh get users -r "$KC_REALM" -q username="$username" 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
   if [ -z "$uuid" ]; then
     echo "WARN: Could not get UUID for $username, skipping PostgreSQL sync."
     continue
   fi
   echo "  Keycloak UUID: $uuid"
+
+  db_role="$role"
+  if [ "$role" = "NATIONAL_ANALYST" ] && [ "$supports_national_analyst" != "1" ]; then
+    db_role="ANALYST"
+    echo "  DB role fallback: NATIONAL_ANALYST -> ANALYST (users_role_check compatibility)"
+  fi
 
   # Build assigned_region_id for SQL
   if [ -n "$region_id" ]; then
@@ -99,16 +118,9 @@ for entry in "${USERS[@]}"; do
     region_sql="NULL"
   fi
 
-  sql="INSERT INTO wims.users (user_id, keycloak_id, username, role, assigned_region_id, is_active)
-       VALUES ('$uuid'::uuid, '$uuid'::uuid, '$username', '$role', $region_sql, TRUE)
-       ON CONFLICT (keycloak_id) DO UPDATE SET
-         username = EXCLUDED.username,
-         role = EXCLUDED.role,
-         assigned_region_id = EXCLUDED.assigned_region_id,
-         is_active = EXCLUDED.is_active,
-         updated_at = now();"
+  sql="UPDATE wims.users SET keycloak_id = '$uuid'::uuid, username = '$username', role = '$db_role', assigned_region_id = $region_sql, is_active = TRUE, updated_at = now() WHERE username = '$username' OR keycloak_id = '$uuid'::uuid; INSERT INTO wims.users (user_id, keycloak_id, username, role, assigned_region_id, is_active) SELECT '$uuid'::uuid, '$uuid'::uuid, '$username', '$db_role', $region_sql, TRUE WHERE NOT EXISTS (SELECT 1 FROM wims.users WHERE username = '$username' OR keycloak_id = '$uuid'::uuid);"
 
-  docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U postgres -d wims -c "$sql"
+  printf '%s\n' "$sql" | docker compose -f "$COMPOSE_FILE" exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d wims
 done
 
 echo ""

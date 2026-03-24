@@ -24,6 +24,7 @@ interface AuthContextValue {
   user: User | null;
   isAuthenticated: boolean;
   loading: boolean;
+  loggingOut: boolean;
   login: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -33,6 +34,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loggingOut, setLoggingOut] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -86,17 +88,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    setLoggingOut(true);
     try {
       console.log('[AuthContext] logout: clearing local session');
       await fetch('/api/auth/logout', { method: 'POST' });
-      setUser(null);
-      
+
       console.log('[AuthContext] logout: calling Keycloak signoutRedirect');
       const userManager = createUserManager();
-      // This will redirect to Keycloak's end_session_endpoint and then back to post_logout_redirect_uri (baseUrl)
-      await userManager.signoutRedirect();
+      const currentUser = await userManager.getUser();
+
+      // Clear local OIDC state before redirecting away to avoid stale client-side sessions.
+      await userManager.removeUser();
+
+      // Explicit id_token_hint improves Keycloak end-session behavior in some deployments.
+      await userManager.signoutRedirect({
+        id_token_hint: currentUser?.id_token,
+        post_logout_redirect_uri: `${window.location.origin}/login`,
+      });
     } catch (err) {
       console.error('[AuthContext] logout: failed during signoutRedirect', err);
+      setUser(null);
+      setLoggingOut(false);
       router.push('/login');
     }
   }, [router]);
@@ -107,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         isAuthenticated: !!user,
         loading,
+        loggingOut,
         login,
         logout,
       }}
