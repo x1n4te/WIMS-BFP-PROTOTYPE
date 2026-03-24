@@ -56,11 +56,13 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/regional/afor/import` | `get_regional_encoder` | Parses uploaded AFOR `.xlsx/.xls/.csv` into validated preview rows. |
-| POST | `/api/regional/afor/commit` | `get_regional_encoder` | Commits validated AFOR rows as batch + incident detail records. |
-| GET | `/api/regional/incidents` | `get_regional_encoder` | Lists incidents scoped to assigned region with filters/pagination. |
-| GET | `/api/regional/incidents/{incident_id}` | `get_regional_encoder` | Fetches single incident detail scoped to assigned region. |
+| POST | `/api/regional/afor/import` | `get_regional_encoder` | Uploads AFOR `.xlsx/.xls/.csv`, detects template kind (`STRUCTURAL_AFOR` or `WILDLAND_AFOR`), returns preview rows plus `form_kind` and `requires_location` (typically `true` when the file does not supply reliable WGS84 coordinates). CSV path supports official structural layout or flat tabular structural rows only. |
+| POST | `/api/regional/afor/commit` | `get_regional_encoder` | Commits preview rows: structural → `fire_incidents` + structural detail tables; wildland → `fire_incidents` + `wims.incident_wildland_afor`. Body: `form_kind`, `rows`, **`latitude` and `longitude` (JSON numbers, WGS84 / SRID 4326, required)** — PostGIS stores `POINT(longitude latitude)`; do not confuse with GeoJSON `[lat, lon]`. Optional `wildland_row_source` (`MANUAL` vs `AFOR_IMPORT`). Missing or invalid coordinates return **400** with `detail.code` **`AFOR_WGS84_INVALID`**. |
+| GET | `/api/regional/incidents` | `get_regional_encoder` | Lists incidents scoped to assigned region. Query: `limit`, `offset`, optional `category` (matches `incident_nonsensitive_details.general_category`), optional `status` (matches `fire_incidents.verification_status`). Response includes `items`, `total`, `limit`, `offset`. |
+| GET | `/api/regional/incidents/{incident_id}` | `get_regional_encoder` | Fetches single incident detail scoped to assigned region; JSON includes top-level metadata plus `nonsensitive` and `sensitive` row objects. |
 | GET | `/api/regional/stats` | `get_regional_encoder` | Returns regional summary metrics. |
+
+**Frontend client:** `fetchRegionalIncidents` and `fetchRegionalIncident` in `src/frontend/src/lib/api.ts`; `buildRegionalIncidentsQueryString` and page-size helpers in `src/frontend/src/lib/regional-incidents.ts`.
 
 ### Reference Data (`api/routes/ref.py`, prefix `/api/ref`)
 
@@ -68,19 +70,9 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 |---|---|---|---|
 | GET | `/api/ref/regions` | `get_current_wims_user` | Returns region reference records (optional `region_id` filter). |
 
-## Supabase Edge Functions
+## Frontend → backend “edge” naming (`src/frontend/src/lib/edgeFunctions.ts`)
 
-Source: `src/supabase/functions/`
-
-| Function | Path | Purpose (code-verified) |
-|---|---|---|
-| analytics-summary | `analytics-summary/index.ts` | Returns analytics aggregates with auth/role checks and optional date/geo filters. |
-| commit-incident | `commit-incident/index.ts` | Applies VERIFY/REJECT/MERGE decision, writes verification history and audit trail. |
-| conflict-detection | `conflict-detection/index.ts` | Finds possible duplicate incidents in region/time/city proximity window. |
-| security-event-action | `security-event-action/index.ts` | Updates security log action metadata and writes audit entry. |
-| upload-bundle | `upload-bundle/index.ts` | Accepts encoder bundle payload, inserts batch and incident detail rows with region checks. |
-
-Shared helper: `_shared/cors.ts`
+The module name is historical. Calls use `apiFetch` against the **FastAPI** app (`NEXT_PUBLIC_API_URL`, typically `/api`). Equivalent behavior previously lived in hosted Supabase Edge Functions; those have been removed from the repo. Implement or extend behavior in `src/backend/api/routes/` and `main.py`.
 
 ## Frontend Routes (Next.js App Router)
 
@@ -100,7 +92,8 @@ Source: `src/frontend/src/app/`
 | Path | Purpose |
 |---|---|
 | `/dashboard` | Main dashboard with role-based redirects and analytics widgets. |
-| `/dashboard/regional` | Regional encoder dashboard and quick regional summaries. |
+| `/dashboard/regional` | Regional encoder dashboard: summary cards, paginated/filtered region incident table, link to AFOR import. |
+| `/dashboard/regional/incidents/[id]` | Region-scoped incident detail (loads via `GET /api/regional/incidents/{id}` only; separate from `/incidents/[id]`). |
 | `/dashboard/analyst` | Analyst heatmap/trend/comparative dashboard. |
 | `/home` | Operations center view splitting ongoing vs fire-out incidents. |
 | `/incidents` | Incident list/table with filter + role action cards. |
@@ -109,8 +102,8 @@ Source: `src/frontend/src/app/`
 | `/incidents/triage` | Triage queue and promote action flow (encoder/validator access). |
 | `/incidents/new` | Map-assisted new incident submission route for authenticated users. |
 | `/incidents/[id]` | Incident detail page. |
-| `/afor/import` | AFOR import page entry for regional workflows. |
-| `/afor/create` | AFOR create flow page. |
+| `/afor/import` | Regional AFOR file upload: parses file, shows `form_kind` (structural vs wildland), preview table, commit; links to structural and wildland `.xlsx` templates under `/templates/`. |
+| `/afor/create` | Manual AFOR entry: toggle structural (`IncidentForm`) vs wildland (`WildlandAforManualForm`); can load a preview row from import via `sessionStorage` (`temp_afor_review`, `temp_afor_form_kind`). |
 | `/admin` | Redirect route to system admin page. |
 | `/admin/system` | SYSTEM_ADMIN operations hub (users, security logs, audit logs, AI analyze action). |
 

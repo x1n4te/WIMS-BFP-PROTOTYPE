@@ -11,7 +11,16 @@ import {
   fetchHeatmapData,
   fetchTrendData,
   fetchComparativeData,
+  commitAforImport,
+  fetchRegionalIncidents,
+  fetchRegionalIncident,
 } from './api';
+import {
+  buildRegionalIncidentsQueryString,
+  clampRegionalPageSize,
+  offsetFromPage,
+  totalRegionalPages,
+} from './regional-incidents';
 
 describe('submitCivilianReport', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
@@ -73,6 +82,163 @@ describe('submitCivilianReport', () => {
 
     const [, options] = fetchSpy.mock.calls[0];
     expect(options?.credentials).toBe('omit');
+  });
+});
+
+describe('regional incidents query & pagination helpers', () => {
+  it('buildRegionalIncidentsQueryString sets limit, offset, category, status with correct keys', () => {
+    expect(
+      buildRegionalIncidentsQueryString({
+        limit: 25,
+        offset: 50,
+        category: 'STRUCTURAL',
+        status: 'VERIFIED',
+      })
+    ).toBe('limit=25&offset=50&category=STRUCTURAL&status=VERIFIED');
+  });
+
+  it('buildRegionalIncidentsQueryString omits undefined and empty filters', () => {
+    expect(buildRegionalIncidentsQueryString({ limit: 10, offset: 0 })).toBe('limit=10&offset=0');
+    expect(buildRegionalIncidentsQueryString({ limit: 10, offset: 0, category: '', status: '  ' })).toBe(
+      'limit=10&offset=0'
+    );
+    expect(buildRegionalIncidentsQueryString({ category: '  VEHICULAR  ' })).toBe('category=VEHICULAR');
+  });
+
+  it('offsetFromPage uses clamped page size', () => {
+    expect(offsetFromPage(0, 10)).toBe(0);
+    expect(offsetFromPage(2, 10)).toBe(20);
+    expect(offsetFromPage(1, 25)).toBe(25);
+    expect(offsetFromPage(3, 50)).toBe(150);
+  });
+
+  it('offsetFromPage clamps negative page index to 0', () => {
+    expect(offsetFromPage(-1, 10)).toBe(0);
+  });
+
+  it('clampRegionalPageSize allows only 10, 25, 50 (fallback 10)', () => {
+    expect(clampRegionalPageSize(25)).toBe(25);
+    expect(clampRegionalPageSize(50)).toBe(50);
+    expect(clampRegionalPageSize(10)).toBe(10);
+    expect(clampRegionalPageSize(99)).toBe(10);
+    expect(clampRegionalPageSize(NaN)).toBe(10);
+  });
+
+  it('totalRegionalPages returns at least 1; ceil(total/pageSize)', () => {
+    expect(totalRegionalPages(0, 10)).toBe(1);
+    expect(totalRegionalPages(1, 10)).toBe(1);
+    expect(totalRegionalPages(100, 25)).toBe(4);
+    expect(totalRegionalPages(101, 25)).toBe(5);
+  });
+});
+
+describe('fetchRegionalIncidents / fetchRegionalIncident', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          items: [],
+          total: 0,
+          limit: 10,
+          offset: 0,
+        }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('GET /regional/incidents with pagination and filters in query string', async () => {
+    await fetchRegionalIncidents({
+      limit: 25,
+      offset: 10,
+      category: 'NON_STRUCTURAL',
+      status: 'PENDING',
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url] = fetchSpy.mock.calls[0];
+    const u = new URL(url, 'http://localhost');
+    expect(u.pathname).toMatch(/\/regional\/incidents$/);
+    expect(u.searchParams.get('limit')).toBe('25');
+    expect(u.searchParams.get('offset')).toBe('10');
+    expect(u.searchParams.get('category')).toBe('NON_STRUCTURAL');
+    expect(u.searchParams.get('status')).toBe('PENDING');
+  });
+
+  it('GET /regional/incidents omits empty filters', async () => {
+    await fetchRegionalIncidents({ limit: 10, offset: 0, category: '', status: undefined });
+
+    const [url] = fetchSpy.mock.calls[0];
+    const u = new URL(url, 'http://localhost');
+    expect(u.searchParams.has('category')).toBe(false);
+    expect(u.searchParams.has('status')).toBe(false);
+  });
+
+  it('GET /regional/incidents/{id}', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          incident_id: 7,
+          verification_status: 'DRAFT',
+          created_at: '2025-01-01T00:00:00Z',
+          region_id: 1,
+          nonsensitive: { alarm_level: 'First Alarm' },
+          sensitive: { caller_name: 'A' },
+        }),
+    });
+
+    const row = await fetchRegionalIncident(7);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url] = fetchSpy.mock.calls[0];
+    expect(url).toMatch(/\/regional\/incidents\/7(?:\?|$)/);
+    expect(row.incident_id).toBe(7);
+    expect(row.nonsensitive.alarm_level).toBe('First Alarm');
+  });
+});
+
+describe('commitAforImport', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          status: 'ok',
+          batch_id: 1,
+          incident_ids: [42],
+          total_committed: 1,
+        }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('POSTs /regional/afor/commit with latitude, longitude, and form_kind', async () => {
+    await commitAforImport([{ _form_kind: 'WILDLAND_AFOR', wildland: {} }], 'WILDLAND_AFOR', {
+      latitude: 14.5547,
+      longitude: 121.0244,
+      wildlandRowSource: 'MANUAL',
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [, options] = fetchSpy.mock.calls[0];
+    const body = JSON.parse((options?.body as string) ?? '{}');
+    expect(body.form_kind).toBe('WILDLAND_AFOR');
+    expect(body.latitude).toBe(14.5547);
+    expect(body.longitude).toBe(121.0244);
+    expect(body.wildland_row_source).toBe('MANUAL');
   });
 });
 
@@ -193,7 +359,7 @@ describe('Analytics API wrappers', () => {
       expect(url).toMatch(/\/api\/analytics\/trends/);
     });
 
-    it('serializes query params including interval', async () => {
+    it('serializes query params including interval and alarm_level', async () => {
       fetchSpy.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ data: [] }),
@@ -204,6 +370,7 @@ describe('Analytics API wrappers', () => {
         end_date: '2024-01-31',
         region_id: 3,
         incident_type: 'NON_STRUCTURAL',
+        alarm_level: '2',
         interval: 'weekly',
       });
 
@@ -213,6 +380,7 @@ describe('Analytics API wrappers', () => {
       expect(u.searchParams.get('end_date')).toBe('2024-01-31');
       expect(u.searchParams.get('region_id')).toBe('3');
       expect(u.searchParams.get('incident_type')).toBe('NON_STRUCTURAL');
+      expect(u.searchParams.get('alarm_level')).toBe('2');
       expect(u.searchParams.get('interval')).toBe('weekly');
     });
 
@@ -256,7 +424,7 @@ describe('Analytics API wrappers', () => {
       expect(url).toMatch(/\/api\/analytics\/comparative/);
     });
 
-    it('serializes range and filter params', async () => {
+    it('serializes range and filter params including alarm_level', async () => {
       fetchSpy.mockResolvedValue({
         ok: true,
         json: () =>
@@ -274,6 +442,7 @@ describe('Analytics API wrappers', () => {
         range_b_end: '2024-02-29',
         region_id: 7,
         incident_type: 'VEHICULAR',
+        alarm_level: '3',
       });
 
       const [url] = fetchSpy.mock.calls[0];
@@ -284,6 +453,7 @@ describe('Analytics API wrappers', () => {
       expect(u.searchParams.get('range_b_end')).toBe('2024-02-29');
       expect(u.searchParams.get('region_id')).toBe('7');
       expect(u.searchParams.get('incident_type')).toBe('VEHICULAR');
+      expect(u.searchParams.get('alarm_level')).toBe('3');
     });
 
     it('returns comparative response shape', async () => {

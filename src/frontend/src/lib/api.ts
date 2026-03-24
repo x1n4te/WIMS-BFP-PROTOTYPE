@@ -2,6 +2,11 @@
  * Fetch-based API client for FastAPI backend.
  * Uses credentials: 'include' for cookie-based auth.
  */
+import {
+  buildRegionalIncidentsQueryString,
+  type RegionalIncidentsQueryParams,
+} from './regional-incidents';
+
 const API_BASE = typeof window !== 'undefined'
   ? (process.env.NEXT_PUBLIC_API_URL || '/api')
   : process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api';
@@ -258,21 +263,79 @@ export async function submitCivilianReport(payload: {
 // Regional API (REGIONAL_ENCODER only)
 // ---------------------------------------------------------------------------
 
-export async function fetchRegionalIncidents(params?: { limit?: number; offset?: number; category?: string; status?: string }): Promise<any> {
-  const search = new URLSearchParams();
-  if (params?.limit != null) search.set('limit', String(params.limit));
-  if (params?.offset != null) search.set('offset', String(params.offset));
-  if (params?.category) search.set('category', params.category);
-  if (params?.status) search.set('status', params.status);
-  const qs = search.toString();
-  return apiFetch(`/regional/incidents${qs ? `?${qs}` : ''}`);
+export type { RegionalIncidentsQueryParams };
+
+export interface RegionalIncidentListItem {
+  incident_id: number;
+  verification_status: string;
+  created_at: string | null;
+  notification_dt: string | null;
+  general_category: string | null;
+  alarm_level: string | null;
+  fire_station_name: string | null;
+  structures_affected: number | null;
+  households_affected: number | null;
+  individuals_affected: number | null;
+  responder_type: string | null;
+  fire_origin: string | null;
+  extent_of_damage: string | null;
+  owner_name: string | null;
+  establishment_name: string | null;
+  caller_name: string | null;
+}
+
+export interface RegionalIncidentsListResponse {
+  items: RegionalIncidentListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Single incident detail: nonsensitive/sensitive blocks as returned by the regional endpoint. */
+export interface RegionalIncidentDetailResponse {
+  incident_id: number;
+  verification_status: string;
+  created_at: string | null;
+  region_id: number;
+  nonsensitive: Record<string, unknown>;
+  sensitive: Record<string, unknown>;
+}
+
+export async function fetchRegionalIncidents(
+  params?: RegionalIncidentsQueryParams
+): Promise<RegionalIncidentsListResponse> {
+  const qs = buildRegionalIncidentsQueryString(params ?? {});
+  return apiFetch<RegionalIncidentsListResponse>(`/regional/incidents${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchRegionalIncident(
+  incidentId: number
+): Promise<RegionalIncidentDetailResponse> {
+  return apiFetch<RegionalIncidentDetailResponse>(`/regional/incidents/${incidentId}`);
 }
 
 export async function fetchRegionalStats(): Promise<any> {
   return apiFetch('/regional/stats');
 }
 
-export async function importAforFile(file: File): Promise<any> {
+export type AforFormKind = 'STRUCTURAL_AFOR' | 'WILDLAND_AFOR';
+
+export interface AforImportPreviewResponse {
+  total_rows: number;
+  valid_rows: number;
+  invalid_rows: number;
+  form_kind: AforFormKind;
+  /** When true, the file did not supply reliable coordinates; set WGS84 lat/lon before commit. */
+  requires_location?: boolean;
+  rows: Array<{
+    row_index: number;
+    status: string;
+    errors: string[];
+    data: Record<string, unknown>;
+  }>;
+}
+
+export async function importAforFile(file: File): Promise<AforImportPreviewResponse> {
   const formData = new FormData();
   formData.append('file', file);
   const url = `${API_BASE.replace(/\/$/, '')}/regional/afor/import`;
@@ -285,13 +348,32 @@ export async function importAforFile(file: File): Promise<any> {
   if (!res.ok) {
     throw new Error((json as { message?: string; detail?: string }).message ?? (json as { detail?: string }).detail ?? `Request failed: ${res.status}`);
   }
-  return json;
+  return json as AforImportPreviewResponse;
 }
 
-export async function commitAforImport(rows: any[]): Promise<any> {
+export type WildlandRowSource = 'AFOR_IMPORT' | 'MANUAL';
+
+export async function commitAforImport(
+  rows: any[],
+  formKind: AforFormKind,
+  options?: {
+    wildlandRowSource?: WildlandRowSource;
+    /** WGS84 decimal degrees. PostGIS stores POINT(longitude latitude); not GeoJSON [lat, lon]. */
+    latitude?: number;
+    longitude?: number;
+  }
+): Promise<{ status: string; batch_id: number; incident_ids: number[]; total_committed: number }> {
+  const body: Record<string, unknown> = { form_kind: formKind, rows };
+  if (options?.wildlandRowSource != null) {
+    body.wildland_row_source = options.wildlandRowSource;
+  }
+  if (typeof options?.latitude === 'number' && typeof options?.longitude === 'number') {
+    body.latitude = options.latitude;
+    body.longitude = options.longitude;
+  }
   return apiFetch('/regional/afor/commit', {
     method: 'POST',
-    body: JSON.stringify({ rows }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -330,6 +412,7 @@ export interface HeatmapFilters {
   end_date?: string;
   region_id?: number;
   alarm_level?: string;
+  /** API query `incident_type` filters `general_category` in analytics_incident_facts */
   incident_type?: string;
 }
 
@@ -337,7 +420,9 @@ export interface TrendFilters {
   start_date?: string;
   end_date?: string;
   region_id?: number;
+  /** API query `incident_type` filters `general_category` */
   incident_type?: string;
+  alarm_level?: string;
   interval?: 'daily' | 'weekly' | 'monthly';
 }
 
@@ -348,6 +433,7 @@ export interface ComparativeFilters {
   range_b_end: string;
   region_id?: number;
   incident_type?: string;
+  alarm_level?: string;
 }
 
 function buildAnalyticsParams(params: Record<string, string | number | undefined>): string {
@@ -378,6 +464,7 @@ export async function fetchTrendData(filters: TrendFilters = {}): Promise<Trends
     end_date: filters.end_date,
     region_id: filters.region_id,
     incident_type: filters.incident_type,
+    alarm_level: filters.alarm_level,
     interval: filters.interval ?? 'daily',
   });
   return apiFetch<TrendsResponse>(`/analytics/trends${qs}`);
@@ -392,6 +479,7 @@ export async function fetchComparativeData(filters: ComparativeFilters): Promise
     range_b_end: filters.range_b_end,
     region_id: filters.region_id,
     incident_type: filters.incident_type,
+    alarm_level: filters.alarm_level,
   });
   return apiFetch<ComparativeResponse>(`/analytics/comparative${qs}`);
 }
