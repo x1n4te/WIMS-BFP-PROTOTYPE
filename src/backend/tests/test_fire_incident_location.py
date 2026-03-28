@@ -27,8 +27,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import StatementError
 from sqlalchemy.engine import create_engine
 
-from backend.models.fire_incident import FireIncident
-from backend.models.geometry_validation import InvalidLocationError
+from models.fire_incident import FireIncident
+from models.geometry_validation import InvalidLocationError
 
 
 def _get_engine():
