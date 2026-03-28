@@ -24,6 +24,18 @@ from sqlalchemy.orm import Session
 from auth import get_regional_encoder
 from database import get_db
 from services.analytics_read_model import sync_incidents_batch
+from utils.crypto import SecurityProvider, SecurityProviderError
+
+
+# ── Lazy SecurityProvider singleton (avoids import-time env check in test mocks) ──
+_sp_instance: SecurityProvider | None = None
+
+
+def _get_security_provider() -> SecurityProvider:
+    global _sp_instance  # noqa: PLW0603
+    if _sp_instance is None:
+        _sp_instance = SecurityProvider()
+    return _sp_instance
 
 logger = logging.getLogger("wims.regional")
 
@@ -1333,6 +1345,28 @@ async def commit_afor_import(
             },
         )
 
+        # ── Encrypt PII fields before INSERT ─────────────────────────────────────
+        # PII fields (caller_name, caller_number, owner_name, occupant_name) are
+        # stored ONLY in the encrypted blob. Plaintext columns are set to NULL.
+        # receiver_name is NOT encrypted (public / internal use only).
+        pii_for_blob = {
+            k: v
+            for k, v in (
+                ("caller_name",     sens.get("caller_name")),
+                ("caller_number",   sens.get("caller_number")),
+                ("owner_name",      sens.get("owner_name")),
+                ("occupant_name",   sens.get("occupant_name")),
+            )
+            if v  # omit None / falsy; empty string IS included
+        }
+        # Always produce a dict (empty or populated) so decrypt never raises on None
+        if not pii_for_blob:
+            pii_for_blob = {}
+
+        sp = _get_security_provider()
+        aad = f"incident_id:{incident_id}".encode("utf-8")
+        nonce_b64, ct_b64 = sp.encrypt_json(pii_for_blob, aad)
+
         db.execute(
             text("""
                 INSERT INTO wims.incident_sensitive_details (
@@ -1343,40 +1377,43 @@ async def commit_afor_import(
                     disposition_prepared_by, disposition_noted_by,
                     prepared_by_officer, noted_by_officer,
                     personnel_on_duty, other_personnel, casualty_details,
-                    is_icp_present, icp_location
+                    is_icp_present, icp_location,
+                    pii_blob_enc, encryption_iv
                 ) VALUES (
                     :incident_id, :street_address, :landmark,
-                    :caller_name, :caller_number, :receiver_name,
-                    :owner_name, :establishment_name,
+                    NULL, NULL, :receiver_name,
+                    NULL, :establishment_name,
                     :narrative_report, :disposition,
                     :disposition_prepared_by, :disposition_noted_by,
                     :prepared_by_officer, :noted_by_officer,
                     CAST(:personnel_on_duty AS jsonb),
                     CAST(:other_personnel AS jsonb),
                     CAST(:casualty_details AS jsonb),
-                    :is_icp_present, :icp_location
+                    :is_icp_present, :icp_location,
+                    :pii_blob_enc, :pii_nonce
                 )
             """),
             {
                 "incident_id": incident_id,
                 "street_address": sens.get("street_address", ""),
                 "landmark": sens.get("landmark", ""),
-                "caller_name": sens.get("caller_name", ""),
-                "caller_number": sens.get("caller_number", ""),
-                "receiver_name": sens.get("receiver_name", ""),
-                "owner_name": sens.get("owner_name", ""),
+                # Plaintext PII columns → NULL; only pii_blob_enc is authoritative
+                "receiver_name":      sens.get("receiver_name", ""),
                 "establishment_name": sens.get("establishment_name", ""),
-                "narrative_report": sens.get("narrative_report", ""),
-                "disposition": sens.get("disposition", ""),
+                "narrative_report":   sens.get("narrative_report", ""),
+                "disposition":        sens.get("disposition", ""),
                 "disposition_prepared_by": sens.get("disposition_prepared_by", ""),
-                "disposition_noted_by": sens.get("disposition_noted_by", ""),
-                "prepared_by_officer": sens.get("prepared_by_officer", ""),
-                "noted_by_officer": sens.get("noted_by_officer", ""),
-                "personnel_on_duty": json.dumps(sens.get("personnel_on_duty", {})),
-                "other_personnel": json.dumps(sens.get("other_personnel", [])),
-                "casualty_details": json.dumps(casualty_details),
+                "disposition_noted_by":    sens.get("disposition_noted_by", ""),
+                "prepared_by_officer":     sens.get("prepared_by_officer", ""),
+                "noted_by_officer":        sens.get("noted_by_officer", ""),
+                "personnel_on_duty":  json.dumps(sens.get("personnel_on_duty", {})),
+                "other_personnel":    json.dumps(sens.get("other_personnel", [])),
+                "casualty_details":   json.dumps(casualty_details),
                 "is_icp_present": sens.get("is_icp_present", False),
-                "icp_location": sens.get("icp_location", ""),
+                "icp_location":      sens.get("icp_location", ""),
+                # Encrypted PII blob
+                "pii_blob_enc": ct_b64,
+                "pii_nonce":    nonce_b64,
             },
         )
 
@@ -1530,7 +1567,7 @@ def get_regional_incident_detail(
     ).fetchone()
 
     # Fetch sensitive
-    sd = db.execute(
+    sd_row = db.execute(
         text("SELECT * FROM wims.incident_sensitive_details WHERE incident_id = :iid"),
         {"iid": incident_id},
     ).fetchone()
@@ -1542,13 +1579,44 @@ def get_regional_incident_detail(
             return {k: r[i] for i, k in enumerate(keys)}
         return dict(r._mapping) if hasattr(r, '_mapping') else {}
 
+    sd_dict = row_to_dict(sd_row)
+
+    # ── Decrypt PII blob if present (new writes use encrypted blob; old rows fall back) ──
+    if sd_dict.get("pii_blob_enc") and sd_dict.get("encryption_iv"):
+        try:
+            aad = f"incident_id:{incident_id}".encode("utf-8")
+            pii_plaintext = _get_security_provider().decrypt_json(
+                sd_dict["encryption_iv"],
+                sd_dict["pii_blob_enc"],
+                aad,
+            )
+            # Inject decrypted PII fields so frontend contract is unchanged
+            sd_dict["caller_name"]    = pii_plaintext.get("caller_name")
+            sd_dict["caller_number"]  = pii_plaintext.get("caller_number")
+            sd_dict["owner_name"]     = pii_plaintext.get("owner_name")
+            sd_dict["occupant_name"]  = pii_plaintext.get("occupant_name")
+        except SecurityProviderError:
+            # Auth/key failure on a blob that claims to be valid — possible tampering
+            # or key rotation without re-encrypt. Log with incident_id; never log
+            # nonce, ciphertext, or plaintext. Return legacy plaintext as fallback.
+            logger.error(
+                "CRITICAL: PII blob decryption failed (possible tamper or key mismatch). "
+                "incident_id=%s",
+                incident_id,
+            )
+            pass
+
+    # Do not expose internal blob columns in API response
+    sd_dict.pop("pii_blob_enc",  None)
+    sd_dict.pop("encryption_iv", None)
+
     return {
         "incident_id": row[0],
         "verification_status": row[1],
         "created_at": row[2].isoformat() if row[2] else None,
         "region_id": row[3],
         "nonsensitive": row_to_dict(ns),
-        "sensitive": row_to_dict(sd),
+        "sensitive": sd_dict,
     }
 
 

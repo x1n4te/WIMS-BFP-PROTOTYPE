@@ -176,18 +176,19 @@ CREATE TABLE IF NOT EXISTS wims.incident_sensitive_details (
   incident_id INTEGER NOT NULL REFERENCES wims.fire_incidents(incident_id),
   street_address TEXT,
   landmark TEXT,
-  caller_name VARCHAR,
-  caller_number VARCHAR,
+  caller_name VARCHAR,          -- legacy plaintext; set NULL for new writes (PII-bLOB IS authoritative)
+  caller_number VARCHAR,         -- legacy plaintext; set NULL for new writes
   narrative_report TEXT,
   prepared_by_officer VARCHAR,
   noted_by_officer VARCHAR,
   disposition_status VARCHAR,
   remarks TEXT,
-  encryption_iv VARCHAR,
-  receiver_name VARCHAR,
+  encryption_iv VARCHAR,        -- base64-encoded 12-byte AES-GCM nonce; NOT NULL when pii_blob_enc IS NOT NULL
+  pii_blob_enc TEXT,           -- base64-encoded AES-256-GCM ciphertext containing {caller_name, caller_number, owner_name, occupant_name}
+  receiver_name VARCHAR,        -- NOT encrypted (public/internal)
   establishment_name VARCHAR,
-  owner_name VARCHAR,
-  occupant_name VARCHAR,
+  owner_name VARCHAR,           -- legacy plaintext; set NULL for new writes (pii_blob_enc IS authoritative)
+  occupant_name VARCHAR,        -- legacy plaintext; set NULL for new writes
   personnel_on_duty JSONB DEFAULT '{}'::jsonb,
   other_personnel JSONB DEFAULT '[]'::jsonb,
   casualty_details JSONB DEFAULT '[]'::jsonb,
@@ -195,7 +196,13 @@ CREATE TABLE IF NOT EXISTS wims.incident_sensitive_details (
   is_icp_present BOOLEAN,
   disposition TEXT,
   disposition_prepared_by TEXT,
-  disposition_noted_by TEXT
+  disposition_noted_by TEXT,
+  CONSTRAINT incident_sensitive_details_pii_blob_consistency
+    CHECK (
+      (pii_blob_enc IS NULL AND encryption_iv IS NULL)
+      OR
+      (pii_blob_enc IS NOT NULL AND encryption_iv IS NOT NULL)
+    )
 );
 
 CREATE TABLE IF NOT EXISTS wims.incident_verification_history (
