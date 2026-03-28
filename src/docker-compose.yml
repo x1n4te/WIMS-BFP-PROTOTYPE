@@ -88,6 +88,8 @@ services:
       - ./postgres-init:/app/postgres-init:ro
     networks:
       - wims_internal
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
@@ -151,7 +153,7 @@ services:
     # For this Docker prototype, we will sniff the internal bridge network
     command: -i eth0
     volumes:
-      - ./suricata/logs:/var/log/suricata
+      - ./suricata/logs:/var/log/suricata:ro # changed to ro kasi naka read/write kapag walang :ro
       - ./suricata/rules:/var/lib/suricata/rules
     networks:
       - wims_internal
