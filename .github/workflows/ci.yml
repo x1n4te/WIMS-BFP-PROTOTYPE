@@ -48,9 +48,8 @@ jobs:
       - name: Build Next.js
         run: npm run build
         env:
-          env:
-            NEXT_PUBLIC_AUTH_API_URL: "http://localhost:8080/auth/realms/bfp"
-            NEXT_PUBLIC_MAPBOX_TOKEN: ""
+          NEXT_PUBLIC_AUTH_API_URL: "http://localhost:8080/auth/realms/bfp"
+          NEXT_PUBLIC_MAPBOX_TOKEN: ""
 
   # ---------------------------------------------------------------------------
   # BACKEND — FastAPI lint + test (with PostgreSQL + Redis services)
