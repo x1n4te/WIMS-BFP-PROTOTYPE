@@ -133,8 +133,8 @@ export default function AdminSystemPage() {
         try {
             await updateAdminUser(userId, payload);
             await loadUsers();
-        } catch (e: any) {
-            alert(e?.message ?? 'Update failed');
+        } catch (e: unknown) {
+            alert((e as { message?: string })?.message ?? 'Update failed');
         }
     };
 
@@ -146,8 +146,8 @@ export default function AdminSystemPage() {
             setSelectedLog(null);
             setActionNote('');
             await loadSecurityLogs();
-        } catch (e: any) {
-            alert(e?.message ?? 'Update failed');
+        } catch (e: unknown) {
+            alert((e as { message?: string })?.message ?? 'Update failed');
         } finally {
             setIsSubmitting(false);
         }
@@ -168,8 +168,8 @@ export default function AdminSystemPage() {
             if (selectedLog?.log_id === log.log_id) {
                 setSelectedLog((s) => (s && s.log_id === log.log_id ? { ...s, ...updated } : s));
             }
-        } catch (e: any) {
-            alert(e?.message ?? 'Failed to analyze');
+        } catch (e: unknown) {
+            alert((e as { message?: string })?.message ?? 'Failed to analyze');
         } finally {
             setAnalyzingLogId(null);
         }

@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useUserProfile } from '@/lib/auth';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
-import { fetchRegionsByRegionId, fetchProvinces, fetchCitiesByProvinces, fetchBarangays } from '@/lib/api';
-import { ChevronLeft, Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader2, Download, X, Save, RefreshCw } from 'lucide-react';
+import { fetchProvinces, fetchCitiesByProvinces, fetchBarangays, City, Barangay } from '@/lib/api';
+import { ChevronLeft, Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader2, Download, X, Save } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
@@ -31,8 +31,8 @@ export default function ImportIncidentPage() {
     const [showReview, setShowReview] = useState(false);
 
     // Geo Reference Data
-    const [cities, setCities] = useState<any[]>([]);
-    const [barangays, setBarangays] = useState<any[]>([]);
+    const [cities, setCities] = useState<City[]>([]);
+    const [barangays, setBarangays] = useState<Barangay[]>([]);
     const [loadingRefs, setLoadingRefs] = useState(false);
 
     useEffect(() => {
@@ -47,15 +47,15 @@ export default function ImportIncidentPage() {
         (async () => {
             try {
                 const provincesData = await fetchProvinces(assignedRegionId);
-                const provinceIds = provincesData.map((p: any) => p.province_id);
-                let citiesData: any[] = [];
+                const provinceIds = provincesData.map((p: { province_id: number }) => p.province_id);
+                let citiesData: City[] = [];
                 if (provinceIds.length > 0) {
                     citiesData = await fetchCitiesByProvinces(provinceIds);
                     setCities(citiesData);
                 }
 
                 if (citiesData.length > 0) {
-                    const cityIds = citiesData.map((c: any) => c.city_id);
+                    const cityIds = citiesData.map((c: { city_id: number }) => c.city_id);
                     const barangaysData = await fetchBarangays(cityIds);
                     if (barangaysData.length) setBarangays(barangaysData);
                 }
@@ -88,7 +88,7 @@ export default function ImportIncidentPage() {
                 const sheet = workbook.Sheets[sheetName];
                 const jsonData = XLSX.utils.sheet_to_json(sheet);
 
-                const mapped = jsonData.map((row: any, idx) => mapRowToIncident(row, idx));
+                const mapped = jsonData.map((row: Record<string, unknown>, idx: number) => mapRowToIncident(row, idx));
                 setIncidents(mapped);
             } catch (err) {
                 console.error("Error parsing file:", err);
@@ -98,13 +98,13 @@ export default function ImportIncidentPage() {
         reader.readAsBinaryString(file);
     };
 
-    const findBestMatch = (input: string, list: any[], key: string) => {
+    const findBestMatch = (input: string, list: Record<string, unknown>[], key: string) => {
         if (!input) return null;
         const normalizedInput = input.toString().trim().toLowerCase();
         return list.find(item => item[key]?.toString().toLowerCase() === normalizedInput) || null;
     };
 
-    const mapRowToIncident = (row: any, index: number): MappedIncident => {
+    const mapRowToIncident = (row: Record<string, unknown>, index: number): MappedIncident => {
         const errors: string[] = [];
         let cityId = 1; // Default fallback
         let provinceId = 1;
@@ -184,6 +184,7 @@ export default function ImportIncidentPage() {
         setError(null);
 
         try {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const payloadIncidents: Incident[] = validIncidents.map(({ _id, _errors, _status, _city_text, ...rest }) => rest);
 
             const payload = {
@@ -196,9 +197,9 @@ export default function ImportIncidentPage() {
             setIncidents([]);
             setFile(null);
             setShowReview(false);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("Upload failed:", err);
-            setError(err.message || "Failed to upload bundle.");
+            setError((err as Error).message || "Failed to upload bundle.");
         } finally {
             setUploading(false);
         }
@@ -374,7 +375,7 @@ export default function ImportIncidentPage() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {incidents.map((incident, i) => (
+                                    {incidents.map((incident) => (
                                         <tr key={incident._id} className={`border-b ${incident._status === 'INVALID' ? 'bg-red-50/30' : 'hover:bg-gray-50'}`}>
                                             <td className="px-4 py-3">
                                                 {incident._status === 'VALID' ? (

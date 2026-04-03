@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useUserProfile } from '@/lib/auth';
 import { fetchIncidents } from '@/lib/api';
 import Link from 'next/link';
@@ -32,10 +32,11 @@ export default function IncidentsPage() {
     const regionFilter = searchParams.get('region');
 
     useEffect(() => {
+        // eslint-disable react-hooks/set-state-in-effect
         if (!authLoading) loadIncidents();
-    }, [authLoading, categoryFilter, fromFilter, toFilter, regionFilter, assignedRegionId]);
+    }, [authLoading, categoryFilter, fromFilter, toFilter, regionFilter, assignedRegionId, loadIncidents]);
 
-    const loadIncidents = async () => {
+    const loadIncidents = useCallback(async () => {
         setLoading(true);
         try {
             const regionId = assignedRegionId ?? (regionFilter ? parseInt(regionFilter) : undefined);
@@ -52,7 +53,7 @@ export default function IncidentsPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [assignedRegionId, regionFilter, categoryFilter, fromFilter, toFilter, searchParams]);
 
     const hasFilters = categoryFilter || fromFilter || toFilter || regionFilter;
 
