@@ -3,6 +3,7 @@
 -- Auth: Keycloak-linked wims.users (no auth.users). Geospatial: PostGIS geography.
 
 CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- required for gen_random_uuid()
 
 CREATE SCHEMA IF NOT EXISTS wims;
 
@@ -639,21 +640,20 @@ ON wims.citizen_reports
 FOR DELETE
 USING (wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN'));
 
--- 6) Child tables: policy by parent incident region
--- Reusable pattern shown; apply to all incident child tables
-CREATE POLICY incident_nonsensitive_details_region_all
+-- 6) Child tables: incident_id FK → fire_incidents.region_id
+-- Reusable pattern; split into per-operation policies to enforce read-only analysts.
+--
+-- Roles (consistent model across all child tables):
+--   SELECT:  SYSTEM_ADMIN, ADMIN, NATIONAL_ANALYST, REGIONAL_ENCODER, VALIDATOR
+--   INSERT / UPDATE / DELETE: SYSTEM_ADMIN, NATIONAL_ANALYST, REGIONAL_ENCODER, VALIDATOR
+--   (ANALYST is read-only on all child tables; ADMIN is read-only on child records)
+
+-- incident_nonsensitive_details — SELECT
+CREATE POLICY incident_nonsensitive_details_region_select
 ON wims.incident_nonsensitive_details
-FOR ALL
+FOR SELECT
 USING (
-  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN', 'NATIONAL_ANALYST', 'ANALYST')
-  OR EXISTS (
-    SELECT 1 FROM wims.fire_incidents fi
-    WHERE fi.incident_id = wims.incident_nonsensitive_details.incident_id
-      AND fi.region_id = wims.current_user_region_id()
-  )
-)
-WITH CHECK (
-  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN')
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
   OR EXISTS (
     SELECT 1 FROM wims.fire_incidents fi
     WHERE fi.incident_id = wims.incident_nonsensitive_details.incident_id
@@ -661,19 +661,59 @@ WITH CHECK (
   )
 );
 
-CREATE POLICY incident_sensitive_details_region_all
+-- incident_nonsensitive_details — INSERT
+CREATE POLICY incident_nonsensitive_details_region_insert
+ON wims.incident_nonsensitive_details
+FOR INSERT
+WITH CHECK (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_nonsensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+);
+
+-- incident_nonsensitive_details — UPDATE
+CREATE POLICY incident_nonsensitive_details_region_update
+ON wims.incident_nonsensitive_details
+FOR UPDATE
+USING (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_nonsensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+)
+WITH CHECK (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_nonsensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+);
+
+-- incident_nonsensitive_details — DELETE
+CREATE POLICY incident_nonsensitive_details_region_delete
+ON wims.incident_nonsensitive_details
+FOR DELETE
+USING (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_nonsensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+);
+
+-- incident_sensitive_details — SELECT
+CREATE POLICY incident_sensitive_details_region_select
 ON wims.incident_sensitive_details
-FOR ALL
+FOR SELECT
 USING (
-  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN')
-  OR EXISTS (
-    SELECT 1 FROM wims.fire_incidents fi
-    WHERE fi.incident_id = wims.incident_sensitive_details.incident_id
-      AND fi.region_id = wims.current_user_region_id()
-  )
-)
-WITH CHECK (
-  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN')
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
   OR EXISTS (
     SELECT 1 FROM wims.fire_incidents fi
     WHERE fi.incident_id = wims.incident_sensitive_details.incident_id
@@ -681,19 +721,54 @@ WITH CHECK (
   )
 );
 
--- 5) Child tables: incident_id FK → fire_incidents.region_id
--- Split into two policies per table:
---   SELECT: open to REGIONAL_ENCODER, NATIONAL_ANALYST, SYSTEM_ADMIN, VALIDATOR
---           plus ADMIN (browse/admin read)
---   INSERT/UPDATE/DELETE: only REGIONAL_ENCODER, NATIONAL_ANALYST, SYSTEM_ADMIN, VALIDATOR
---           (not ADMIN — ADMIN is read-only on child records; ADMIN can still manage users)
---   REGIONAL_ENCODER / NATIONAL_ANALYST / VALIDATOR write within their assigned region only
---   SYSTEM_ADMIN writes without region restriction
+-- incident_sensitive_details — INSERT
+CREATE POLICY incident_sensitive_details_region_insert
+ON wims.incident_sensitive_details
+FOR INSERT
+WITH CHECK (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_sensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+);
 
--- Write-roles for child table mutations
--- (REGIONAL_ENCODER, NATIONAL_ANALYST, VALIDATOR are region-scoped; SYSTEM_ADMIN is not)
-DEFERRABLE INITIALLY DEFERRED;  -- no-op in PostgreSQL, kept for documentation only
+-- incident_sensitive_details — UPDATE
+CREATE POLICY incident_sensitive_details_region_update
+ON wims.incident_sensitive_details
+FOR UPDATE
+USING (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_sensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+)
+WITH CHECK (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_sensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+);
 
+-- incident_sensitive_details — DELETE
+CREATE POLICY incident_sensitive_details_region_delete
+ON wims.incident_sensitive_details
+FOR DELETE
+USING (
+  wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST', 'REGIONAL_ENCODER', 'VALIDATOR')
+  OR EXISTS (
+    SELECT 1 FROM wims.fire_incidents fi
+    WHERE fi.incident_id = wims.incident_sensitive_details.incident_id
+      AND fi.region_id = wims.current_user_region_id()
+  )
+);
+
+-- 5) Remaining child tables: direct incident_id FK → fire_incidents.region_id
 -- incident_attachments — SELECT
 CREATE POLICY incident_attachments_region_select
 ON wims.incident_attachments
