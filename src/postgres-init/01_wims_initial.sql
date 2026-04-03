@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS wims.fire_incidents (
   region_id INTEGER NOT NULL REFERENCES wims.ref_regions(region_id),
   location GEOGRAPHY(POINT, 4326) NOT NULL,
   verification_status VARCHAR DEFAULT 'DRAFT' CHECK (
-    verification_status IN ('DRAFT', 'PENDING', 'VERIFIED', 'REJECTED')
+    verification_status IN ('DRAFT', 'PENDING', 'PENDING_VALIDATION', 'VERIFIED', 'REJECTED')
   ),
   is_archived BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -374,6 +374,15 @@ CREATE TABLE IF NOT EXISTS wims.regional_public_keys (
   revoked_at TIMESTAMPTZ
 );
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ARCHITECTURAL DECISION RECORD: BFP SECURITY OPERATIONS INTENT
+-- Table: security_threat_logs (Suricata IDS Ingestion)
+-- Scope: GLOBAL (Intentionally NOT region-filtered)
+-- Justification: Cybersecurity threats are borderless. To defend the WIMS-BFP
+-- network, SYSTEM_ADMIN (CRUD) and NATIONAL_ANALYST (Read-Only) require complete,
+-- unfiltered visibility into all regional IDS logs to perform lateral movement
+-- analysis and national threat correlation.
+-- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS wims.security_threat_logs (
   log_id BIGSERIAL PRIMARY KEY,
   timestamp TIMESTAMPTZ DEFAULT now(),
@@ -557,25 +566,111 @@ FOR DELETE
 USING (wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN'));
 
 -- data_import_batches
-CREATE POLICY batches_region_read
+-- Drop the broken batches_region_read (had deprecated ADMIN/ANALYST, wrongly region-locked SYSTEM_ADMIN/NATIONAL_ANALYST)
+DROP POLICY IF EXISTS batches_region_read ON wims.data_import_batches;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SELECT policies split by access scope
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- batches_read_regional: REGIONAL_ENCODER + NATIONAL_VALIDATOR — region-scoped via explicit users join
+CREATE POLICY batches_read_regional
 ON wims.data_import_batches
 FOR SELECT
 USING (
-  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN', 'NATIONAL_ANALYST', 'ANALYST')
-  OR region_id = wims.current_user_region_id()
+  wims.current_user_role() IN ('REGIONAL_ENCODER', 'NATIONAL_VALIDATOR')
+  AND EXISTS (
+    SELECT 1
+    FROM wims.users u
+    WHERE u.user_id = wims.current_user_uuid()
+      AND u.assigned_region_id = wims.data_import_batches.region_id
+      AND u.is_active = TRUE
+  )
 );
 
-CREATE POLICY batches_region_write
+-- batches_read_global: NATIONAL_ANALYST + SYSTEM_ADMIN — unrestricted global SELECT
+CREATE POLICY batches_read_global
 ON wims.data_import_batches
-FOR ALL
+FOR SELECT
 USING (
-  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN')
-  OR region_id = wims.current_user_region_id()
+  wims.current_user_role() IN ('NATIONAL_ANALYST', 'SYSTEM_ADMIN')
+);
+
+-- Drop the broken FOR ALL policy first
+DROP POLICY IF EXISTS batches_region_write ON wims.data_import_batches;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- batches_region_write: AIR-TIGHT INSERT/UPDATE/DELETE
+-- Roles: REGIONAL_ENCODER, NATIONAL_VALIDATOR ONLY
+-- Must join wims.users → assigned_region_id = batches.region_id
+-- NATIONAL_ANALYST and CIVILIAN_REPORTER are mathematically excluded
+-- SYSTEM_ADMIN gets a separate unrestricted policy (see below)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- INSERT: WITH CHECK only (no existing row to evaluate)
+CREATE POLICY batches_region_insert
+ON wims.data_import_batches
+FOR INSERT
+WITH CHECK (
+  wims.current_user_role() IN ('REGIONAL_ENCODER', 'NATIONAL_VALIDATOR')
+  AND EXISTS (
+    SELECT 1
+    FROM wims.users u
+    WHERE u.user_id = wims.current_user_uuid()
+      AND u.assigned_region_id = wims.data_import_batches.region_id
+      AND u.is_active = TRUE
+  )
+);
+
+-- UPDATE: USING determines visible rows; WITH CHECK restricts what you can set
+CREATE POLICY batches_region_update
+ON wims.data_import_batches
+FOR UPDATE
+USING (
+  wims.current_user_role() IN ('REGIONAL_ENCODER', 'NATIONAL_VALIDATOR')
+  AND EXISTS (
+    SELECT 1
+    FROM wims.users u
+    WHERE u.user_id = wims.current_user_uuid()
+      AND u.assigned_region_id = wims.data_import_batches.region_id
+      AND u.is_active = TRUE
+  )
 )
 WITH CHECK (
-  wims.current_user_role() IN ('SYSTEM_ADMIN', 'ADMIN')
-  OR region_id = wims.current_user_region_id()
+  wims.current_user_role() IN ('REGIONAL_ENCODER', 'NATIONAL_VALIDATOR')
+  AND EXISTS (
+    SELECT 1
+    FROM wims.users u
+    WHERE u.user_id = wims.current_user_uuid()
+      AND u.assigned_region_id = wims.data_import_batches.region_id
+      AND u.is_active = TRUE
+  )
 );
+
+-- DELETE: USING = WITH CHECK (delete only rows you can see and have permission on)
+CREATE POLICY batches_region_delete
+ON wims.data_import_batches
+FOR DELETE
+USING (
+  wims.current_user_role() IN ('REGIONAL_ENCODER', 'NATIONAL_VALIDATOR')
+  AND EXISTS (
+    SELECT 1
+    FROM wims.users u
+    WHERE u.user_id = wims.current_user_uuid()
+      AND u.assigned_region_id = wims.data_import_batches.region_id
+      AND u.is_active = TRUE
+  )
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SYSTEM_ADMIN: Unrestricted full CRUD on data_import_batches (bypasses region)
+-- Applies to ALL operations (SELECT, INSERT, UPDATE, DELETE)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE POLICY batches_system_admin_all
+ON wims.data_import_batches
+FOR ALL
+USING (wims.current_user_role() = 'SYSTEM_ADMIN')
+WITH CHECK (wims.current_user_role() = 'SYSTEM_ADMIN');
 
 -- citizen_reports (via incident region when incident_id present)
 CREATE POLICY citizen_reports_select
@@ -1272,10 +1367,10 @@ REVOKE ALL ON SCHEMA wims FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA wims FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA wims FROM PUBLIC;
 
--- Example app role grants (adjust role names to your DB roles)
--- GRANT USAGE ON SCHEMA wims TO wims_app;
--- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA wims TO wims_app;
--- GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA wims TO wims_app;
+-- Application role grants (RLS enforces security — grants provide minimum object access)
+GRANT USAGE ON SCHEMA wims TO wims_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA wims TO wims_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA wims TO wims_app;
 
 -- Ensure future tables are also locked by default
 ALTER DEFAULT PRIVILEGES IN SCHEMA wims REVOKE ALL ON TABLES FROM PUBLIC;
