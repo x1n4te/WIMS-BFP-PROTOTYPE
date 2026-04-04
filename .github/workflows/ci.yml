@@ -119,12 +119,15 @@ jobs:
 
       - name: Initialize test database schema
         run: |
+          export PGPASSWORD=postgres
           # Init scripts create the wims schema + tables inside wims_test DB.
           # Skip 02_wims_schema.sql — it only re-includes 01_wims_initial.sql via \ir.
           psql -v ON_ERROR_STOP=1 -h localhost -p 5432 -U postgres -d wims_test \
             -f "$GITHUB_WORKSPACE/src/postgres-init/01_wims_initial.sql"
           psql -v ON_ERROR_STOP=1 -h localhost -p 5432 -U postgres -d wims_test \
             -f "$GITHUB_WORKSPACE/src/postgres-init/03_seed_reference.sql"
+        env:
+          PGPASSWORD: postgres
 
       - name: Run pytest
         run: pytest -v --tb=short --ignore=src/backend/tests/test_rate_limiting.py --ignore=src/backend/tests/test_suricata_ingestion.py
