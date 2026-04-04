@@ -16,11 +16,11 @@ router = APIRouter(prefix="/api/triage", tags=["triage"])
 def _require_encoder_or_validator(
     current_user: Annotated[dict, Depends(get_current_wims_user)],
 ) -> dict:
-    """Require ENCODER or VALIDATOR role."""
+    """Require REGIONAL_ENCODER or NATIONAL_VALIDATOR role."""
     role = current_user.get("role")
-    if role not in ("ENCODER", "VALIDATOR"):
+    if role not in ("REGIONAL_ENCODER", "NATIONAL_VALIDATOR"):
         raise HTTPException(
-            status_code=403, detail="ENCODER or VALIDATOR role required"
+            status_code=403, detail="REGIONAL_ENCODER or NATIONAL_VALIDATOR role required"
         )
     return current_user
 

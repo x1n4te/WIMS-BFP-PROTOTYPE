@@ -31,7 +31,7 @@ def test_admin_rejects_encoder(client: TestClient):
     """Mock ENCODER token: GET /api/admin/users must return 403 Forbidden."""
 
     async def mock_encoder_user():
-        return {"user_id": "test-uuid", "keycloak_id": "kid", "role": "ENCODER"}
+        return {"user_id": "test-uuid", "keycloak_id": "kid", "role": "REGIONAL_ENCODER"}
 
     app.dependency_overrides[auth.get_current_wims_user] = mock_encoder_user
 
