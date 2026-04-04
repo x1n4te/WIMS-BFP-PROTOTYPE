@@ -54,13 +54,11 @@ CREATE TABLE IF NOT EXISTS wims.users (
   updated_at TIMESTAMPTZ DEFAULT now(),
   CONSTRAINT users_role_check CHECK (
     role IN (
-      'ENCODER',
-      'VALIDATOR',
-      'ANALYST',
+      'CIVILIAN_REPORTER',
+      'REGIONAL_ENCODER',
+      'NATIONAL_VALIDATOR',
       'NATIONAL_ANALYST',
-      'ADMIN',
-      'SYSTEM_ADMIN',
-      'REGIONAL_ENCODER'
+      'SYSTEM_ADMIN'
     )
   )
 );
@@ -1366,6 +1364,15 @@ WITH CHECK (TRUE);
 REVOKE ALL ON SCHEMA wims FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA wims FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA wims FROM PUBLIC;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- FRS Roles (must exist before any RLS policy TO clause references them)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE ROLE CIVILIAN_REPORTER;
+CREATE ROLE REGIONAL_ENCODER;
+CREATE ROLE NATIONAL_VALIDATOR;
+CREATE ROLE NATIONAL_ANALYST;
+CREATE ROLE SYSTEM_ADMIN;
 
 -- Application role (used by FastAPI app to connect)
 CREATE ROLE wims_app WITH LOGIN NOCREATEROLE NOCREATEDB NOSUPERUSER NOREPLICATION;
