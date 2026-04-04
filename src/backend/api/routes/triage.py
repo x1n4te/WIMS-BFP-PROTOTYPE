@@ -20,7 +20,8 @@ def _require_encoder_or_validator(
     role = current_user.get("role")
     if role not in ("REGIONAL_ENCODER", "NATIONAL_VALIDATOR"):
         raise HTTPException(
-            status_code=403, detail="REGIONAL_ENCODER or NATIONAL_VALIDATOR role required"
+            status_code=403,
+            detail=f"Role '{role}' does not have permission to access this resource",
         )
     return current_user
 

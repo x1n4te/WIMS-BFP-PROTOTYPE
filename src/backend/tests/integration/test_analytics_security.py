@@ -311,7 +311,9 @@ def test_comparative_count_in_range_receives_bound_range_strings(client: TestCli
 
 def test_export_csv_rejects_forbidden_role_even_with_valid_payload(client: TestClient):
     """POST body must not bypass RBAC — encoder cannot export national analytics."""
-    app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
+    app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
+        "REGIONAL_ENCODER"
+    )
 
     response = client.post(
         "/api/analytics/export/csv",
