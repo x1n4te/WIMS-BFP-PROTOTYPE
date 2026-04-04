@@ -25,7 +25,9 @@ KEYCLOAK_URL = os.environ.get("NEXT_PUBLIC_AUTH_API_URL", KEYCLOAK_REALM_URL)
 CLIENT_ID = os.environ.get("KEYCLOAK_CLIENT_ID", "bfp-client")
 # audience is what Keycloak puts in the token's "aud" claim — must match CLIENT_ID.
 # If KEYCLOAK_AUDIENCE is unset, default to the CLIENT_ID so they stay in sync.
-AUDIENCE = os.environ.get("KEYCLOAK_AUDIENCE", os.environ.get("KEYCLOAK_CLIENT_ID", "bfp-client"))
+AUDIENCE = os.environ.get(
+    "KEYCLOAK_AUDIENCE", os.environ.get("KEYCLOAK_CLIENT_ID", "bfp-client")
+)
 JWKS_CACHE_TTL_SECONDS = 60  # 60 seconds — Keycloak key rotation typically hourly/daily; balance freshness vs latency
 
 
@@ -131,8 +133,10 @@ class KeycloakAuthenticator:
             # If kid unknown or key not found, try every RSA signing key
             if not candidate_keys or candidate_keys[0] is None:
                 candidate_keys = [
-                    k for k in self.jwks.get("keys", [])
-                    if k.get("kty") == "RSA" and k.get("use") in (None, "sig")
+                    k
+                    for k in self.jwks.get("keys", [])
+                    if k.get("kty") == "RSA"
+                    and k.get("use") in (None, "sig")
                     and k.get("alg") in (None, "RS256")
                 ]
 
@@ -170,7 +174,9 @@ class KeycloakAuthenticator:
 
             # All keys exhausted
             if last_error:
-                logger.warning(f"JWT Validation failed after trying all keys: {last_error}")
+                logger.warning(
+                    f"JWT Validation failed after trying all keys: {last_error}"
+                )
             raise HTTPException(
                 status_code=401, detail="Invalid token: JWT validation failed"
             )
@@ -199,7 +205,7 @@ async def get_current_user(request: Request):
     The Authorization header is NOT consulted — HttpOnly cookies are the
     sole token transport to prevent XSS-driven token theft (CSRF mitigation).
     """
-    token=request.cookies.get("access_token")
+    token = request.cookies.get("access_token")
     if not token:
         raise HTTPException(
             status_code=401, detail="Authentication credentials missing"
