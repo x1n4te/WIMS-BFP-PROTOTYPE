@@ -22,7 +22,6 @@ The authoritative test for inactive-user denial is:
 
 from __future__ import annotations
 
-import uuid
 
 import pytest
 
@@ -32,8 +31,6 @@ pytest.importorskip("celery", reason="celery not installed — CI/integration te
 from fastapi.testclient import TestClient
 
 import main as main_module
-from auth import get_current_wims_user
-from database import get_db
 
 
 # ---------------------------------------------------------------------------
@@ -98,15 +95,26 @@ class TestProtectedEndpointRejectsNoAuth:
     After CRITICAL-1 fix: 'ANONYMOUS' IN (valid_roles) = FALSE, correctly denied.
     """
 
-    @pytest.mark.parametrize("method,path,body", [
-        ("get",  "/api/user/me",                   None),
-        ("get",  "/api/admin/users",                None),
-        ("get",  "/api/triage/pending",             None),
-        ("get",  "/api/regional/incidents",         None),
-        ("get",  "/api/analytics/heatmap",          None),
-        ("post", "/api/incidents",                  {"latitude": 14.5, "longitude": 120.9, "description": "x"}),
-        ("patch","/api/admin/users/00000000-0000-0000-0000-000000000001", {"is_active": True}),
-    ])
+    @pytest.mark.parametrize(
+        "method,path,body",
+        [
+            ("get", "/api/user/me", None),
+            ("get", "/api/admin/users", None),
+            ("get", "/api/triage/pending", None),
+            ("get", "/api/regional/incidents", None),
+            ("get", "/api/analytics/heatmap", None),
+            (
+                "post",
+                "/api/incidents",
+                {"latitude": 14.5, "longitude": 120.9, "description": "x"},
+            ),
+            (
+                "patch",
+                "/api/admin/users/00000000-0000-0000-0000-000000000001",
+                {"is_active": True},
+            ),
+        ],
+    )
     def test_protected_returns_401_without_auth(self, client, method, path, body):
         """HTTP {method.upper()} {path} without auth must return 401."""
         http_method = getattr(client, method)

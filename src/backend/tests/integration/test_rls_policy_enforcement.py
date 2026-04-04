@@ -56,7 +56,9 @@ def _parse_admin_urls() -> tuple[str, str]:
 
 
 def _psql_files(db_url: str, *sql_paths) -> None:
-    import shutil, subprocess
+    import shutil
+    import subprocess
+
     u = make_url(db_url)
     host = u.host or "127.0.0.1"
     port = u.port or 5432
@@ -68,7 +70,19 @@ def _psql_files(db_url: str, *sql_paths) -> None:
     psql = shutil.which("psql")
     if not psql:
         pytest.skip("psql not on PATH; install postgresql-client to run RLS tests")
-    args = [psql, "-v", "ON_ERROR_STOP=1", "-h", host, "-p", str(port), "-U", user, "-d", database]
+    args = [
+        psql,
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-h",
+        host,
+        "-p",
+        str(port),
+        "-U",
+        user,
+        "-d",
+        database,
+    ]
     for p in sql_paths:
         args.extend(["-f", str(p)])
     subprocess.run(args, check=True, env=env, capture_output=True, text=True)
@@ -76,13 +90,16 @@ def _psql_files(db_url: str, *sql_paths) -> None:
 
 def _postgres_init_dir():
     from pathlib import Path
+
     here = Path(__file__).resolve()
     for parent in here.parents:
         for rel in ("src/postgres-init", "postgres-init"):
             candidate = parent / rel
             if (candidate / "01_wims_initial.sql").is_file():
                 return candidate
-    pytest.fail("Cannot find postgres-init/01_wims_initial.sql (set WIMS_POSTGRES_INIT_DIR)")
+    pytest.fail(
+        "Cannot find postgres-init/01_wims_initial.sql (set WIMS_POSTGRES_INIT_DIR)"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -131,7 +148,9 @@ def bootstrap_engine():
 def region_id(bootstrap_engine):
     """Return a valid region_id from seed data."""
     with bootstrap_engine.connect() as conn:
-        row = conn.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
+        row = conn.execute(
+            text("SELECT region_id FROM wims.ref_regions LIMIT 1")
+        ).fetchone()
     if row is None:
         pytest.skip("No ref_regions seed data")
     return row[0]
@@ -185,14 +204,23 @@ class TestCurrentUserRoleInactiveUser:
                         INSERT INTO wims.users (user_id, keycloak_id, username, role, is_active)
                         VALUES (:uid, :kid, :username, 'REGIONAL_ENCODER', FALSE)
                     """),
-                    {"uid": user_id, "kid": keycloak_id, "username": f"inactive_{user_id.hex[:8]}"},
+                    {
+                        "uid": user_id,
+                        "kid": keycloak_id,
+                        "username": f"inactive_{user_id.hex[:8]}",
+                    },
                 )
                 conn.commit()
-                conn.execute(text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)})
+                conn.execute(
+                    text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)}
+                )
                 role = conn.execute(text("SELECT wims.current_user_role()")).scalar()
         finally:
             with bootstrap_engine.connect() as conn:
-                conn.execute(text("DELETE FROM wims.users WHERE user_id = :uid"), {"uid": user_id})
+                conn.execute(
+                    text("DELETE FROM wims.users WHERE user_id = :uid"),
+                    {"uid": user_id},
+                )
                 conn.commit()
 
         assert role == "ANONYMOUS", (
@@ -204,13 +232,16 @@ class TestCurrentUserRoleInactiveUser:
 # Test 4: current_user_role() returns actual role for active user
 # ---------------------------------------------------------------------------
 class TestCurrentUserRoleActiveUser:
-    @pytest.mark.parametrize("role_literal", [
-        "SYSTEM_ADMIN",
-        "NATIONAL_ANALYST",
-        "REGIONAL_ENCODER",
-        "NATIONAL_VALIDATOR",
-        "CIVILIAN_REPORTER",
-    ])
+    @pytest.mark.parametrize(
+        "role_literal",
+        [
+            "SYSTEM_ADMIN",
+            "NATIONAL_ANALYST",
+            "REGIONAL_ENCODER",
+            "NATIONAL_VALIDATOR",
+            "CIVILIAN_REPORTER",
+        ],
+    )
     def test_current_user_role_returns_correct_role_for_active_user(
         self, bootstrap_engine, role_literal
     ):
@@ -223,14 +254,24 @@ class TestCurrentUserRoleActiveUser:
                         INSERT INTO wims.users (user_id, keycloak_id, username, role, is_active)
                         VALUES (:uid, :kid, :username, :role, TRUE)
                     """),
-                    {"uid": user_id, "kid": keycloak_id, "username": f"active_{user_id.hex[:8]}", "role": role_literal},
+                    {
+                        "uid": user_id,
+                        "kid": keycloak_id,
+                        "username": f"active_{user_id.hex[:8]}",
+                        "role": role_literal,
+                    },
                 )
                 conn.commit()
-                conn.execute(text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)})
+                conn.execute(
+                    text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)}
+                )
                 role = conn.execute(text("SELECT wims.current_user_role()")).scalar()
         finally:
             with bootstrap_engine.connect() as conn:
-                conn.execute(text("DELETE FROM wims.users WHERE user_id = :uid"), {"uid": user_id})
+                conn.execute(
+                    text("DELETE FROM wims.users WHERE user_id = :uid"),
+                    {"uid": user_id},
+                )
                 conn.commit()
 
         assert role == role_literal, (
@@ -242,7 +283,9 @@ class TestCurrentUserRoleActiveUser:
 # Test 5: RLS denies INSERT on fire_incidents without session
 # ---------------------------------------------------------------------------
 class TestRLSDeniesInsertNoSession:
-    def test_rls_denies_insert_fire_incidents_without_session(self, bootstrap_engine, region_id):
+    def test_rls_denies_insert_fire_incidents_without_session(
+        self, bootstrap_engine, region_id
+    ):
         """
         Without a session, current_user_role() = 'ANONYMOUS'.
         'ANONYMOUS' is NOT in any fire_incidents INSERT WITH CHECK IN clause.
@@ -265,7 +308,9 @@ class TestRLSDeniesInsertNoSession:
 # Test 6: RLS denies UPDATE on fire_incidents without session
 # ---------------------------------------------------------------------------
 class TestRLSDeniesUpdateNoSession:
-    def test_rls_denies_update_fire_incidents_without_session(self, bootstrap_engine, region_id):
+    def test_rls_denies_update_fire_incidents_without_session(
+        self, bootstrap_engine, region_id
+    ):
         """
         Without a session, UPDATE on fire_incidents must be denied by RLS USING clause.
         Uses a second connection (no session) to attempt the UPDATE.
@@ -281,10 +326,17 @@ class TestRLSDeniesUpdateNoSession:
                         INSERT INTO wims.users (user_id, keycloak_id, username, role, is_active)
                         VALUES (:uid, :kid, :username, 'SYSTEM_ADMIN', TRUE)
                     """),
-                    {"uid": admin_id, "kid": admin_kid, "username": f"sysadmin_{admin_id.hex[:8]}"},
+                    {
+                        "uid": admin_id,
+                        "kid": admin_kid,
+                        "username": f"sysadmin_{admin_id.hex[:8]}",
+                    },
                 )
                 conn.commit()
-                conn.execute(text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(admin_id)})
+                conn.execute(
+                    text("SET LOCAL wims.current_user_id = :uid"),
+                    {"uid": str(admin_id)},
+                )
                 result = conn.execute(
                     text("""
                         INSERT INTO wims.fire_incidents
@@ -299,7 +351,10 @@ class TestRLSDeniesUpdateNoSession:
                 conn.commit()
         finally:
             with bootstrap_engine.connect() as conn:
-                conn.execute(text("DELETE FROM wims.users WHERE user_id = :uid"), {"uid": admin_id})
+                conn.execute(
+                    text("DELETE FROM wims.users WHERE user_id = :uid"),
+                    {"uid": admin_id},
+                )
                 conn.commit()
 
         # Second connection: no session — attempt UPDATE (must be denied)
@@ -316,7 +371,10 @@ class TestRLSDeniesUpdateNoSession:
 
         # Cleanup
         with bootstrap_engine.connect() as conn:
-            conn.execute(text("DELETE FROM wims.fire_incidents WHERE incident_id = :iid"), {"iid": incident_id})
+            conn.execute(
+                text("DELETE FROM wims.fire_incidents WHERE incident_id = :iid"),
+                {"iid": incident_id},
+            )
             conn.commit()
 
 
@@ -341,10 +399,17 @@ class TestRLSDeniesInsertInactiveUser:
                         INSERT INTO wims.users (user_id, keycloak_id, username, role, is_active, assigned_region_id)
                         VALUES (:uid, :kid, :username, 'REGIONAL_ENCODER', FALSE, :rid)
                     """),
-                    {"uid": user_id, "kid": keycloak_id, "username": f"inactive_{user_id.hex[:8]}", "rid": region_id},
+                    {
+                        "uid": user_id,
+                        "kid": keycloak_id,
+                        "username": f"inactive_{user_id.hex[:8]}",
+                        "rid": region_id,
+                    },
                 )
                 conn.commit()
-                conn.execute(text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)})
+                conn.execute(
+                    text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)}
+                )
                 with pytest.raises((IntegrityError, ProgrammingError)):
                     conn.execute(
                         text("""
@@ -357,7 +422,10 @@ class TestRLSDeniesInsertInactiveUser:
                     )
         finally:
             with bootstrap_engine.connect() as conn:
-                conn.execute(text("DELETE FROM wims.users WHERE user_id = :uid"), {"uid": user_id})
+                conn.execute(
+                    text("DELETE FROM wims.users WHERE user_id = :uid"),
+                    {"uid": user_id},
+                )
                 conn.commit()
 
 
@@ -389,7 +457,9 @@ class TestUsersRoleCheckConstraint:
         user_id = uuid.uuid4()
         keycloak_id = uuid.uuid4()
         with bootstrap_engine.connect() as conn:
-            with pytest.raises((DataError, IntegrityError, InternalError, ProgrammingError)):
+            with pytest.raises(
+                (DataError, IntegrityError, InternalError, ProgrammingError)
+            ):
                 conn.execute(
                     text("""
                         INSERT INTO wims.users (user_id, keycloak_id, username, role)
@@ -438,10 +508,17 @@ class TestRLSAllowsActiveEncoder:
                         INSERT INTO wims.users (user_id, keycloak_id, username, role, is_active, assigned_region_id)
                         VALUES (:uid, :kid, :username, 'REGIONAL_ENCODER', TRUE, :rid)
                     """),
-                    {"uid": user_id, "kid": keycloak_id, "username": f"encoder_{user_id.hex[:8]}", "rid": region_id},
+                    {
+                        "uid": user_id,
+                        "kid": keycloak_id,
+                        "username": f"encoder_{user_id.hex[:8]}",
+                        "rid": region_id,
+                    },
                 )
                 conn.commit()
-                conn.execute(text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)})
+                conn.execute(
+                    text("SET LOCAL wims.current_user_id = :uid"), {"uid": str(user_id)}
+                )
                 result = conn.execute(
                     text("""
                         INSERT INTO wims.fire_incidents
@@ -457,8 +534,18 @@ class TestRLSAllowsActiveEncoder:
         finally:
             with bootstrap_engine.connect() as conn:
                 if incident_id:
-                    conn.execute(text("DELETE FROM wims.fire_incidents WHERE incident_id = :iid"), {"iid": incident_id})
-                conn.execute(text("DELETE FROM wims.users WHERE user_id = :uid"), {"uid": user_id})
+                    conn.execute(
+                        text(
+                            "DELETE FROM wims.fire_incidents WHERE incident_id = :iid"
+                        ),
+                        {"iid": incident_id},
+                    )
+                conn.execute(
+                    text("DELETE FROM wims.users WHERE user_id = :uid"),
+                    {"uid": user_id},
+                )
                 conn.commit()
 
-        assert incident_id is not None, "Active REGIONAL_ENCODER with matching region must be allowed to INSERT"
+        assert incident_id is not None, (
+            "Active REGIONAL_ENCODER with matching region must be allowed to INSERT"
+        )
