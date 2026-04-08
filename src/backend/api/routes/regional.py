@@ -21,7 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import get_regional_encoder
-from database import get_db
+from database import get_db, get_db_with_rls
 from services.analytics_read_model import sync_incidents_batch
 from utils.crypto import SecurityProvider, SecurityProviderError
 
@@ -1068,7 +1068,7 @@ def parse_xlsx_content(
 async def import_afor_file(
     file: UploadFile = File(...),
     user: dict = Depends(get_regional_encoder),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_with_rls),
 ):
     """
     Upload and parse an AFOR file (.xlsx or .csv).
@@ -1317,7 +1317,7 @@ def _commit_wildland_afor_row(
 async def commit_afor_import(
     request: Request,
     user: Annotated[dict, Depends(get_regional_encoder)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """
     Commit validated AFOR rows to the database.
@@ -1649,7 +1649,7 @@ async def commit_afor_import(
 @router.get("/incidents")
 def get_regional_incidents(
     user: Annotated[dict, Depends(get_regional_encoder)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     category: Optional[str] = None,
@@ -1735,7 +1735,7 @@ def get_regional_incidents(
 def get_regional_incident_detail(
     incident_id: int,
     user: Annotated[dict, Depends(get_regional_encoder)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Fetch a single incident detail, scoped to user's region."""
     region_id = user["assigned_region_id"]
@@ -1818,7 +1818,7 @@ def get_regional_incident_detail(
 @router.get("/stats", response_model=RegionalStatsResponse)
 def get_regional_stats(
     user: Annotated[dict, Depends(get_regional_encoder)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Quick summary stats scoped to the user's region."""
     region_id = user["assigned_region_id"]
