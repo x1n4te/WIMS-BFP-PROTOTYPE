@@ -29,6 +29,13 @@ AUDIENCE = os.environ.get(
     "KEYCLOAK_AUDIENCE", os.environ.get("KEYCLOAK_CLIENT_ID", "bfp-client")
 )
 JWKS_CACHE_TTL_SECONDS = 60  # 60 seconds — Keycloak key rotation typically hourly/daily; balance freshness vs latency
+# Issuer URL as it appears in JWT `iss` claim — differs from KEYCLOAK_REALM_URL
+# when Keycloak is accessed externally (browser → localhost:8080) vs internally
+# (container network → keycloak:8080). Set KEYCLOAK_ISSUER so jwt.decode()
+# validates the token's iss claim against the browser-visible issuer.
+KEYCLOAK_ISSUER = os.environ.get(
+    "KEYCLOAK_ISSUER", KEYCLOAK_REALM_URL.rstrip("/") + "/"
+)
 
 
 class KeycloakAuthenticator:
@@ -151,7 +158,7 @@ class KeycloakAuthenticator:
                         else public_key,
                         algorithms=["RS256"],
                         audience=AUDIENCE,
-                        issuer=KEYCLOAK_REALM_URL.rstrip("/") + "/",
+                        issuer=KEYCLOAK_ISSUER,
                         options={
                             "verify_at_hash": False,
                             "require": ["exp", "iat", "iss", "aud"],
