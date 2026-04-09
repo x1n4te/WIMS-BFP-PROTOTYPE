@@ -64,12 +64,14 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /auth/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      test: ["CMD-SHELL","exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /auth/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && cat <&3 | grep -qE '200 OK|302'"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
     restart: always
+    ports:
+      - "8080:8080"
 
   ollama:
     image: ollama/ollama:latest
@@ -83,12 +85,6 @@ services:
         limits:
           cpus: '2'
           memory: 4gb
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
     restart: always
 
   # --- Applications ---
@@ -118,7 +114,7 @@ services:
       keycloak:
         condition: service_healthy
       ollama:
-        condition: service_healthy
+        condition: service_started
 
   celery-worker:
     build: ./backend
@@ -165,6 +161,8 @@ services:
       - wims_internal
     depends_on:
       - backend
+    ports:
+      - "3000:3000"
 
   wims-suricata:
     image: jasonish/suricata:latest
