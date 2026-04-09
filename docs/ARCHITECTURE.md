@@ -70,6 +70,31 @@ This aligns with glossary terms: civilian intake, validator-centered verificatio
 - No hard-delete admin endpoint is defined in admin route modules; updates are mutation-oriented (user/log state updates and audit readout).
 - PII fields (`caller_name`, `caller_number`, `owner_name`, `street_address`) are encrypted at rest using AES-256-GCM via `utils/crypto.py`. Plaintext PII columns are always `NULL` for new writes.
 
+## XAI Pipeline (Suricata → Qwen2.5-3B → Forensic Narratives)
+
+The Explainable AI layer translates Suricata IDS alerts into human-readable reports. It does NOT perform threat detection — Suricata handles that deterministically. The SLM only translates.
+
+```
+Suricata IDS → EVE JSON → Celery worker → FastAPI extracts metadata → Prompt template → Qwen2.5-3B → Narrative → security_threat_logs
+```
+
+| Component | Role |
+|---|---|
+| Suricata | Detection (signature-based rules, deterministic) |
+| Celery (`suricata.py`) | Async task processing, deduplication, rate limiting |
+| FastAPI | Metadata extraction from EVE JSON |
+| Prompt template | "Sovereign Forensic Template" — structured prompt with alert fields |
+| Qwen2.5-3B | Translation (JSON → plain English narrative) |
+| Llama.cpp | Inference runtime (quantized, consumer hardware) |
+
+**Design principle:** The cybersecurity knowledge lives in the Suricata rules, not the model. The SLM is a translator, not a security analyst.
+
+**NFR target:** Mean inference latency <5s per alert.
+
+**Evaluation:** Narrative quality measured via MOS (Mean Opinion Score) by non-technical BFP personnel. Detection accuracy measured via F1-Score on Suricata side (not SLM side).
+
+**Key optimization:** Template quality drives 90% of output quality. Model upgrades give marginal improvement over prompt iteration.
+
 ## Database Session Management
 
 `database.py` uses eager initialization — `_engine` and `_SessionLocal` are created at module import time (not lazily). Two FastAPI dependency functions are exposed:

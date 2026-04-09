@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **XAI Pipeline documentation:** `docs/ARCHITECTURE.md` now documents the full Suricata → Qwen2.5-3B → narrative pipeline, including design principle (SLM translates, Suricata detects), component roles, NFR targets, and optimization priorities.
+
 - **Regional Encoder CRUD — full lifecycle:** `POST /api/regional/incidents` (create with DRAFT status), `PUT /api/regional/incidents/{id}` (update with status gating), `DELETE /api/regional/incidents/{id}` (soft-delete). PII fields encrypted via AES-256-GCM. Status gates: DRAFT/PENDING/REJECTED editable, VERIFIED blocked (403); soft-delete DRAFT only.
 - **Integration tests — Regional CRUD:** 15 tests in `tests/integration/test_regional_crud.py` covering create (minimal, nonsensitive, PII, unauthorized), read (list, detail, nonexistent), update (nonsensitive, sensitive, nonexistent, verified-blocked), delete (draft, nonexistent, pending-blocked, verified-blocked).
 - **Database session refactor:** `get_db()` (bare session, no RLS) and `get_db_with_rls(request)` (RLS-aware) split to avoid dependency cycle. Eager initialization of `_engine` and `_SessionLocal` at module load.
