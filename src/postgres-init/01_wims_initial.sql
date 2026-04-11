@@ -1382,7 +1382,7 @@ CREATE POLICY security_logs_admin_only
 ON wims.security_threat_logs
 FOR ALL
 USING (wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST'))
-WITH CHECK (wims.current_user_role() IN ('SYSTEM_ADMIN'));
+WITH CHECK (wims.current_user_role() IN ('SYSTEM_ADMIN', 'NATIONAL_ANALYST'));
 
 CREATE POLICY audit_trails_read_admin_or_self
 ON wims.system_audit_trails
