@@ -2230,19 +2230,19 @@
           "requirement": "ALTERNATIVE",
           "priority": 0,
           "displayName": "browser-with-mfa forms",
-          "autheticatorFlow": true,
-          "authenticatorFlow": true
+          "authenticatorFlow": true,
+          "autheticatorFlow": true
         },
         {
           "requirement": "REQUIRED",
           "priority": 0
         },
         {
-          "requirement": "REQUIRED",
+          "requirement": "CONDITIONAL",
           "priority": 0,
           "displayName": "mfa-otp",
-          "autheticatorFlow": true,
-          "authenticatorFlow": true
+          "authenticatorFlow": true,
+          "autheticatorFlow": true
         },
         {
           "requirement": "REQUIRED",
