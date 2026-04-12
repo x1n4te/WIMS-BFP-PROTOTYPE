@@ -349,17 +349,17 @@ export default function AdminSystemPage() {
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
                     <div className="rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto bg-[var(--background)] text-[var(--foreground)]">
                         <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800">
-                            <h3 className="text-lg font-bold text-[var(--foreground)]">Suricata Alert #{selectedLog.log_id}</h3>
+                            <h3 className="text-lg font-bold text-[var(--foreground)] text-white">Suricata Alert #{selectedLog.log_id}</h3>
                             <button onClick={() => { setSelectedLog(null); setActionNote(''); }} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"><XCircle className="w-6 h-6" /></button>
                         </div>
                         <div className="p-6 space-y-4 text-[var(--foreground)]">
                             <div className="bg-purple-50 dark:bg-purple-950/40 p-4 rounded-lg border border-purple-100 dark:border-purple-800">
-                                <h4 className="text-xs font-bold text-gray-600 dark:text-gray-400 uppercase mb-2">AI Narrative</h4>
+                                <h4 className="text-xs font-bold text-white dark:text-white uppercase mb-2">AI Narrative</h4>
                                 {selectedLog.xai_narrative ? (
                                     <>
                                         <p className="text-sm text-[var(--foreground)]">{selectedLog.xai_narrative}</p>
                                         {selectedLog.xai_confidence != null && (
-                                            <div className="mt-2 text-xs text-purple-600 dark:text-purple-300 font-medium text-right">
+                                            <div className="mt-2 text-xs text-purple-800 dark:text-purple600 font-medium text-right">
                                                 Confidence: {((selectedLog.xai_confidence ?? 0) * 100).toFixed(1)}%
                                             </div>
                                         )}
