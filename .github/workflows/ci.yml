@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master, fix/*, feature/*, refactor/*, hotfix/*]
+
+env:
+  NODE_VERSION: "20"
+  PYTHON_VERSION: "3.12"
+  KEYCLOAK_REALM_URL: "http://localhost:8080/auth/realms/bfp"
+  KEYCLOAK_CLIENT_ID: "bfp-client"
+  KEYCLOAK_AUDIENCE: "account"
+  DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/wims_test"
+  REDIS_URL: "redis://localhost:6379/0"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # FRONTEND — Next.js lint + build
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (lint + build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: src/frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Build Next.js
+        run: npm run build
+        env:
+          NEXT_PUBLIC_AUTH_API_URL: "http://localhost:8080/auth/realms/bfp"
+          NEXT_PUBLIC_MAPBOX_TOKEN: ""
+          NEXT_PUBLIC_BASE_URL: "http://localhost"
+
+  # ---------------------------------------------------------------------------
+  # BACKEND — FastAPI lint + test (with PostgreSQL + Redis services)
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Backend (lint + test)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: src/backend
+
+    services:
+      postgres:
+        image: postgis/postgis:15-3.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wims_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: src/backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install ruff
+          pip install -r requirements.txt
+
+      - name: Run Ruff linter
+        run: ruff check .
+
+      - name: Run Ruff formatter check
+        run: ruff format --check .
+
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -U postgres && echo "PostgreSQL ready" && break
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 1
+          done
+
+      - name: Initialize test database schema
+        run: |
+          export PGPASSWORD=postgres
+          # Init scripts create the wims schema + tables inside wims_test DB.
+          # Skip 02_wims_schema.sql — it only re-includes 01_wims_initial.sql via \ir.
+          psql -v ON_ERROR_STOP=1 -h localhost -p 5432 -U postgres -d wims_test \
+            -f "$GITHUB_WORKSPACE/src/postgres-init/01_wims_initial.sql"
+          psql -v ON_ERROR_STOP=1 -h localhost -p 5432 -U postgres -d wims_test \
+            -f "$GITHUB_WORKSPACE/src/postgres-init/03_seed_reference.sql"
+        env:
+          PGPASSWORD: postgres
+
+      - name: Run pytest
+        run: pytest -v --tb=short --ignore=tests/test_rate_limiting.py --ignore=tests/test_suricata_ingestion.py
+        env:
+          KEYCLOAK_REALM_URL: ${{ env.KEYCLOAK_REALM_URL }}
+          KEYCLOAK_CLIENT_ID: ${{ env.KEYCLOAK_CLIENT_ID }}
+          KEYCLOAK_AUDIENCE: ${{ env.KEYCLOAK_AUDIENCE }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wims_test
+          REDIS_URL: ${{ env.REDIS_URL }}
+          WIMS_MASTER_KEY: ${{ secrets.WIMS_MASTER_KEY }}
+
+  # ---------------------------------------------------------------------------
+  # MERGE GATE — all CI jobs must pass before merge is allowed
+  # ---------------------------------------------------------------------------
+  merge-gate:
+    name: Merge Gate
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    if: always()
+
+    steps:
+      - name: Block merge on failure
+        if: |
+          needs.frontend.result != 'success' ||
+          needs.backend.result != 'success'
+        run: |
+          echo "Frontend: ${{ needs.frontend.result }}"
+          echo "Backend: ${{ needs.backend.result }}"
+          echo "One or more jobs failed. Merge blocked."
+          exit 1

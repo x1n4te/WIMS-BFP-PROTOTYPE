@@ -1,6 +1,5 @@
 import hashlib
 import os
-import shutil
 import uuid
 from typing import Annotated
 
@@ -9,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import get_current_wims_user
-from database import get_db
+from database import get_db_with_rls
 from schemas.incident import IncidentCreate, IncidentResponse
 from services.analytics_read_model import sync_incident_to_analytics
 
@@ -17,11 +16,12 @@ router = APIRouter(prefix="/api", tags=["incidents"])
 
 STORAGE_DIR = "/app/storage/attachments"
 
+
 @router.post("/incidents/{incident_id}/attachments", status_code=201)
 async def upload_attachment(
     incident_id: int,
     file: UploadFile = File(...),
-    db: Annotated[Session, Depends(get_db)] = None,
+    db: Annotated[Session, Depends(get_db_with_rls)] = None,
     user: Annotated[dict, Depends(get_current_wims_user)] = None,
 ):
     """
@@ -35,9 +35,9 @@ async def upload_attachment(
     # For now, just check existence
     incident = db.execute(
         text("SELECT incident_id FROM wims.fire_incidents WHERE incident_id = :iid"),
-        {"iid": incident_id}
+        {"iid": incident_id},
     ).fetchone()
-    
+
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
@@ -52,8 +52,9 @@ async def upload_attachment(
             while content := await file.read(1024 * 1024):  # Read in chunks
                 sha256_hash.update(content)
                 buffer.write(content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+    except Exception:
+        logger.exception("Failed to save uploaded file")
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
 
     # 3. Record in DB
     try:
@@ -71,28 +72,29 @@ async def upload_attachment(
                 "path": storage_path,
                 "mime": file.content_type,
                 "hash": sha256_hash.hexdigest(),
-                "uid": user["user_id"]
-            }
+                "uid": user["user_id"],
+            },
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
         if os.path.exists(storage_path):
             os.remove(storage_path)
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        logger.exception("Database error during attachment upload")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     return {
         "status": "ok",
         "attachment_id": incident_id,  # Serial ID, but we don't have it immediately without RETURNING
-        "message": "Attachment uploaded successfully"
+        "message": "Attachment uploaded successfully",
     }
 
 
 @router.post("/incidents", response_model=IncidentResponse, status_code=201)
 def create_incident(
     body: IncidentCreate,
-    db: Annotated[Session, Depends(get_db)],
     user: Annotated[dict, Depends(get_current_wims_user)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ) -> IncidentResponse:
     """
     Create a fire incident from geospatial intake.
@@ -102,9 +104,13 @@ def create_incident(
     user_id = user["user_id"]
 
     # Resolve a default region (required by schema)
-    region_row = db.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
+    region_row = db.execute(
+        text("SELECT region_id FROM wims.ref_regions LIMIT 1")
+    ).fetchone()
     if region_row is None:
-        raise HTTPException(status_code=500, detail="No ref_regions seed data — cannot create incident")
+        raise HTTPException(
+            status_code=500, detail="No ref_regions seed data — cannot create incident"
+        )
 
     region_id = region_row[0]
 
@@ -133,7 +139,9 @@ def create_incident(
 
     # Extract lat/lon from PostGIS geography for response
     coord_row = db.execute(
-        text("SELECT ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lon FROM wims.fire_incidents WHERE incident_id = :iid"),
+        text(
+            "SELECT ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lon FROM wims.fire_incidents WHERE incident_id = :iid"
+        ),
         {"iid": incident_id},
     ).fetchone()
 

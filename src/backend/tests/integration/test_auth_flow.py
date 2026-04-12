@@ -77,9 +77,7 @@ def cleanup_test_user(engine, unique_identity):
 
 
 @respx.mock
-def test_auth_callback_idempotent_same_user_twice(
-    unique_identity, cleanup_test_user
-):
+def test_auth_callback_idempotent_same_user_twice(unique_identity, cleanup_test_user):
     """
     Same user logs in twice — both calls succeed, same user_id returned.
     Proves idempotency: no IntegrityError on users_username_key.
@@ -90,17 +88,24 @@ def test_auth_callback_idempotent_same_user_twice(
 
     # Mock Keycloak token endpoint
     token_url = main_module.TOKEN_ENDPOINT
-    respx.post(token_url).mock(return_value=respx.MockResponse(
-        status_code=200,
-        json={"access_token": fake_token},
-    ))
+    respx.post(token_url).mock(
+        return_value=respx.MockResponse(
+            status_code=200,
+            json={"access_token": fake_token},
+        )
+    )
 
-    # Mock JWT validation to return our payload
+    # Mock JWT validation to return our payload with a valid FRS role.
+    # Tokens without a recognized WIMS role are now rejected (strict FRS enforcement).
     with patch.object(
         main_module.auth.authenticator,
         "validate_token",
         new_callable=AsyncMock,
-        return_value={"sub": sub, "preferred_username": username},
+        return_value={
+            "sub": sub,
+            "preferred_username": username,
+            "realm_access": {"roles": ["REGIONAL_ENCODER"]},
+        },
     ):
         client = TestClient(main_module.app)
 

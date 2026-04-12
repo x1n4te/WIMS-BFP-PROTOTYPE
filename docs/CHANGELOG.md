@@ -6,6 +6,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Keycloak configuration persisted to realm JSON:** Audience mapper, 5 custom roles, and 5 test users now in `src/keycloak/bfp-realm.json`. Previously all config was done via admin API and lost on container recreation.
+- **Keycloak documentation:** `docs/ARCHITECTURE.md` now documents realm JSON vs scripts, auth env vars, and the KEYCLOAK_REALM_URL vs KEYCLOAK_ISSUER split.
+
+- **XAI Pipeline documentation:** `docs/ARCHITECTURE.md` now documents the full Suricata → Qwen2.5-3B → narrative pipeline, including design principle (SLM translates, Suricata detects), component roles, NFR targets, and optimization priorities.
+
+- **Regional Encoder CRUD — full lifecycle:** `POST /api/regional/incidents` (create with DRAFT status), `PUT /api/regional/incidents/{id}` (update with status gating), `DELETE /api/regional/incidents/{id}` (soft-delete). PII fields encrypted via AES-256-GCM. Status gates: DRAFT/PENDING/REJECTED editable, VERIFIED blocked (403); soft-delete DRAFT only.
+- **Integration tests — Regional CRUD:** 15 tests in `tests/integration/test_regional_crud.py` covering create (minimal, nonsensitive, PII, unauthorized), read (list, detail, nonexistent), update (nonsensitive, sensitive, nonexistent, verified-blocked), delete (draft, nonexistent, pending-blocked, verified-blocked).
+- **Database session refactor:** `get_db()` (bare session, no RLS) and `get_db_with_rls(request)` (RLS-aware) split to avoid dependency cycle. Eager initialization of `_engine` and `_SessionLocal` at module load.
+- **Docs:** `CHANGELOG.md` moved to `docs/CHANGELOG.md`. Regional CRUD endpoints documented in `docs/API_AND_FUNCTIONS.md`. Database session management documented in `docs/ARCHITECTURE.md`.
+
+### Changed
+- **`database.py`:** Removed lazy initialization pattern (`_engine = None`, `_SessionLocal = None`). Engine and sessionmaker now initialized eagerly at import time. Added `load_dotenv()` before `SQLALCHEMY_DATABASE_URL` resolution to ensure `.env` is loaded before connection URL is read.
+- **Error message leakage:** 4 instances of `str(e)` in `HTTPException.detail` replaced with generic messages + `logger.exception` in `regional.py`.
+- **Docker lockdown:** Suricata container mounts changed to read-only (`:ro`), healthchecks added for postgres/redis/keycloak, `depends_on` with health conditions.
+
+### Removed
+- Stale files: `.ai-context/` (3 files), `SCHEMA_MERGE_NOTES.md`, `archive/sql/` (2 files), `implementation_plan.md`, `patch_realm.py`, `run_fire_incident_tests.sh`, `scan_xlsx.py`, `tasks.md`, `verify_coordinate_parser.py` (1,655 lines removed).
+
+### Fixed
+- **`_SessionLocal` TypeError:** Tests failed with `'NoneType' object is not callable` due to lazy init not being called before test fixture import. Fixed by eager initialization.
+- **Database hostname resolution:** Tests failed with `could not translate host name "postgres"` because `load_dotenv()` ran after `SQLALCHEMY_DATABASE_URL` was read. Fixed by loading `.env` before URL resolution.
+
+### Added
+- **Security — AES-256-GCM PII encryption:** Implemented zero-trust AES-256-GCM encryption for `incident_sensitive_details` PII blob. `caller_name`, `caller_number`, `owner_name`, and `occupant_name` are now stored exclusively in an encrypted blob (`pii_blob_enc`) with a 12-byte nonce (`encryption_iv`), bound to the record via AAD (`incident_id:N`). Plaintext PII columns are always `NULL` for new writes; decryption falls back to legacy columns if blob is absent. Commits `182fb46`, `65fd600` (`src/backend/utils/crypto.py`, `src/backend/api/routes/regional.py`).
+- **Security — Hardened caller_info parsing:** Fixed `caller_info` parsing to correctly handle the slash-delimited `"Name / Number"` format at the top-level AFOR row field. All PII values are validated before inclusion in the encrypted blob; malformed or missing delimiters do not cause silent data loss.
+- **Security — Audit trail:** SecurityProvider logs `CRITICAL` events (decryption failures) with `incident_id` only — never logs nonce, ciphertext, or plaintext.
+- **Tests — Flat import refactor:** Refactored `src/backend/tests/` to use flat container imports (`from models.x import X` instead of `from backend.models.x`) for correct operation inside the Docker container at `/app`. Claude Code identified 1 file, 2 imports affected.
+
+### Changed
 - feat(auth): enforce role-based OTP for admin/validator with 7-day trusted device
 - **Regional encoder UI:** Dashboard incident table with server `total`, `limit`/`offset` pagination (page sizes 10 / 25 / 50), `category` and `status` filters, and region-scoped detail at `/dashboard/regional/incidents/[id]` using `GET /api/regional/incidents/{id}`. Client: `fetchRegionalIncident`, `buildRegionalIncidentsQueryString`, and pagination helpers in `src/frontend/src/lib/regional-incidents.ts`.
 - **Regional AFOR — WGS84:** `POST /api/regional/afor/commit` requires JSON **`latitude`** and **`longitude`** (finite WGS84 numbers). `POST /api/regional/afor/import` preview includes **`requires_location`** when coordinates must be supplied before commit (templates do not embed reliable coords). Polygon/region-boundary checks are not enforced yet — follow-up if a shared geometry helper is added.

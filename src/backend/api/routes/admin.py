@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import get_system_admin
-from database import get_db
+from database import get_db, get_db_with_rls
 from services.ai_service import analyze_threat_log
 from services.analytics_read_model import backfill_analytics_facts
 
@@ -20,7 +20,13 @@ router = APIRouter(tags=["admin"])
 # Schemas
 # ---------------------------------------------------------------------------
 
-VALID_ROLES = ("ENCODER", "VALIDATOR", "ANALYST", "NATIONAL_ANALYST", "ADMIN", "SYSTEM_ADMIN", "REGIONAL_ENCODER")
+VALID_ROLES = (
+    "CIVILIAN_REPORTER",
+    "REGIONAL_ENCODER",
+    "NATIONAL_VALIDATOR",
+    "NATIONAL_ANALYST",
+    "SYSTEM_ADMIN",
+)
 
 
 class UserUpdate(BaseModel):
@@ -45,10 +51,11 @@ class SecurityLogUpdate(BaseModel):
 # Identity Management
 # ---------------------------------------------------------------------------
 
+
 @router.get("/users")
 def get_users(
     _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Return all users. Keycloak IDs masked for privacy."""
     rows = db.execute(
@@ -86,7 +93,7 @@ def update_user(
     user_id: str,
     body: UserUpdate,
     _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Update role, assigned_region_id, or is_active. No DELETE."""
     updates = []
@@ -116,10 +123,11 @@ def update_user(
 # Security Telemetry
 # ---------------------------------------------------------------------------
 
+
 @router.get("/security-logs")
 def get_security_logs(
     _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Fetch security threat logs ordered by timestamp descending."""
     rows = db.execute(
@@ -155,7 +163,7 @@ def get_security_logs(
 async def analyze_security_log(
     log_id: int,
     _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Run AI analysis on a security threat log via Ollama. Updates xai_narrative and xai_confidence."""
     return await analyze_threat_log(log_id, db)
@@ -166,7 +174,7 @@ def update_security_log(
     log_id: int,
     body: SecurityLogUpdate,
     _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Update admin_action_taken and resolved_at."""
     updates = []
@@ -193,10 +201,11 @@ def update_security_log(
 # Analytics Read Model
 # ---------------------------------------------------------------------------
 
+
 @router.post("/analytics/backfill")
 def backfill_analytics(
     _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Backfill wims.analytics_incident_facts from existing VERIFIED non-archived incidents."""
     count = backfill_analytics_facts(db)
@@ -207,10 +216,11 @@ def backfill_analytics(
 # Audit Oversight
 # ---------------------------------------------------------------------------
 
+
 @router.get("/audit-logs")
 def get_audit_logs(
     _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
@@ -226,9 +236,12 @@ def get_audit_logs(
         {"limit": limit, "offset": offset},
     ).fetchall()
 
-    total = db.execute(
-        text("SELECT COUNT(*) FROM wims.system_audit_trails"),
-    ).scalar() or 0
+    total = (
+        db.execute(
+            text("SELECT COUNT(*) FROM wims.system_audit_trails"),
+        ).scalar()
+        or 0
+    )
 
     return {
         "items": [

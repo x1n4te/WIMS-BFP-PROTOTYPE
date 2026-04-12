@@ -3,7 +3,9 @@ node_modules/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
 .venv/
+.venv-test/
 venv/
 env/
 
@@ -36,3 +38,14 @@ src/suricata/logs/
 # OS
 .DS_Store
 Thumbs.db
+CLAUDE.md
+
+# Cursor / agent tooling (local only)
+.cursor/
+.ai-context/
+
+# Office temp/lock files
+**/.~lock.*
+
+# Local AFOR filled workbook (if not meant for version control)
+AFORs/afor_filled.xlsx

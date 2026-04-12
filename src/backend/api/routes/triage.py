@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import get_current_wims_user
-from database import get_db
+from database import get_db_with_rls
 from services.analytics_read_model import sync_incident_to_analytics
 
 router = APIRouter(prefix="/api/triage", tags=["triage"])
@@ -16,17 +16,20 @@ router = APIRouter(prefix="/api/triage", tags=["triage"])
 def _require_encoder_or_validator(
     current_user: Annotated[dict, Depends(get_current_wims_user)],
 ) -> dict:
-    """Require ENCODER or VALIDATOR role."""
+    """Require REGIONAL_ENCODER or NATIONAL_VALIDATOR role."""
     role = current_user.get("role")
-    if role not in ("ENCODER", "VALIDATOR"):
-        raise HTTPException(status_code=403, detail="ENCODER or VALIDATOR role required")
+    if role not in ("REGIONAL_ENCODER", "NATIONAL_VALIDATOR"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role '{role}' does not have permission to access this resource",
+        )
     return current_user
 
 
 @router.get("/pending")
 def get_pending_reports(
     user: Annotated[dict, Depends(_require_encoder_or_validator)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """
     Return citizen_reports where status == 'PENDING'.
@@ -59,7 +62,7 @@ def get_pending_reports(
 def promote_report(
     report_id: int,
     user: Annotated[dict, Depends(_require_encoder_or_validator)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """
     Promote a PENDING citizen_report to an official fire_incident.
@@ -89,7 +92,9 @@ def promote_report(
     user_id = user["user_id"]
 
     # Resolve default region (required by fire_incidents schema)
-    region_row = db.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
+    region_row = db.execute(
+        text("SELECT region_id FROM wims.ref_regions LIMIT 1")
+    ).fetchone()
     if region_row is None:
         raise HTTPException(status_code=500, detail="No ref_regions seed data")
 
