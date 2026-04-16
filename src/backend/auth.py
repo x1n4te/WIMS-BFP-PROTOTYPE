@@ -253,7 +253,7 @@ async def get_current_wims_user(
     try:
         row = db.execute(
             text(
-                "SELECT user_id, role FROM wims.users WHERE keycloak_id = :kid AND is_active = TRUE"
+                "SELECT user_id, role, username FROM wims.users WHERE keycloak_id = :kid AND is_active = TRUE"
             ),
             {"kid": keycloak_sub},
         ).fetchone()
@@ -269,7 +269,7 @@ async def get_current_wims_user(
         try:
             row_by_username = db.execute(
                 text(
-                    "SELECT user_id, role, keycloak_id "
+                    "SELECT user_id, role, keycloak_id, username "
                     "FROM wims.users "
                     "WHERE username = :uname AND is_active = TRUE"
                 ),
@@ -288,9 +288,15 @@ async def get_current_wims_user(
         if existing_keycloak_id is not None and str(existing_keycloak_id) != keycloak_sub:
             raise HTTPException(status_code=403, detail="User identity mismatch")
 
-        row = (row_by_username[0], row_by_username[1])
+        row = (row_by_username[0], row_by_username[1], row_by_username[3])
 
-    user_dict = {"user_id": row[0], "keycloak_id": keycloak_sub, "role": row[1]}
+    user_dict = {
+        "user_id": row[0],
+        "keycloak_id": keycloak_sub,
+        "role": row[1],
+        "username": row[2],
+        "kc_username": token_payload.get("preferred_username")
+    }
 
     # Attach to request.state so get_db() can set the RLS GUC for this transaction
     request.state.wims_user = user_dict

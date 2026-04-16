@@ -36,7 +36,17 @@ export async function apiFetch<T>(
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((json as { message?: string; detail?: string }).message ?? (json as { detail?: string }).detail ?? `Request failed: ${res.status}`);
+    let errMsg = `Request failed: ${res.status}`;
+    if (json.detail) {
+      if (typeof json.detail === 'string') {
+        errMsg = json.detail;
+      } else if (Array.isArray(json.detail)) {
+        errMsg = json.detail.map((e: any) => e.msg).join(', ');
+      }
+    } else if (json.message) {
+      errMsg = json.message;
+    }
+    throw new Error(errMsg);
   }
   return json as T;
 }
@@ -161,6 +171,58 @@ export async function updateAdminUser(
   payload: { role?: string; assigned_region_id?: number; is_active?: boolean }
 ): Promise<{ status: string; user_id: string }> {
   return apiFetch(`/admin/users/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Create a new user (admin onboarding) - POST /admin/users */
+export async function createAdminUser(payload: {
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  contact_number?: string;
+  assigned_region_id?: number;
+}): Promise<{
+  status: string;
+  keycloak_id: string;
+  username: string;
+  role: string;
+  temporary_password: string;
+  note: string;
+}> {
+  return apiFetch('/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Fetch current user's profile details */
+export async function fetchMyProfile(): Promise<{ first_name: string; last_name: string; contact_number: string }> {
+  return apiFetch('/user/me/profile');
+}
+
+/** Update current user's own profile - PATCH /user/me */
+export async function updateMyProfile(payload: {
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  contact_number?: string;
+}): Promise<{ status: string; message: string }> {
+  return apiFetch('/user/me', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Change current user's own password - PATCH /user/me/password */
+export async function changeMyPassword(payload: {
+  current_password: string;
+  new_password: string;
+  otp_code?: string;
+}): Promise<{ status: string; message: string }> {
+  return apiFetch('/user/me/password', {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
