@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  apiFetch,
   submitCivilianReport,
   fetchHeatmapData,
   fetchTrendData,
@@ -21,6 +22,47 @@ import {
   offsetFromPage,
   totalRegionalPages,
 } from './regional-incidents';
+
+describe('apiFetch content-type handling', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok' }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sets application/json when body is JSON string', async () => {
+    await apiFetch('/regional/afor/commit', {
+      method: 'POST',
+      body: JSON.stringify({ hello: 'world' }),
+    });
+
+    const [, options] = fetchSpy.mock.calls[0];
+    const headers = new Headers(options?.headers as HeadersInit | undefined);
+    expect(headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('does not force application/json when body is FormData', async () => {
+    const fd = new FormData();
+    fd.append('file', new Blob(['x'], { type: 'text/plain' }), 'test.txt');
+
+    await apiFetch('/regional/afor/import', {
+      method: 'POST',
+      body: fd,
+    });
+
+    const [, options] = fetchSpy.mock.calls[0];
+    const headers = new Headers(options?.headers as HeadersInit | undefined);
+    expect(headers.has('Content-Type')).toBe(false);
+  });
+});
 
 describe('submitCivilianReport', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
