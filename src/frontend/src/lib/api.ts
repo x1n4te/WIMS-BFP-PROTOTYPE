@@ -67,7 +67,11 @@ export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = path.startsWith('http') ? path : `${API_BASE.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
+  const normalizedPath =
+    path === '/api' ? '/' : path.startsWith('/api/') ? path.slice(4) : path;
+  const url = normalizedPath.startsWith('http')
+    ? normalizedPath
+    : `${API_BASE.replace(/\/$/, '')}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
   const headers = new Headers(options.headers ?? {});
   const isFormDataBody = typeof FormData !== 'undefined' && options.body instanceof FormData;
   if (!isFormDataBody && !headers.has('Content-Type')) {

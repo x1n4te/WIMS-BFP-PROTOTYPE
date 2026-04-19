@@ -14,10 +14,15 @@ export function LayoutShell({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker
-                .register('/sw.js')
-                .then((registration) => console.log('Scope: ', registration.scope))
-                .catch((err) => console.log('SW Registration Failed: ', err));
+            navigator.serviceWorker.getRegistrations()
+                .then((registrations) => Promise.all(registrations.map((r) => r.unregister())))
+                .catch((err) => console.log('SW unregister failed: ', err));
+        }
+
+        if ('caches' in window) {
+            caches.keys()
+                .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+                .catch((err) => console.log('Cache cleanup failed: ', err));
         }
     }, []);
 

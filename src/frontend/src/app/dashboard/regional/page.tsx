@@ -25,12 +25,17 @@ export default function RegionalDashboardPage() {
   const { user, loading } = useAuth();
   const role = (user as { role?: string })?.role ?? null;
   const assignedRegionId = (user as { assignedRegionId?: number | null })?.assignedRegionId ?? null;
+  const canAccessRegional =
+    role === 'REGIONAL_ENCODER' ||
+    role === 'NATIONAL_VALIDATOR' ||
+    role === 'ENCODER' ||
+    role === 'VALIDATOR';
 
   useEffect(() => {
-    if (!loading && role !== 'REGIONAL_ENCODER') {
+    if (!loading && (!canAccessRegional || !assignedRegionId)) {
       router.replace('/dashboard');
     }
-  }, [loading, role, router]);
+  }, [loading, canAccessRegional, assignedRegionId, router]);
 
   const [stats, setStats] = useState<RegionalStatsPayload | null>(null);
   const [incidents, setIncidents] = useState<RegionalIncidentListItem[]>([]);
@@ -73,18 +78,18 @@ export default function RegionalDashboardPage() {
   }, [pageIndex, pageSize, categoryFilter, statusFilter]);
 
   useEffect(() => {
-    if (role === 'REGIONAL_ENCODER' && assignedRegionId) {
+    if (canAccessRegional && assignedRegionId) {
       loadStats().catch(() => {
         /* stats errors surface via empty cards */
       });
     }
-  }, [role, assignedRegionId, loadStats]);
+  }, [canAccessRegional, assignedRegionId, loadStats]);
 
   useEffect(() => {
-    if (role === 'REGIONAL_ENCODER' && assignedRegionId) {
+    if (canAccessRegional && assignedRegionId) {
       loadIncidents();
     }
-  }, [role, assignedRegionId, loadIncidents]);
+  }, [canAccessRegional, assignedRegionId, loadIncidents]);
 
   const refreshAll = async () => {
     setStatsRefreshing(true);
@@ -95,7 +100,7 @@ export default function RegionalDashboardPage() {
     }
   };
 
-  if (loading || role !== 'REGIONAL_ENCODER') {
+  if (loading || !canAccessRegional || !assignedRegionId) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center text-gray-500">
         Loading Regional Dashboard...

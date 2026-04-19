@@ -192,6 +192,18 @@ function getNavSections(role: string | null): NavSection[] {
         return sections;
     }
 
+    if (role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR') {
+        sections.push({
+            label: 'Navigation',
+            items: [
+                { label: 'Home', href: '/home', icon: Home },
+                { label: 'Validator Dashboard', href: '/dashboard/validator', icon: LayoutDashboard },
+                { label: 'Incidents', href: '/dashboard/validator', icon: Flame },
+            ],
+        });
+        return sections;
+    }
+
     // Add Incidents for non-system-admin and non-regional-encoder roles
     navItems.push({ label: 'Incidents', href: '/incidents', icon: Flame });
     sections.push({ label: 'Navigation', items: navItems });
@@ -202,10 +214,6 @@ function getNavSections(role: string | null): NavSection[] {
     if (role === 'ENCODER') {
         mgmtItems.push({ label: 'Manual Entry', href: '/incidents/create', icon: FileText });
         mgmtItems.push({ label: 'Import Data', href: '/incidents/import', icon: Upload });
-        mgmtItems.push({ label: 'Triage Queue', href: '/incidents/triage', icon: ClipboardList });
-    }
-
-    if (role === 'VALIDATOR') {
         mgmtItems.push({ label: 'Triage Queue', href: '/incidents/triage', icon: ClipboardList });
     }
 
