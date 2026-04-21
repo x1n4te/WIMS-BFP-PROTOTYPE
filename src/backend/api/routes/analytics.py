@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import get_analyst_or_admin
-from database import get_db, get_db_with_rls
+from database import get_db_with_rls
 from services.analytics_read_model import (
     count_in_range,
     get_heatmap_points,
@@ -24,12 +24,14 @@ from services.analytics_read_model import (
     get_response_time_by_region,
     get_compare_regions,
     get_top_n,
-    VALID_TOP_N_METRICS,
-    VALID_TOP_N_DIMENSIONS,
     verify_indexed_access,
 )
 
-from tasks.exports import export_incidents_csv_task, export_incidents_pdf_task, export_incidents_excel_task
+from tasks.exports import (
+    export_incidents_csv_task,
+    export_incidents_pdf_task,
+    export_incidents_excel_task,
+)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -54,15 +56,24 @@ def get_heatmap(
     """
     if damage_min is not None and damage_max is not None and damage_max < damage_min:
         from fastapi import HTTPException
-        raise HTTPException(status_code=422, detail="damage_max must be greater than or equal to damage_min")
+
+        raise HTTPException(
+            status_code=422,
+            detail="damage_max must be greater than or equal to damage_min",
+        )
 
     parsed_region_ids: Optional[list[int]] = None
     if region_ids:
         try:
-            parsed_region_ids = [int(x.strip()) for x in region_ids.split(",") if x.strip()]
+            parsed_region_ids = [
+                int(x.strip()) for x in region_ids.split(",") if x.strip()
+            ]
         except ValueError:
             from fastapi import HTTPException
-            raise HTTPException(status_code=422, detail="region_ids must be comma-separated integers")
+
+            raise HTTPException(
+                status_code=422, detail="region_ids must be comma-separated integers"
+            )
 
     points = get_heatmap_points(
         db,
@@ -112,10 +123,15 @@ def get_trends_route(
     parsed_region_ids: Optional[list[int]] = None
     if region_ids:
         try:
-            parsed_region_ids = [int(x.strip()) for x in region_ids.split(",") if x.strip()]
+            parsed_region_ids = [
+                int(x.strip()) for x in region_ids.split(",") if x.strip()
+            ]
         except ValueError:
             from fastapi import HTTPException
-            raise HTTPException(status_code=422, detail="region_ids must be comma-separated integers")
+
+            raise HTTPException(
+                status_code=422, detail="region_ids must be comma-separated integers"
+            )
 
     data = get_trends(
         db,
@@ -304,12 +320,17 @@ def compare_regions_route(
 ):
     """Cross-region comparison. Requires at least 2 region IDs."""
     from fastapi import HTTPException
+
     try:
         parsed = [int(x.strip()) for x in region_ids.split(",") if x.strip()]
     except ValueError:
-        raise HTTPException(status_code=422, detail="region_ids must be comma-separated integers")
+        raise HTTPException(
+            status_code=422, detail="region_ids must be comma-separated integers"
+        )
     if len(parsed) < 2:
-        raise HTTPException(status_code=422, detail="At least 2 region_ids required for comparison")
+        raise HTTPException(
+            status_code=422, detail="At least 2 region_ids required for comparison"
+        )
     data = get_compare_regions(
         db,
         region_ids=parsed,

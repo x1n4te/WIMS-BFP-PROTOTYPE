@@ -605,9 +605,13 @@ def get_top_n(
 ) -> list[dict[str, Any]]:
     """Configurable top-N analysis by metric and dimension."""
     if metric not in VALID_TOP_N_METRICS:
-        raise ValueError(f"Invalid metric: {metric}. Must be one of {VALID_TOP_N_METRICS}")
+        raise ValueError(
+            f"Invalid metric: {metric}. Must be one of {VALID_TOP_N_METRICS}"
+        )
     if dimension not in VALID_TOP_N_DIMENSIONS:
-        raise ValueError(f"Invalid dimension: {dimension}. Must be one of {list(VALID_TOP_N_DIMENSIONS.keys())}")
+        raise ValueError(
+            f"Invalid dimension: {dimension}. Must be one of {list(VALID_TOP_N_DIMENSIONS.keys())}"
+        )
 
     dim_col = VALID_TOP_N_DIMENSIONS[dimension]
     if metric == "incidents":
@@ -638,4 +642,6 @@ def get_top_n(
         """),
         params,
     ).fetchall()
-    return [{"name": r[0], "value": float(r[1]) if r[1] is not None else 0} for r in rows]
+    return [
+        {"name": r[0], "value": float(r[1]) if r[1] is not None else 0} for r in rows
+    ]

@@ -110,7 +110,9 @@ def export_incidents_pdf_task(
 
     logger.info(
         "PDF export started: user_id=%s, filters=%s, columns=%s",
-        user_id, filters, valid_cols,
+        user_id,
+        filters,
+        valid_cols,
     )
 
     db = get_session()
@@ -124,7 +126,9 @@ def export_incidents_pdf_task(
     path = os.path.join(EXPORT_DIR, f"analytics_export_{uuid.uuid4().hex[:12]}.html")
 
     with open(path, "w", encoding="utf-8") as f:
-        f.write("<html><head><meta charset='utf-8'><title>WIMS-BFP Analytics Export</title></head><body>\n")
+        f.write(
+            "<html><head><meta charset='utf-8'><title>WIMS-BFP Analytics Export</title></head><body>\n"
+        )
         f.write("<h1>WIMS-BFP Incident Analytics Report</h1>\n")
         f.write(f"<p>Generated: {uuid.uuid4().hex[:8]}</p>\n")
         f.write("<table border='1' cellpadding='4'><thead><tr>")
@@ -153,7 +157,9 @@ def export_incidents_excel_task(
 
     logger.info(
         "Excel export started: user_id=%s, filters=%s, columns=%s",
-        user_id, filters, valid_cols,
+        user_id,
+        filters,
+        valid_cols,
     )
 
     db = get_session()
