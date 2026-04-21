@@ -2,7 +2,8 @@
 All endpoints protected by get_system_admin. No DELETE endpoints (Immutability Law)."""
 
 import logging
-from typing import Annotated, Optional
+import re
+from typing import Annotated, Literal, Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, field_validator
@@ -12,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import get_system_admin
-from database import get_db, get_db_with_rls
+from database import get_db_with_rls
 from services.ai_service import analyze_threat_log
 from services.analytics_read_model import backfill_analytics_facts
 from services.keycloak_admin import (
@@ -172,7 +173,9 @@ def create_user(
                 detail=f"Region ID {body.assigned_region_id} does not exist. Please select a valid region.",
             )
         logger.exception(f"DB IntegrityError for new user keycloak_id={keycloak_id}")
-        raise HTTPException(status_code=500, detail="Database constraint violation. Check user data.")
+        raise HTTPException(
+            status_code=500, detail="Database constraint violation. Check user data."
+        )
     except Exception:
         db.rollback()
         logger.exception(f"DB insert failed for new user keycloak_id={keycloak_id}")
@@ -181,7 +184,9 @@ def create_user(
             detail="User created in Keycloak but database sync failed. Contact system administrator.",
         )
 
-    logger.info(f"New user onboarded: keycloak_id={keycloak_id} email={body.email} role={body.role}")
+    logger.info(
+        f"New user onboarded: keycloak_id={keycloak_id} email={body.email} role={body.role}"
+    )
 
     return {
         "status": "created",
@@ -439,9 +444,6 @@ def get_audit_logs(
 # Scheduled Reports (AQ-15)
 # ---------------------------------------------------------------------------
 
-import re
-from typing import Literal, Any
-
 _CRON_RE = re.compile(
     r"^(\*|[0-5]?\d|\d+(-\d+)?(,\d+(-\d+)?)*)(/[1-9]\d?)? "
     r"(\*|[01]?\d|2[0-3]|\d+(-\d+)?(,\d+(-\d+)?)*)(/[1-9]\d?)? "
@@ -507,7 +509,9 @@ def list_scheduled_reports(
 ):
     """List all scheduled analytics reports."""
     rows = db.execute(
-        text("SELECT id, name, cron_expr, format, enabled, created_at FROM wims.scheduled_reports ORDER BY id DESC")
+        text(
+            "SELECT id, name, cron_expr, format, enabled, created_at FROM wims.scheduled_reports ORDER BY id DESC"
+        )
     ).fetchall()
     return [
         {
