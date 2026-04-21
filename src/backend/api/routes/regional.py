@@ -1928,7 +1928,9 @@ def get_regional_incident_detail(
     row = db.execute(
         text("""
             SELECT fi.incident_id, fi.verification_status, fi.created_at,
-                   fi.region_id, fi.encoder_id
+                   fi.region_id, fi.encoder_id,
+                   ST_Y(fi.location::geometry) AS latitude,
+                   ST_X(fi.location::geometry) AS longitude
             FROM wims.fire_incidents fi
             WHERE fi.incident_id = :iid AND fi.region_id = :rid AND fi.is_archived = FALSE
         """),
@@ -1995,6 +1997,8 @@ def get_regional_incident_detail(
         "verification_status": row[1],
         "created_at": row[2].isoformat() if row[2] else None,
         "region_id": row[3],
+        "latitude": float(row[5]) if row[5] is not None else None,
+        "longitude": float(row[6]) if row[6] is not None else None,
         "nonsensitive": row_to_dict(ns),
         "sensitive": sd_dict,
     }

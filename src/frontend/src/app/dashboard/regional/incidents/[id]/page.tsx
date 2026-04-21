@@ -6,6 +6,24 @@ import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { fetchRegionalIncident, type RegionalIncidentDetailResponse } from '@/lib/api';
+import dynamic from 'next/dynamic';
+
+// Read-only map for displaying incident location
+const IncidentLocationMap = dynamic(
+  () => import('@/components/MapPickerInner').then((mod) => {
+    const ReadOnlyMap = (props: { latitude: number; longitude: number }) => (
+      <div style={{ height: '300px', width: '100%' }}>
+        <mod.MapPickerInner
+          value={{ lat: props.latitude, lng: props.longitude }}
+          center={[props.latitude, props.longitude]}
+        />
+      </div>
+    );
+    ReadOnlyMap.displayName = 'ReadOnlyIncidentMap';
+    return ReadOnlyMap;
+  }),
+  { ssr: false, loading: () => <div className="h-[300px] bg-gray-100 animate-pulse rounded" /> },
+);
 import {
   FIELD_LABELS,
   fieldLabel,
@@ -270,6 +288,23 @@ export default function RegionalIncidentDetailPage() {
               {detail.created_at && <>{' · '}Created {new Date(detail.created_at).toLocaleString()}</>}
             </p>
           </div>
+
+          {/* Geolocation */}
+          {detail.latitude != null && detail.longitude != null && (
+            <Section title="Geolocation" sectionId="sec-geo">
+              <div className="grid grid-cols-2 gap-4 text-sm mb-3">
+                <div>
+                  <span className="font-medium text-gray-600">Latitude</span>
+                  <div className="text-gray-900">{detail.latitude.toFixed(6)}</div>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Longitude</span>
+                  <div className="text-gray-900">{detail.longitude.toFixed(6)}</div>
+                </div>
+              </div>
+              <IncidentLocationMap latitude={detail.latitude} longitude={detail.longitude} />
+            </Section>
+          )}
 
           {/* A. Response Details */}
           <Section title="A. Response Details" sectionId="sec-response">

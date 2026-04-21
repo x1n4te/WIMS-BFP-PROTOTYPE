@@ -421,6 +421,8 @@ export interface RegionalIncidentDetailResponse {
   verification_status: string;
   created_at: string | null;
   region_id: number;
+  latitude: number | null;
+  longitude: number | null;
   nonsensitive: Record<string, unknown>;
   sensitive: Record<string, unknown>;
   attachments?: Array<{
