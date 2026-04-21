@@ -42,6 +42,8 @@ export default function DashboardPage() {
             router.replace('/admin/system');
         } else if (!loading && role === 'REGIONAL_ENCODER') {
             router.replace('/dashboard/regional');
+        } else if (!loading && (role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR')) {
+            router.replace('/dashboard/validator');
         } else if (!loading && role === 'NATIONAL_ANALYST') {
             router.replace('/dashboard/analyst');
         }

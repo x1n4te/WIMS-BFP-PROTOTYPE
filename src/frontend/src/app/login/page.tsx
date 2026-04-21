@@ -15,6 +15,8 @@ export default function LoginPage() {
             const role = (user as { role?: string })?.role;
             if (role === 'REGIONAL_ENCODER') {
                 router.push('/dashboard/regional');
+            } else if (role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR') {
+                router.push('/dashboard/validator');
             } else {
                 router.push('/dashboard');
             }

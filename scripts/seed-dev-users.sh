@@ -25,19 +25,22 @@ docker_exec() {
 }
 
 # Users: username, email, role, assigned_region_id (empty = NULL)
-# Regional Encoder -> REGIONAL_ENCODER, region 1
-# National Validator -> VALIDATOR, NULL
-# National Analyst -> NATIONAL_ANALYST, NULL
-# System Administrator -> SYSTEM_ADMIN, NULL
+# Regional Encoder   -> REGIONAL_ENCODER,   region 1
+# National Validator -> NATIONAL_VALIDATOR, region 1  (must have region for validator workflow)
+# National Analyst   -> NATIONAL_ANALYST,   NULL
+# System Admin       -> SYSTEM_ADMIN,        NULL
+#
+# NOTE: role was previously 'VALIDATOR' — changed to 'NATIONAL_VALIDATOR' to match
+#       the authoritative application role string used in auth.py and all route guards.
 declare -a USERS=(
   "encoder_test|encoder@bfp.gov.ph|REGIONAL_ENCODER|1"
-  "validator_test|validator@bfp.gov.ph|VALIDATOR|"
+  "validator_test|validator@bfp.gov.ph|NATIONAL_VALIDATOR|1"
   "analyst_test|analyst@bfp.gov.ph|NATIONAL_ANALYST|"
   "analyst1_test|analyst1_test@gmail.com|NATIONAL_ANALYST|"
   "admin_test|admin@bfp.gov.ph|SYSTEM_ADMIN|"
 )
 
-declare -a ROLES=(REGIONAL_ENCODER VALIDATOR ANALYST NATIONAL_ANALYST SYSTEM_ADMIN)
+declare -a ROLES=(REGIONAL_ENCODER NATIONAL_VALIDATOR ANALYST NATIONAL_ANALYST SYSTEM_ADMIN)
 
 cd "$PROJECT_ROOT"
 

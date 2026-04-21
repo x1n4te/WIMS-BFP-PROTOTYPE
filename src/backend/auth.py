@@ -354,6 +354,53 @@ async def get_regional_encoder(
         raise HTTPException(status_code=500, detail="Authentication system error")
 
 
+async def get_national_validator(
+    current_user: Annotated[dict, Depends(get_current_wims_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """
+    Require NATIONAL_VALIDATOR role with an assigned region.
+
+    Returns user dict augmented with assigned_region_id so every
+    validator endpoint can enforce region-scoped visibility without
+    repeating the DB lookup.
+
+    Raises:
+        403  — role is not NATIONAL_VALIDATOR
+        403  — user row missing or has no assigned_region_id
+        500  — unexpected DB error
+    """
+    if current_user.get("role") != "NATIONAL_VALIDATOR":
+        raise HTTPException(
+            status_code=403, detail="NATIONAL_VALIDATOR privileges required"
+        )
+
+    try:
+        row = db.execute(
+            text("SELECT assigned_region_id FROM wims.users WHERE user_id = :uid"),
+            {"uid": current_user["user_id"]},
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=403, detail="User not found or region assignment missing"
+            )
+        region_id = row[0]
+        if region_id is None:
+            raise HTTPException(
+                status_code=403,
+                detail="No region assigned to this validator — contact SYSTEM_ADMIN",
+            )
+        current_user["assigned_region_id"] = region_id
+        return current_user
+    except DataError as e:
+        logger.error(
+            "DB error fetching region for validator user_id=%s: %s",
+            current_user["user_id"],
+            e,
+        )
+        raise HTTPException(status_code=500, detail="Authentication system error")
+
+
 async def get_analyst_or_admin(
     current_user: Annotated[dict, Depends(get_current_wims_user)],
 ) -> dict:

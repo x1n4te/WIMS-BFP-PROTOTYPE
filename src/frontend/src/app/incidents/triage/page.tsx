@@ -23,7 +23,11 @@ export default function TriagePage() {
     const [promotingId, setPromotingId] = useState<number | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-    const canAccess = role === 'ENCODER' || role === 'VALIDATOR';
+    const canAccess =
+        role === 'ENCODER' ||
+        role === 'VALIDATOR' ||
+        role === 'REGIONAL_ENCODER' ||
+        role === 'NATIONAL_VALIDATOR';
 
     useEffect(() => {
         if (!authLoading && !canAccess) router.push('/dashboard');

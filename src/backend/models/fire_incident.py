@@ -18,10 +18,18 @@ if TYPE_CHECKING:
 
 
 class VerificationStatus(str, enum.Enum):
-    """CHECK (verification_status IN ('DRAFT', 'PENDING', 'VERIFIED', 'REJECTED'))."""
+    """CHECK constraint aligned with DB: DRAFT, PENDING, PENDING_VALIDATION, VERIFIED, REJECTED.
+
+    PENDING_VALIDATION  — public/civilian submission awaiting NATIONAL_VALIDATOR review.
+    PENDING             — encoder-submitted, awaiting validator decision.
+    DRAFT               — encoder working draft, not yet submitted.
+    VERIFIED            — validator accepted.
+    REJECTED            — validator rejected.
+    """
 
     DRAFT = "DRAFT"
     PENDING = "PENDING"
+    PENDING_VALIDATION = "PENDING_VALIDATION"
     VERIFIED = "VERIFIED"
     REJECTED = "REJECTED"
 
@@ -32,7 +40,7 @@ class FireIncident(Base):
     __tablename__ = "fire_incidents"
     __table_args__ = (
         CheckConstraint(
-            "verification_status IN ('DRAFT', 'PENDING', 'VERIFIED', 'REJECTED')",
+            "verification_status IN ('DRAFT', 'PENDING', 'PENDING_VALIDATION', 'VERIFIED', 'REJECTED')",
             name="fire_incidents_verification_status_check",
         ),
         {"schema": "wims"},
