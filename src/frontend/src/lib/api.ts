@@ -218,6 +218,58 @@ export async function updateAdminUser(
   });
 }
 
+/** Create a new user (admin onboarding) - POST /admin/users */
+export async function createAdminUser(payload: {
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  contact_number?: string;
+  assigned_region_id?: number;
+}): Promise<{
+  status: string;
+  keycloak_id: string;
+  username: string;
+  role: string;
+  temporary_password: string;
+  note: string;
+}> {
+  return apiFetch('/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Fetch current user's profile details */
+export async function fetchMyProfile(): Promise<{ first_name: string; last_name: string; contact_number: string }> {
+  return apiFetch('/user/me/profile');
+}
+
+/** Update current user's own profile - PATCH /user/me */
+export async function updateMyProfile(payload: {
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  contact_number?: string;
+}): Promise<{ status: string; message: string }> {
+  return apiFetch('/user/me', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Change current user's own password - PATCH /user/me/password */
+export async function changeMyPassword(payload: {
+  current_password: string;
+  new_password: string;
+  otp_code?: string;
+}): Promise<{ status: string; message: string }> {
+  return apiFetch('/user/me/password', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
 /** Fetch security logs (admin) - ordered by timestamp desc */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function fetchAdminSecurityLogs(): Promise<any[]> {

@@ -15,6 +15,7 @@ import {
     Users,
     Settings,
     X,
+    UserCircle,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -169,6 +170,7 @@ function getNavSections(role: string | null): NavSection[] {
                 { label: 'System Audit', href: '/admin/system#audit', icon: Settings },
             ],
         });
+        sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });
         return sections;
     }
 
@@ -188,7 +190,9 @@ function getNavSections(role: string | null): NavSection[] {
                 { label: 'Import AFOR', href: '/afor/import', icon: Upload },
             ]
         });
-        
+
+        sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });
+
         return sections;
     }
 
@@ -220,6 +224,9 @@ function getNavSections(role: string | null): NavSection[] {
     if (mgmtItems.length > 0) {
         sections.push({ label: 'Management', items: mgmtItems });
     }
+
+    // All roles get a profile link
+    sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });
 
     return sections;
 }
