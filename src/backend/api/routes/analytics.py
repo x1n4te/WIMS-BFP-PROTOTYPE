@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -32,8 +32,18 @@ from tasks.exports import (
     export_incidents_pdf_task,
     export_incidents_excel_task,
 )
+from tasks.analytics_refresh import refresh_materialized_views
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+
+
+@router.post("/refresh-views", status_code=status.HTTP_202_ACCEPTED)
+def trigger_materialized_view_refresh(
+    _user: Annotated[dict, Depends(get_analyst_or_admin)],
+):
+    """Queue a non-blocking CONCURRENTLY refresh for analytics materialized views."""
+    result = refresh_materialized_views.delay(concurrent=True)
+    return {"task_id": result.id, "status": "queued"}
 
 
 @router.get("/heatmap")

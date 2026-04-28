@@ -158,6 +158,47 @@ class TestPhase1Foundation:
             "refresh_materialized_views must accept concurrent flag"
         )
 
+    def test_celery_config_imports_with_mv_refresh_schedule(self):
+        """Celery config must import cleanly and register MV refresh beat schedule."""
+        import celery_config
+
+        schedule = celery_config.celery_app.conf.beat_schedule
+        assert "refresh-analytics-mvs" in schedule
+        assert (
+            schedule["refresh-analytics-mvs"]["task"]
+            == "analytics.refresh_materialized_views"
+        )
+        assert schedule["refresh-analytics-mvs"]["schedule"] == 3600 * 6
+
+    def test_manual_materialized_view_refresh_endpoint_queues_task(
+        self, client: TestClient
+    ):
+        """POST /api/analytics/refresh-views queues concurrent MV refresh for analysts."""
+        _set_analyst(client)
+        with patch("api.routes.analytics.refresh_materialized_views") as task:
+            task.delay.return_value.id = "mv-refresh-task-123"
+            response = client.post("/api/analytics/refresh-views")
+
+        assert response.status_code == 202
+        assert response.json() == {
+            "task_id": "mv-refresh-task-123",
+            "status": "queued",
+        }
+        task.delay.assert_called_once_with(concurrent=True)
+
+    def test_manual_materialized_view_refresh_endpoint_rejects_non_analyst(
+        self, client: TestClient
+    ):
+        """Manual refresh endpoint must remain analyst/admin only."""
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
+            "REGIONAL_ENCODER"
+        )
+        with patch("api.routes.analytics.refresh_materialized_views") as task:
+            response = client.post("/api/analytics/refresh-views")
+
+        assert response.status_code == 403
+        task.delay.assert_not_called()
+
     # -- AQ-02: Schema expansion -----------------------------------------
 
     def test_analytics_facts_has_casualty_columns(self, client: TestClient):

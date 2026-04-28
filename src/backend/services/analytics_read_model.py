@@ -11,6 +11,8 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+EXPORT_LOG_TABLE = "analytics_export_log"
+
 
 def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
     """
