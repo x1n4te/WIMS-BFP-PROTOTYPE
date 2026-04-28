@@ -17,3 +17,5 @@ GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
 
 \connect keycloak
 GRANT ALL ON SCHEMA public TO keycloak;
+
+\connect wims
