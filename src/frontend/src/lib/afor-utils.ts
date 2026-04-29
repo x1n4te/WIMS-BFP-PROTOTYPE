@@ -60,6 +60,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "trucks.volunteer": "Volunteer Fire Trucks",
   // Alarm timeline
   foua: "1st Alarm – FOUA (First On Upon Arrival)",
+  alarm_foua: "1st Alarm – FOUA",
   alarm_1st: "1st Alarm",
   alarm_2nd: "2nd Alarm",
   alarm_3rd: "3rd Alarm",

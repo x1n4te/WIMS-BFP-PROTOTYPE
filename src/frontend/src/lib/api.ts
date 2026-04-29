@@ -446,6 +446,25 @@ export async function fetchRegionalIncident(
   return apiFetch<RegionalIncidentDetailResponse>(`/regional/incidents/${incidentId}`);
 }
 
+export async function createRegionalIncident(
+  body: Record<string, unknown>
+): Promise<{ status: string; incident_id: number; verification_status: string }> {
+  return apiFetch('/regional/incidents', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function updateRegionalIncident(
+  incidentId: number,
+  body: Record<string, unknown>
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/incidents/${incidentId}`, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export async function submitIncidentForReview(
+  incidentId: number
+): Promise<{ status: string; incident_id: number; verification_status: string }> {
+  return apiFetch(`/regional/incidents/${incidentId}/submit`, { method: 'PATCH' });
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function fetchRegionalStats(): Promise<any> {
   return apiFetch<Record<string, unknown>>('/regional/stats');

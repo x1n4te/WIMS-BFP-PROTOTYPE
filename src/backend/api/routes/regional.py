@@ -2156,6 +2156,14 @@ class IncidentUpdateRequest(BaseModel):
     prepared_by_officer: str | None = None
     noted_by_officer: str | None = None
     remarks: str | None = None
+    # JSONB fields for full-form edit
+    alarm_timeline: dict | None = None
+    resources_deployed: dict | None = None
+    problems_encountered: list | None = None
+    other_personnel: list | None = None
+    personnel_on_duty: dict | None = None
+    casualty_details: dict | None = None
+    disposition: str | None = None
 
 
 @router.post("/incidents", status_code=201)
@@ -2359,6 +2367,46 @@ def update_incident(
             sd_params,
         )
 
+    # Update JSONB nonsensitive fields
+    jsonb_ns = {
+        "alarm_timeline": body.alarm_timeline,
+        "resources_deployed": body.resources_deployed,
+        "problems_encountered": body.problems_encountered,
+        "other_personnel": body.other_personnel,
+    }
+    jsonb_ns_updates = []
+    jsonb_ns_params = {"iid": incident_id}
+    for field, val in jsonb_ns.items():
+        if val is not None:
+            jsonb_ns_updates.append(f"{field} = :{field}::jsonb")
+            jsonb_ns_params[field] = json.dumps(val)
+    if jsonb_ns_updates:
+        db.execute(
+            text(f"UPDATE wims.incident_nonsensitive_details SET {', '.join(jsonb_ns_updates)} WHERE incident_id = :iid"),
+            jsonb_ns_params,
+        )
+
+    # Update JSONB sensitive fields
+    jsonb_sd = {
+        "personnel_on_duty": body.personnel_on_duty,
+        "casualty_details": body.casualty_details,
+        "disposition": body.disposition,
+    }
+    jsonb_sd_updates = []
+    jsonb_sd_params = {"iid": incident_id}
+    for field, val in jsonb_sd.items():
+        if val is not None:
+            if field == "disposition":
+                jsonb_sd_updates.append(f"{field} = :{field}")
+            else:
+                jsonb_sd_updates.append(f"{field} = :{field}::jsonb")
+            jsonb_sd_params[field] = json.dumps(val) if field != "disposition" else val
+    if jsonb_sd_updates:
+        db.execute(
+            text(f"UPDATE wims.incident_sensitive_details SET {', '.join(jsonb_sd_updates)} WHERE incident_id = :iid"),
+            jsonb_sd_params,
+        )
+
     # Update timestamp
     db.execute(
         text("UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"),
@@ -2404,6 +2452,67 @@ def delete_incident(
     db.commit()
     logger.info("Soft-deleted incident %s in region %s", incident_id, region_id)
     return {"status": "deleted", "incident_id": incident_id}
+
+
+@router.patch("/incidents/{incident_id}/submit", status_code=200)
+def submit_incident_for_review(
+    incident_id: int,
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Submit a DRAFT or REJECTED incident for validator review (DRAFT/REJECTED → PENDING)."""
+    region_id = user["assigned_region_id"]
+    encoder_id = user["user_id"]
+
+    incident = db.execute(
+        text("""
+            SELECT incident_id, verification_status, encoder_id
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid AND region_id = :rid AND is_archived = FALSE
+        """),
+        {"iid": incident_id, "rid": region_id},
+    ).fetchone()
+
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found in your region")
+
+    current_status = incident[1]
+    inc_encoder_id = str(incident[2]) if incident[2] else None
+
+    if inc_encoder_id != str(encoder_id):
+        raise HTTPException(status_code=403, detail="You can only submit your own incidents")
+
+    if current_status not in ("DRAFT", "REJECTED"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot submit incident with status '{current_status}'. Only DRAFT or REJECTED incidents can be submitted.",
+        )
+
+    try:
+        db.execute(
+            text("UPDATE wims.fire_incidents SET verification_status = 'PENDING', updated_at = now() WHERE incident_id = :iid"),
+            {"iid": incident_id},
+        )
+        db.execute(
+            text("""
+                INSERT INTO wims.incident_verification_history (
+                    target_type, target_id, action_by_user_id,
+                    previous_status, new_status, notes
+                ) VALUES (
+                    'OFFICIAL', :iid, CAST(:uid AS uuid),
+                    :prev_status, 'PENDING', 'Submitted for review'
+                )
+            """),
+            {"iid": incident_id, "uid": str(encoder_id), "prev_status": current_status},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to submit incident_id=%s for review", incident_id)
+        raise HTTPException(status_code=500, detail="Failed to submit incident — transaction rolled back")
+
+    logger.info("Encoder user_id=%s submitted incident_id=%s for review (%s → PENDING)", encoder_id, incident_id, current_status)
+    return {"status": "submitted", "incident_id": incident_id, "verification_status": "PENDING"}
 
 
 # ---------------------------------------------------------------------------

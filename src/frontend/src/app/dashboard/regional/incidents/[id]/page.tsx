@@ -3,26 +3,38 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Pencil, Send } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { fetchRegionalIncident, type RegionalIncidentDetailResponse } from '@/lib/api';
+import {
+  fetchRegionalIncident,
+  submitIncidentForReview,
+  type RegionalIncidentDetailResponse,
+} from '@/lib/api';
 import dynamic from 'next/dynamic';
+import type { Incident } from '@/lib/edgeFunctions';
 
-// Read-only map for displaying incident location
+// Read-only map zoomed in on the pinned coordinates
 const IncidentLocationMap = dynamic(
   () => import('@/components/MapPickerInner').then((mod) => {
     const ReadOnlyMap = (props: { latitude: number; longitude: number }) => (
-      <div style={{ height: '300px', width: '100%' }}>
+      <div style={{ height: '350px', width: '100%' }}>
         <mod.MapPickerInner
           value={{ lat: props.latitude, lng: props.longitude }}
           center={[props.latitude, props.longitude]}
+          zoom={16}
         />
       </div>
     );
     ReadOnlyMap.displayName = 'ReadOnlyIncidentMap';
     return ReadOnlyMap;
   }),
-  { ssr: false, loading: () => <div className="h-[300px] bg-gray-100 animate-pulse rounded" /> },
+  { ssr: false, loading: () => <div className="h-[350px] bg-gray-100 animate-pulse rounded" /> },
+);
+
+// Full AFOR form used for editing
+const IncidentForm = dynamic(
+  () => import('@/components/IncidentForm').then((m) => m.IncidentForm),
+  { ssr: false, loading: () => <div className="py-8 text-center text-gray-500">Loading form…</div> },
 );
 import {
   FIELD_LABELS,
@@ -210,6 +222,11 @@ export default function RegionalIncidentDetailPage() {
   const [detail, setDetail] = useState<RegionalIncidentDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
 
   useEffect(() => {
     if (!authLoading && (!canAccessRegional || !assignedRegionId)) {
@@ -228,6 +245,7 @@ export default function RegionalIncidentDetailPage() {
     try {
       const data = await fetchRegionalIncident(incidentId);
       setDetail(data);
+      setIsEditing(false);
     } catch (e) {
       setDetail(null);
       setError(e instanceof Error ? e.message : 'Failed to load incident.');
@@ -240,6 +258,27 @@ export default function RegionalIncidentDetailPage() {
     if (authLoading || !canAccessRegional || !assignedRegionId) return;
     load();
   }, [authLoading, canAccessRegional, assignedRegionId, load]);
+
+  // Convert detail response to the Incident shape IncidentForm expects
+  const detailToIncident = (d: RegionalIncidentDetailResponse): Incident => ({
+    incident_id: d.incident_id,
+    region_id: d.region_id,
+    incident_nonsensitive_details: d.nonsensitive as unknown as Incident['incident_nonsensitive_details'],
+    incident_sensitive_details: d.sensitive as unknown as Incident['incident_sensitive_details'],
+  });
+
+  const handleSubmit = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await submitIncidentForReview(incidentId);
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to submit incident.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   if (authLoading || !canAccessRegional || !assignedRegionId) {
     return <div className="flex min-h-[40vh] items-center justify-center text-gray-500">Loading…</div>;
@@ -254,6 +293,17 @@ export default function RegionalIncidentDetailPage() {
   const narrative = String(sens?.narrative_report ?? '');
   const resources = ns?.resources_deployed as Record<string, unknown> | undefined;
 
+  const canEditOrSubmit = isEncoder && detail &&
+    (detail.verification_status === 'DRAFT' || detail.verification_status === 'REJECTED');
+
+  const STATUS_COLORS: Record<string, string> = {
+    DRAFT: 'bg-gray-100 text-gray-700',
+    PENDING: 'bg-yellow-100 text-yellow-800',
+    PENDING_VALIDATION: 'bg-blue-100 text-blue-800',
+    VERIFIED: 'bg-green-100 text-green-800',
+    REJECTED: 'bg-red-100 text-red-800',
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -261,7 +311,53 @@ export default function RegionalIncidentDetailPage() {
           <ArrowLeft className="h-4 w-4" aria-hidden />
           Back to regional dashboard
         </Link>
+        {detail && canEditOrSubmit && (
+          <div className="flex items-center gap-2">
+            {!isEditing && (
+              <>
+                <button
+                  onClick={() => { setIsEditing(true); setActionError(null); }}
+                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-gray-300 bg-white hover:bg-gray-50 text-gray-700"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Edit
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={actionLoading}
+                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium bg-red-800 text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  {detail.verification_status === 'REJECTED' ? 'Resubmit for Review' : 'Submit for Review'}
+                </button>
+              </>
+            )}
+            {isEditing && (
+              <button
+                onClick={() => { setIsEditing(false); setActionError(null); }}
+                className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-gray-300 bg-white hover:bg-gray-50 text-gray-700"
+              >
+                ← Back to View
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
+      {actionError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+          {actionError}
+        </div>
+      )}
+
+      {detail && isEditing && (
+        <IncidentForm
+          initialData={detailToIncident(detail)}
+          existingIncidentId={detail.incident_id}
+          onSaved={() => { setIsEditing(false); void load(); }}
+        />
+      )}
+
 
       {loading && (
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-8 text-center text-gray-600">
@@ -278,33 +374,20 @@ export default function RegionalIncidentDetailPage() {
       {!loading && !error && detail && (
         <>
           {/* Header */}
-          <div>
-            <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-              Incident #{detail.incident_id}
-            </h1>
-            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-              <span className="font-medium">{displayValue(detail.verification_status)}</span>
-              {' · '}Region {detail.region_id}
-              {detail.created_at && <>{' · '}Created {new Date(detail.created_at).toLocaleString()}</>}
-            </p>
+          <div className="flex flex-wrap items-start gap-3">
+            <div>
+              <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                Incident #{detail.incident_id}
+              </h1>
+              <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                Region {detail.region_id}
+                {detail.created_at && <>{' · '}Created {new Date(detail.created_at).toLocaleString()}</>}
+              </p>
+            </div>
+            <span className={`mt-1 inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${STATUS_COLORS[detail.verification_status] ?? 'bg-gray-100 text-gray-700'}`}>
+              {detail.verification_status.replace('_', ' ')}
+            </span>
           </div>
-
-          {/* Geolocation */}
-          {detail.latitude != null && detail.longitude != null && (
-            <Section title="Geolocation" sectionId="sec-geo">
-              <div className="grid grid-cols-2 gap-4 text-sm mb-3">
-                <div>
-                  <span className="font-medium text-gray-600">Latitude</span>
-                  <div className="text-gray-900">{detail.latitude.toFixed(6)}</div>
-                </div>
-                <div>
-                  <span className="font-medium text-gray-600">Longitude</span>
-                  <div className="text-gray-900">{detail.longitude.toFixed(6)}</div>
-                </div>
-              </div>
-              <IncidentLocationMap latitude={detail.latitude} longitude={detail.longitude} />
-            </Section>
-          )}
 
           {/* A. Response Details */}
           <Section title="A. Response Details" sectionId="sec-response">
@@ -315,20 +398,25 @@ export default function RegionalIncidentDetailPage() {
             <FieldRow label={FIELD_LABELS.distance_from_station_km} value={ns?.distance_from_station_km} />
             <FieldRow label={FIELD_LABELS.total_response_time_minutes} value={ns?.total_response_time_minutes} />
             <FieldRow label={FIELD_LABELS.total_gas_consumed_liters} value={ns?.total_gas_consumed_liters} />
+            <FieldRow label={FIELD_LABELS.street_address} value={sens?.street_address ?? ns?.incident_address} />
+            <FieldRow label={FIELD_LABELS.landmark} value={sens?.landmark ?? ns?.nearest_landmark} />
+            <FieldRow label={FIELD_LABELS.caller_name} value={sens?.caller_name} />
+            <FieldRow label={FIELD_LABELS.caller_number} value={sens?.caller_number} />
+            <FieldRow label={FIELD_LABELS.receiver_name} value={sens?.receiver_name ?? ns?.receiver_name} />
           </Section>
 
-          {/* B. Classification */}
-          <Section title="B. Classification" sectionId="sec-class">
-            <FieldRow label={FIELD_LABELS.general_category} value={ns?.general_category} />
-            <FieldRow label={FIELD_LABELS.sub_category} value={ns?.sub_category} />
-            <FieldRow label={FIELD_LABELS.fire_origin} value={ns?.fire_origin} />
-            <FieldRow label={FIELD_LABELS.stage_of_fire} value={ns?.stage_of_fire} />
+          {/* B. Nature & Classification */}
+          <Section title="B. Nature and Classification of Involved" sectionId="sec-class">
+            <FieldRow label={FIELD_LABELS.general_category} value={ns?.general_category ?? ns?.classification_of_involved} />
+            <FieldRow label={FIELD_LABELS.sub_category} value={ns?.sub_category ?? ns?.type_of_involved_general_category} />
+            <FieldRow label="Owner / Occupant Name" value={sens?.owner_name ?? ns?.owner_name} />
+            <FieldRow label="Establishment Name" value={sens?.establishment_name ?? ns?.establishment_name} />
+            <FieldRow label="General Description" value={ns?.general_description_of_involved} />
+            <FieldRow label={FIELD_LABELS.fire_origin} value={ns?.fire_origin ?? ns?.area_of_origin} />
+            <FieldRow label="Stage of Fire Upon Arrival" value={ns?.stage_of_fire_upon_arrival ?? ns?.stage_of_fire} />
             <FieldRow label={FIELD_LABELS.extent_of_damage} value={ns?.extent_of_damage} />
             <FieldRow label={FIELD_LABELS.extent_total_floor_area_sqm} value={ns?.extent_total_floor_area_sqm} />
-          </Section>
-
-          {/* C. Affected */}
-          <Section title="C. Affected Counts" sectionId="sec-affected">
+            <FieldRow label={FIELD_LABELS.extent_total_land_area_hectares} value={ns?.extent_total_land_area_hectares} />
             <FieldRow label={FIELD_LABELS.structures_affected} value={ns?.structures_affected} />
             <FieldRow label={FIELD_LABELS.households_affected} value={ns?.households_affected} />
             <FieldRow label={FIELD_LABELS.families_affected} value={ns?.families_affected} />
@@ -336,20 +424,9 @@ export default function RegionalIncidentDetailPage() {
             <FieldRow label={FIELD_LABELS.vehicles_affected} value={ns?.vehicles_affected} />
           </Section>
 
-          {/* D. Alarm Timeline */}
-          <Section title="D. Fire Alarm Level / Timeline" sectionId="sec-timeline">
-            <AlarmTimelineSection timeline={alarmTimeline} />
-          </Section>
-
-          {/* E. ICP */}
-          <Section title="E. Incident Command Post" sectionId="sec-icp">
-            <FieldRow label={FIELD_LABELS.is_icp_present} value={sens?.is_icp_present} />
-            <FieldRow label={FIELD_LABELS.icp_location} value={sens?.icp_location} />
-          </Section>
-
-          {/* F. Resources */}
+          {/* C. Resources Deployed */}
           {resources && (
-            <Section title="F. Resources Deployed" sectionId="sec-resources">
+            <Section title="C. Assets and Resources Deployed" sectionId="sec-resources">
               {Object.entries(resources).map(([k, v]) => (
                 <div key={k}>
                   <p className="text-xs font-bold uppercase text-gray-500 mb-1">{fieldLabel(k)}</p>
@@ -368,14 +445,80 @@ export default function RegionalIncidentDetailPage() {
             </Section>
           )}
 
-          {/* G. Personnel on Duty — FIX 5 */}
-          <Section title="G. Personnel on Duty" sectionId="sec-pod">
+          {/* D. Alarm Timeline */}
+          <Section title="D. Fire Alarm Level / Timeline" sectionId="sec-timeline">
+            <AlarmTimelineSection timeline={alarmTimeline} />
+          </Section>
+
+          {/* E. Casualties */}
+          {sens?.casualty_details && (
+            <Section title="E. Profile of Casualties" sectionId="sec-casualties">
+              {(() => {
+                const cd = sens.casualty_details as Record<string, Record<string, Record<string, number>>>;
+                const rows = [
+                  { label: 'Injured Civilian', path: ['injured', 'civilian'] },
+                  { label: 'Injured BFP Firefighter', path: ['injured', 'firefighter'] },
+                  { label: 'Injured Fire Auxiliary', path: ['injured', 'auxiliary'] },
+                  { label: 'Civilian Fatality/ies', path: ['fatalities', 'civilian'] },
+                  { label: 'BFP Firefighter Fatality/ies', path: ['fatalities', 'firefighter'] },
+                  { label: 'Fire Auxiliary Fatality/ies', path: ['fatalities', 'auxiliary'] },
+                ];
+                return (
+                  <table className="min-w-full text-xs border border-gray-200">
+                    <thead className="bg-gray-50"><tr>
+                      <th className="border px-3 py-2 text-left">Category</th>
+                      <th className="border px-3 py-2 text-center">Male</th>
+                      <th className="border px-3 py-2 text-center">Female</th>
+                    </tr></thead>
+                    <tbody>
+                      {rows.map(({ label, path }) => {
+                        const entry = cd?.[path[0]]?.[path[1]] ?? {};
+                        return (
+                          <tr key={label} className="border-t border-gray-100">
+                            <td className="border px-3 py-1 font-semibold text-gray-700">{label}</td>
+                            <td className="border px-3 py-1 text-center">{entry.m ?? 0}</td>
+                            <td className="border px-3 py-1 text-center">{entry.f ?? 0}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
+            </Section>
+          )}
+
+          {/* F. Personnel on Duty */}
+          <Section title="F. Personnel on Duty" sectionId="sec-pod">
             <PersonnelSection pod={pod} others={others} />
           </Section>
 
-          {/* H. Sketch (if attachment available) */}
-          {Array.isArray((detail as Record<string, unknown>).attachments) &&
-            ((detail as Record<string, unknown>).attachments as Array<{ file_name: string; url: string }>)
+          {/* G. ICP */}
+          <Section title="G. Incident Command Post" sectionId="sec-icp">
+            <FieldRow label={FIELD_LABELS.is_icp_present} value={sens?.is_icp_present} />
+            <FieldRow label={FIELD_LABELS.icp_location} value={sens?.icp_location} />
+          </Section>
+
+          {/* H. Fire Scene Location (map) — placed here per AFOR sketch section position */}
+          {detail.latitude != null && detail.longitude != null && (
+            <Section title="H. Fire Scene Location" sectionId="sec-geo">
+              <div className="grid grid-cols-2 gap-4 text-sm mb-3">
+                <div>
+                  <span className="font-medium text-gray-600">Latitude</span>
+                  <div className="font-mono text-gray-900">{detail.latitude.toFixed(6)}</div>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-600">Longitude</span>
+                  <div className="font-mono text-gray-900">{detail.longitude.toFixed(6)}</div>
+                </div>
+              </div>
+              <IncidentLocationMap latitude={detail.latitude} longitude={detail.longitude} />
+            </Section>
+          )}
+
+          {/* H-alt: sketch attachment if present */}
+          {Array.isArray((detail as unknown as Record<string, unknown>).attachments) &&
+            ((detail as unknown as Record<string, unknown>).attachments as Array<{ file_name: string; url: string }>)
               .filter((a) => a.file_name === 'afor_sketch.png' && !!a.url)
               .map((a) => (
                 <Section key={a.url} title="H. Fire Scene Sketch" sectionId="sec-sketch">
@@ -383,12 +526,12 @@ export default function RegionalIncidentDetailPage() {
                 </Section>
               ))}
 
-          {/* I. Narrative — FIX 4 */}
+          {/* I. Narrative Report */}
           <Section title="I. Narrative Report" sectionId="sec-narrative">
             <NarrativeReport text={narrative} />
           </Section>
 
-          {/* J. Problems Encountered — FIX 6 */}
+          {/* J. Problems Encountered */}
           <Section title="J. Problems Encountered" sectionId="sec-problems">
             <ProblemsGrid selected={problems} />
           </Section>
@@ -401,18 +544,8 @@ export default function RegionalIncidentDetailPage() {
           {/* L. Disposition & Signatories */}
           <Section title="L. Disposition &amp; Signatories" sectionId="sec-disp">
             <FieldRow label={FIELD_LABELS.disposition} value={sens?.disposition} />
-            <FieldRow label={FIELD_LABELS.prepared_by_officer} value={sens?.prepared_by_officer} />
-            <FieldRow label={FIELD_LABELS.noted_by_officer} value={sens?.noted_by_officer} />
-          </Section>
-
-          {/* Caller / Contact (sensitive) */}
-          <Section title="Caller &amp; Contact Information" sectionId="sec-contact">
-            <FieldRow label={FIELD_LABELS.street_address} value={sens?.street_address} />
-            <FieldRow label={FIELD_LABELS.landmark} value={sens?.landmark} />
-            <FieldRow label={FIELD_LABELS.caller_name} value={sens?.caller_name} />
-            <FieldRow label={FIELD_LABELS.caller_number} value={sens?.caller_number} />
-            <FieldRow label={FIELD_LABELS.receiver_name} value={sens?.receiver_name} />
-            <FieldRow label={FIELD_LABELS.owner_name} value={sens?.owner_name} />
+            <FieldRow label={FIELD_LABELS.prepared_by_officer} value={sens?.prepared_by_officer ?? sens?.disposition_prepared_by} />
+            <FieldRow label={FIELD_LABELS.noted_by_officer} value={sens?.noted_by_officer ?? sens?.disposition_noted_by} />
           </Section>
         </>
       )}
