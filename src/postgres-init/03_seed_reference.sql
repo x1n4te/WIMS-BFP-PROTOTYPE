@@ -243,4 +243,36 @@ FROM (VALUES
   ('REGION_I','Pangasinan','Laoac'),
   ('REGION_I','Pangasinan','Lingayen'),
   ('REGION_I','Pangasinan','Mabini'),
-  ('REGION_I',
+  ('REGION_I','Pangasinan','Malasiqui'),
+  ('REGION_I','Pangasinan','Manaoag'),
+  ('REGION_I','Pangasinan','Mangaldan'),
+  ('REGION_I','Pangasinan','Mangatarem'),
+  ('REGION_I','Pangasinan','Mapandan'),
+  ('REGION_I','Pangasinan','Natividad'),
+  ('REGION_I','Pangasinan','Pozorrubio'),
+  ('REGION_I','Pangasinan','Rosales'),
+  ('REGION_I','Pangasinan','San Fabian'),
+  ('REGION_I','Pangasinan','San Jacinto'),
+  ('REGION_I','Pangasinan','San Manuel'),
+  ('REGION_I','Pangasinan','San Nicolas'),
+  ('REGION_I','Pangasinan','San Quintin'),
+  ('REGION_I','Pangasinan','Santa Barbara'),
+  ('REGION_I','Pangasinan','Santa Maria'),
+  ('REGION_I','Pangasinan','Santo Tomas'),
+  ('REGION_I','Pangasinan','Sison'),
+  ('REGION_I','Pangasinan','Sual'),
+  ('REGION_I','Pangasinan','Tayug'),
+  ('REGION_I','Pangasinan','Umingan'),
+  ('REGION_I','Pangasinan','Urbiztondo'),
+  ('REGION_I','Pangasinan','Villasis')
+
+  ) AS v(rcode, pname, cname)
+
+JOIN wims.ref_regions r 
+  ON r.region_code = v.rcode
+
+JOIN wims.ref_provinces p 
+  ON p.province_name = v.pname 
+ AND p.region_id = r.region_id
+
+ON CONFLICT DO NOTHING;

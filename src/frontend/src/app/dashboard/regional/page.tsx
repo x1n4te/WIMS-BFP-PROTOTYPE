@@ -24,7 +24,6 @@ export default function RegionalDashboardPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
   const role = (user as { role?: string })?.role ?? null;
-  const assignedRegionId = (user as { assignedRegionId?: number | null })?.assignedRegionId ?? null;
   const canAccessRegional =
     role === 'REGIONAL_ENCODER' ||
     role === 'NATIONAL_VALIDATOR' ||
@@ -32,10 +31,10 @@ export default function RegionalDashboardPage() {
     role === 'VALIDATOR';
 
   useEffect(() => {
-    if (!loading && (!canAccessRegional || !assignedRegionId)) {
+    if (!loading && !canAccessRegional) {
       router.replace('/dashboard');
     }
-  }, [loading, canAccessRegional, assignedRegionId, router]);
+  }, [loading, canAccessRegional, router]);
 
   const [stats, setStats] = useState<RegionalStatsPayload | null>(null);
   const [incidents, setIncidents] = useState<RegionalIncidentListItem[]>([]);
@@ -78,18 +77,18 @@ export default function RegionalDashboardPage() {
   }, [pageIndex, pageSize, categoryFilter, statusFilter]);
 
   useEffect(() => {
-    if (canAccessRegional && assignedRegionId) {
+    if (canAccessRegional) {
       loadStats().catch(() => {
         /* stats errors surface via empty cards */
       });
     }
-  }, [canAccessRegional, assignedRegionId, loadStats]);
+  }, [canAccessRegional, loadStats]);
 
   useEffect(() => {
-    if (canAccessRegional && assignedRegionId) {
+    if (canAccessRegional) {
       loadIncidents();
     }
-  }, [canAccessRegional, assignedRegionId, loadIncidents]);
+  }, [canAccessRegional, loadIncidents]);
 
   const refreshAll = async () => {
     setStatsRefreshing(true);
@@ -100,7 +99,7 @@ export default function RegionalDashboardPage() {
     }
   };
 
-  if (loading || !canAccessRegional || !assignedRegionId) {
+  if (loading || !canAccessRegional) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center text-gray-500">
         Loading Regional Dashboard...
@@ -131,7 +130,7 @@ export default function RegionalDashboardPage() {
             Regional Dashboard
           </h1>
           <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-            Overview for Region {assignedRegionId}
+            Overview of your incident workload
           </p>
         </div>
         <div className="flex gap-2">
@@ -188,10 +187,10 @@ export default function RegionalDashboardPage() {
         <div className="card-header flex flex-col gap-3">
           <div>
             <h2 id="region-incidents-heading" className="font-bold">
-              Region incidents
+              Your incidents
             </h2>
             <p className="mt-1 text-xs text-gray-500">
-              All incidents in your region with server-driven total count, filters, and pagination.
+              All incidents you encoded with server-driven total count, filters, and pagination.
             </p>
           </div>
 

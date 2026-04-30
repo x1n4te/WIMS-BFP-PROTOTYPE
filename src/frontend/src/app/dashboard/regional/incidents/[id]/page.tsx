@@ -212,7 +212,6 @@ export default function RegionalIncidentDetailPage() {
 
   const { user, loading: authLoading } = useAuth();
   const role = (user as { role?: string })?.role ?? null;
-  const assignedRegionId = (user as { assignedRegionId?: number | null })?.assignedRegionId ?? null;
   const canAccessRegional =
     role === 'REGIONAL_ENCODER' ||
     role === 'NATIONAL_VALIDATOR' ||
@@ -229,10 +228,10 @@ export default function RegionalIncidentDetailPage() {
   const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
 
   useEffect(() => {
-    if (!authLoading && (!canAccessRegional || !assignedRegionId)) {
+    if (!authLoading && !canAccessRegional) {
       router.replace('/dashboard');
     }
-  }, [authLoading, canAccessRegional, assignedRegionId, router]);
+  }, [authLoading, canAccessRegional, router]);
 
   const load = useCallback(async () => {
     if (Number.isNaN(incidentId)) {
@@ -255,9 +254,9 @@ export default function RegionalIncidentDetailPage() {
   }, [incidentId]);
 
   useEffect(() => {
-    if (authLoading || !canAccessRegional || !assignedRegionId) return;
+    if (authLoading || !canAccessRegional) return;
     load();
-  }, [authLoading, canAccessRegional, assignedRegionId, load]);
+  }, [authLoading, canAccessRegional, load]);
 
   // Convert detail response to the Incident shape IncidentForm expects
   const detailToIncident = (d: RegionalIncidentDetailResponse): Incident => ({
@@ -280,7 +279,7 @@ export default function RegionalIncidentDetailPage() {
     }
   };
 
-  if (authLoading || !canAccessRegional || !assignedRegionId) {
+  if (authLoading || !canAccessRegional) {
     return <div className="flex min-h-[40vh] items-center justify-center text-gray-500">Loading…</div>;
   }
 

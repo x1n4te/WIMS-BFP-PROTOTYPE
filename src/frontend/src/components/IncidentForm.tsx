@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
-import { fetchRegions, fetchProvinces, fetchCities, updateRegionalIncident } from '@/lib/api';
+import { fetchRegions, fetchProvinces, fetchCities, fetchCitiesByProvinces, updateRegionalIncident } from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
 import { useUserProfile } from '@/lib/auth';
 import { Loader2, Save, Shuffle } from 'lucide-react';
@@ -142,6 +142,7 @@ export function IncidentForm({
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Set<string>>(new Set());
+  const locationHydratedRef = useRef(false);
 
   const showToast = (message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -530,6 +531,59 @@ export function IncidentForm({
     }
   }, [initialData]);
 
+  useEffect(() => {
+    if (!initialData || locationHydratedRef.current) return;
+    const ns = (initialData.incident_nonsensitive_details || {}) as Record<string, unknown>;
+    const regionId = typeof initialData.region_id === 'number' ? initialData.region_id : null;
+    if (regionId && regionId > 0) {
+      setSelectedRegionId(regionId);
+    }
+    const cityId = Number(ns.city_id || 0) || null;
+    if (cityId) {
+      setSelectedCityId(cityId);
+    }
+    locationHydratedRef.current = true;
+  }, [initialData]);
+
+  useEffect(() => {
+    if (!initialData || !selectedRegionId || selectedProvinceId) return;
+    const ns = (initialData.incident_nonsensitive_details || {}) as Record<string, unknown>;
+    const provinceId = Number((ns as Record<string, unknown>).province_id || 0) || null;
+    if (provinceId) {
+      setSelectedProvinceId(provinceId);
+      return;
+    }
+    const cityId = Number(ns.city_id || 0) || null;
+    if (!cityId || provinces.length === 0) return;
+
+    let active = true;
+    void fetchCitiesByProvinces(provinces.map((p) => p.province_id))
+      .then((allCities) => {
+        if (!active) return;
+        const matched = allCities.find((c) => c.city_id === cityId);
+        if (matched) {
+          setSelectedProvinceId(matched.province_id);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+      });
+    return () => {
+      active = false;
+    };
+  }, [initialData, selectedRegionId, selectedProvinceId, provinces]);
+
+  useEffect(() => {
+    if (!initialData || !selectedProvinceId || !cities.length) return;
+    const ns = (initialData.incident_nonsensitive_details || {}) as Record<string, unknown>;
+    const cityId = Number(ns.city_id || 0) || null;
+    if (!cityId) return;
+    const matched = cities.find((c) => c.city_id === cityId);
+    if (!matched) return;
+    setSelectedCityId(matched.city_id);
+    setFormState((prev) => ({ ...prev, city_municipality: matched.city_name }));
+  }, [initialData, selectedProvinceId, cities]);
+
   // ── Event handlers ─────────────────────────────────────────────────────────
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -788,6 +842,9 @@ export function IncidentForm({
         responder_type: incident.incident_nonsensitive_details.responder_type,
         fire_station_name: incident.incident_nonsensitive_details.fire_station_name,
         city_id: selectedCityId ?? undefined,
+        city_municipality: formState.city_municipality,
+        province_district: formState.province_district,
+        region_label: formState.region,
         fire_origin: incident.incident_nonsensitive_details.fire_origin,
         extent_of_damage: incident.incident_nonsensitive_details.extent_of_damage,
         stage_of_fire: incident.incident_nonsensitive_details.stage_of_fire,
@@ -1092,20 +1149,21 @@ export function IncidentForm({
 
             <div>
               <label className={labelCls}>City / Municipality</label>
-              <select
+              <input
+                list="city-municipality-options"
                 className={inputCls}
-                value={selectedCityId ?? ''}
-                disabled={!selectedProvinceId}
+                placeholder={selectedProvinceId ? 'Select or type City / Municipality' : 'Select province first or type manually'}
+                value={formState.city_municipality}
                 onChange={(e) => {
-                  const cid = Number(e.target.value);
-                  setSelectedCityId(cid || null);
-                  const c = cities.find((c) => c.city_id === cid);
-                  setFormState((prev) => ({ ...prev, city_municipality: c?.city_name ?? '' }));
+                  const cityName = e.target.value;
+                  const matchedCity = cities.find((c) => c.city_name.toLowerCase() === cityName.trim().toLowerCase());
+                  setSelectedCityId(matchedCity?.city_id ?? null);
+                  setFormState((prev) => ({ ...prev, city_municipality: cityName }));
                 }}
-              >
-                <option value="">{selectedProvinceId ? 'Select City / Municipality' : 'Select province first'}</option>
-                {cities.map((c) => <option key={c.city_id} value={c.city_id}>{c.city_name}</option>)}
-              </select>
+              />
+              <datalist id="city-municipality-options">
+                {cities.map((c) => <option key={c.city_id} value={c.city_name} />)}
+              </datalist>
             </div>
 
             <div className="md:col-span-2" data-field-error={fieldErrors.has('incident_address') ? 'true' : undefined}>
