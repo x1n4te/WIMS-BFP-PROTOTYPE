@@ -262,6 +262,8 @@ export default function RegionalIncidentDetailPage() {
   const detailToIncident = (d: RegionalIncidentDetailResponse): Incident => ({
     incident_id: d.incident_id,
     region_id: d.region_id,
+    latitude: d.latitude,
+    longitude: d.longitude,
     incident_nonsensitive_details: d.nonsensitive as unknown as Incident['incident_nonsensitive_details'],
     incident_sensitive_details: d.sensitive as unknown as Incident['incident_sensitive_details'],
   });
@@ -346,6 +348,25 @@ export default function RegionalIncidentDetailPage() {
       {actionError && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
           {actionError}
+        </div>
+      )}
+
+      {detail && detail.verification_status === 'REJECTED' && (
+        <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900" role="alert">
+          <p className="font-semibold">This incident was rejected by a validator.</p>
+          {detail.rejection_reason && (
+            <p className="mt-1">
+              <span className="font-medium">Reason: </span>{detail.rejection_reason}
+            </p>
+          )}
+          {detail.rejection_at && (
+            <p className="mt-1 text-xs text-red-600">
+              Rejected on {new Date(detail.rejection_at).toLocaleString()}
+            </p>
+          )}
+          {isEncoder && (
+            <p className="mt-2 text-xs text-red-700">You can edit the incident and resubmit for review.</p>
+          )}
         </div>
       )}
 

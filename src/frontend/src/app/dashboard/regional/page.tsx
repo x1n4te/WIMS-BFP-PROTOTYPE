@@ -18,6 +18,7 @@ import {
 interface RegionalStatsPayload {
   total_incidents?: number;
   by_category?: Array<{ category: string | null; count: number }>;
+  by_status?: Array<{ status: string; count: number }>;
 }
 
 export default function RegionalDashboardPage() {
@@ -115,6 +116,8 @@ export default function RegionalDashboardPage() {
   const canPrev = pageIndex > 0 && !incidentsLoading;
   const canNext = incidentsTotal > 0 && offset + size < incidentsTotal && !incidentsLoading;
 
+  const rejectedCount = stats?.by_status?.find((s) => s.status === 'REJECTED')?.count ?? 0;
+
   const summaryCards = [
     { key: 'total', title: 'Total Incidents', icon: Flame, value: stats?.total_incidents?.toLocaleString() ?? '0', borderColor: '#dc2626' },
     { key: 'STRUCTURAL', title: 'Structural', icon: Building2, value: stats?.by_category?.find((c) => c.category === 'STRUCTURAL')?.count.toLocaleString() ?? '0', borderColor: '#f97316' },
@@ -152,6 +155,22 @@ export default function RegionalDashboardPage() {
           </Link>
         </div>
       </div>
+
+      {rejectedCount > 0 && (
+        <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900" role="alert">
+          <span className="font-semibold">
+            {rejectedCount} incident{rejectedCount > 1 ? 's were' : ' was'} rejected by a validator.
+          </span>{' '}
+          Review the rejection reasons and resubmit.{' '}
+          <button
+            type="button"
+            className="ml-1 underline font-medium hover:text-red-700"
+            onClick={() => { setStatusFilter('REJECTED'); setPageIndex(0); }}
+          >
+            Show rejected
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         {summaryCards.map((card) => {

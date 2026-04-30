@@ -425,6 +425,8 @@ export interface RegionalIncidentDetailResponse {
   longitude: number | null;
   nonsensitive: Record<string, unknown>;
   sensitive: Record<string, unknown>;
+  rejection_reason: string | null;
+  rejection_at: string | null;
   attachments?: Array<{
     attachment_id: number;
     file_name: string;

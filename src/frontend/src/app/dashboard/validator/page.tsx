@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -75,7 +76,7 @@ export default function ValidatorDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Filters
+  // Filters — default to pending queue
   const [statusFilter, setStatusFilter] = useState<string>(STATUS_FILTER_QUEUE);
   const [encoderFilter, setEncoderFilter] = useState<string>("");
   const [page, setPage] = useState(0);
@@ -211,13 +212,9 @@ export default function ValidatorDashboard() {
           value={statusFilter}
           onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
         >
-          <option value={STATUS_FILTER_QUEUE}>Queue only (Pending + Awaiting Validation)</option>
-          <option value={STATUS_FILTER_ALL}>All statuses</option>
-          <option value="PENDING">Pending Review</option>
-          <option value="PENDING_VALIDATION">Awaiting Validation</option>
-          <option value="VERIFIED">Verified</option>
+          <option value={STATUS_FILTER_QUEUE}>Pending</option>
           <option value="REJECTED">Rejected</option>
-          <option value="DRAFT">Draft</option>
+          <option value="VERIFIED">Accepted</option>
         </select>
 
         <input
@@ -265,6 +262,7 @@ export default function ValidatorDashboard() {
                 <th className="text-left px-4 py-3 font-medium">Structures</th>
                 <th className="text-left px-4 py-3 font-medium">Notification</th>
                 <th className="text-left px-4 py-3 font-medium">Encoder</th>
+                <th className="text-left px-4 py-3 font-medium">Details</th>
                 <th className="text-left px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
@@ -292,6 +290,14 @@ export default function ValidatorDashboard() {
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 truncate max-w-[120px]">
                     {inc.encoder_id ? inc.encoder_id.slice(0, 8) + "…" : "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/dashboard/regional/incidents/${inc.incident_id}`}
+                      className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                    >
+                      View
+                    </Link>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">

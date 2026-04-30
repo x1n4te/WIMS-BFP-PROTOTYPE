@@ -417,8 +417,8 @@ export function IncidentForm({
       region: ns.region || '',
       province_district: ns.province_district || (initialData as unknown as Record<string, unknown>)._province_text as string || '',
       city_municipality: initialData._city_text || ns.city_municipality || '',
-      incident_address: ns.incident_address || '',
-      nearest_landmark: ns.nearest_landmark || '',
+      incident_address: ns.incident_address || (sen as Record<string, unknown>).street_address as string || '',
+      nearest_landmark: ns.nearest_landmark || (sen as Record<string, unknown>).landmark as string || '',
       caller_name: sen.caller_name || '',
       caller_number: sen.caller_number || '',
       receiver_name: sen.receiver_name || ns.receiver_name || '',
@@ -542,6 +542,11 @@ export function IncidentForm({
     if (cityId) {
       setSelectedCityId(cityId);
     }
+    // Restore coordinates from initialData (top-level fields from API response)
+    const lat = typeof initialData.latitude === 'number' ? initialData.latitude : null;
+    const lng = typeof initialData.longitude === 'number' ? initialData.longitude : null;
+    if (lat !== null) setLatitude(lat);
+    if (lng !== null) setLongitude(lng);
     locationHydratedRef.current = true;
   }, [initialData]);
 

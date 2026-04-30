@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from auth import get_national_validator, get_regional_encoder
+from auth import get_current_wims_user, get_national_validator, get_regional_encoder
 from database import get_db, get_db_with_rls
 from services.analytics_read_model import sync_incidents_batch
 from utils.crypto import SecurityProvider, SecurityProviderError
@@ -1987,28 +1987,44 @@ def get_regional_incidents(
 @router.get("/incidents/{incident_id}")
 def get_regional_incident_detail(
     incident_id: int,
-    user: Annotated[dict, Depends(get_regional_encoder)],
+    user: Annotated[dict, Depends(get_current_wims_user)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
-    """Fetch a single incident detail scoped to the current encoder."""
-    encoder_id = user["user_id"]
+    """Fetch a single incident detail. Encoders see only their own; validators see any."""
+    role = user.get("role", "")
+    is_validator = role in ("NATIONAL_VALIDATOR", "SYSTEM_ADMIN", "NATIONAL_ANALYST")
 
-    row = db.execute(
-        text("""
-            SELECT fi.incident_id, fi.verification_status, fi.created_at,
-                   fi.region_id, fi.encoder_id,
-                   ST_Y(fi.location::geometry) AS latitude,
-                   ST_X(fi.location::geometry) AS longitude
-            FROM wims.fire_incidents fi
-            WHERE fi.incident_id = :iid
-              AND fi.encoder_id = CAST(:encoder_id AS uuid)
-              AND fi.is_archived = FALSE
-        """),
-        {"iid": incident_id, "encoder_id": str(encoder_id)},
-    ).fetchone()
+    if is_validator:
+        row = db.execute(
+            text("""
+                SELECT fi.incident_id, fi.verification_status, fi.created_at,
+                       fi.region_id, fi.encoder_id,
+                       ST_Y(fi.location::geometry) AS latitude,
+                       ST_X(fi.location::geometry) AS longitude
+                FROM wims.fire_incidents fi
+                WHERE fi.incident_id = :iid
+                  AND fi.is_archived = FALSE
+            """),
+            {"iid": incident_id},
+        ).fetchone()
+    else:
+        encoder_id = user["user_id"]
+        row = db.execute(
+            text("""
+                SELECT fi.incident_id, fi.verification_status, fi.created_at,
+                       fi.region_id, fi.encoder_id,
+                       ST_Y(fi.location::geometry) AS latitude,
+                       ST_X(fi.location::geometry) AS longitude
+                FROM wims.fire_incidents fi
+                WHERE fi.incident_id = :iid
+                  AND fi.encoder_id = CAST(:encoder_id AS uuid)
+                  AND fi.is_archived = FALSE
+            """),
+            {"iid": incident_id, "encoder_id": str(encoder_id)},
+        ).fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
+        raise HTTPException(status_code=404, detail="Incident not found or access denied")
 
     # Fetch nonsensitive
     ns = db.execute(
@@ -2082,6 +2098,21 @@ def get_regional_incident_detail(
             nonsensitive["province_district"] = loc_row[1]
             nonsensitive["_province_text"] = loc_row[1]
 
+    # Fetch the most recent rejection reason (if any)
+    rejection_row = db.execute(
+        text("""
+            SELECT notes, changed_at
+            FROM wims.incident_verification_history
+            WHERE incident_id = :iid
+              AND new_status = 'REJECTED'
+            ORDER BY changed_at DESC
+            LIMIT 1
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+    rejection_reason = rejection_row[0] if rejection_row else None
+    rejection_at = rejection_row[1].isoformat() if rejection_row and rejection_row[1] else None
+
     return {
         "incident_id": row[0],
         "verification_status": row[1],
@@ -2091,6 +2122,8 @@ def get_regional_incident_detail(
         "longitude": float(row[6]) if row[6] is not None else None,
         "nonsensitive": nonsensitive,
         "sensitive": sd_dict,
+        "rejection_reason": rejection_reason,
+        "rejection_at": rejection_at,
     }
 
 
@@ -2489,7 +2522,6 @@ def update_incident(
         "alarm_timeline": body.alarm_timeline,
         "resources_deployed": body.resources_deployed,
         "problems_encountered": body.problems_encountered,
-        "other_personnel": body.other_personnel,
     }
     jsonb_ns_updates = []
     jsonb_ns_params = {"iid": incident_id}
@@ -2506,6 +2538,7 @@ def update_incident(
     # Update JSONB sensitive fields
     jsonb_sd = {
         "personnel_on_duty": body.personnel_on_duty,
+        "other_personnel": body.other_personnel,
         "casualty_details": body.casualty_details,
         "disposition": body.disposition,
     }
