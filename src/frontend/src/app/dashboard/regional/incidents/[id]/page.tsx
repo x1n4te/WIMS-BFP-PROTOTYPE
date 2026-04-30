@@ -371,7 +371,7 @@ export default function RegionalIncidentDetailPage() {
         </div>
       )}
 
-      {!loading && !error && detail && (
+      {!loading && !error && detail && !isEditing && (
         <>
           {/* Header */}
           <div className="flex flex-wrap items-start gap-3">

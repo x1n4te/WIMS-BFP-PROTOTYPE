@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
 import { fetchRegions, fetchProvinces, fetchCities, updateRegionalIncident } from '@/lib/api';
@@ -139,8 +139,15 @@ export function IncidentForm({
   const [selectedRegionId, setSelectedRegionId] = useState<number | null>(null);
   const [selectedProvinceId, setSelectedProvinceId] = useState<number | null>(null);
   const [selectedCityId, setSelectedCityId] = useState<number | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Set<string>>(new Set());
+
+  const showToast = (message: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(message);
+    toastTimer.current = setTimeout(() => setToast(null), 6000);
+  };
 
   // H. Fire location from MapPicker
   const [latitude, setLatitude] = useState<number | null>(null);
@@ -304,7 +311,7 @@ export function IncidentForm({
       .trim();
 
   const resolveRegionId = (): number | null => {
-    if (typeof assignedRegionId === 'number' && assignedRegionId > 0) return assignedRegionId;
+    if (selectedRegionId) return selectedRegionId;
     if (typeof initialData?.region_id === 'number' && initialData.region_id > 0) return initialData.region_id;
     const raw = formState.region?.trim();
     if (!raw) return null;
@@ -341,16 +348,6 @@ export function IncidentForm({
       .catch(() => { if (active) setRegions([]); });
     return () => { active = false; };
   }, []);
-
-  // RBAC: auto-select the encoder's assigned region once regions are loaded
-  useEffect(() => {
-    if (!assignedRegionId || regions.length === 0 || selectedRegionId) return;
-    const matched = regions.find((r) => r.region_id === assignedRegionId);
-    if (matched) {
-      setSelectedRegionId(matched.region_id);
-      setFormState((prev) => ({ ...prev, region: matched.region_name }));
-    }
-  }, [assignedRegionId, regions, selectedRegionId]);
 
   // Cascade: fetch provinces when a region is selected
   useEffect(() => {
@@ -594,23 +591,7 @@ export function IncidentForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setFormError(null);
-
-    const effectiveRegionId = resolveRegionId();
-    if (!effectiveRegionId) {
-      setFormError('No region detected. Select a region or ensure your account has an assigned region.');
-      return;
-    }
-
-    if (latitude === null || longitude === null) {
-      setFormError('Please select the fire incident location on the map in Section H before submitting.');
-      return;
-    }
-
-    if (!formState.responder_type) {
-      setFormError('Type of Responder (Section A) is required.');
-      return;
-    }
+    setToast(null);
 
     // Field-level validation with highlights
     const errors = new Set<string>();
@@ -621,15 +602,32 @@ export function IncidentForm({
     if (!formState.incident_address) errors.add('incident_address');
     if (!formState.alarm_level) errors.add('alarm_level');
     if (!formState.classification_of_involved) errors.add('classification_of_involved');
+    if (!resolveRegionId()) errors.add('region');
     if (latitude === null || longitude === null) errors.add('map_location');
     if (errors.size > 0) {
       setFieldErrors(errors);
-      setFormError('Please fill in all required fields (highlighted in red).');
-      const firstEl = document.querySelector('[data-field-error="true"]');
-      firstEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const FIELD_NAMES: Record<string, string> = {
+        responder_type: 'Type of Responder',
+        fire_station_name: 'Fire Station Name',
+        notification_dt_date: 'Date of Notification',
+        notification_dt_time: 'Time of Notification',
+        incident_address: 'Incident Address',
+        alarm_level: 'Highest Alarm Level',
+        classification_of_involved: 'Classification of Involved',
+        region: 'Region',
+        map_location: 'Fire Scene Location on Map',
+      };
+      const firstKey = [...errors][0];
+      showToast(`Required field missing: ${FIELD_NAMES[firstKey] ?? firstKey}. Please fill in all highlighted fields.`);
+      setTimeout(() => {
+        const firstEl = document.querySelector('[data-field-error="true"]');
+        firstEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
       return;
     }
     setFieldErrors(new Set());
+
+    const effectiveRegionId = resolveRegionId()!;
     setLoading(true);
 
     const fs = formState as Record<string, unknown>;
@@ -822,7 +820,7 @@ export function IncidentForm({
         await updateRegionalIncident(existingIncidentId, updatePayload);
         onSaved?.();
       } catch (err: unknown) {
-        setFormError(`Save failed: ${(err as Error).message}`);
+        showToast(`Save failed: ${(err as Error).message}`);
       } finally {
         setLoading(false);
       }
@@ -845,7 +843,7 @@ export function IncidentForm({
       }
     } catch (err: unknown) {
       console.error('Submission failed', err);
-      setFormError(`Submission failed: ${(err as Error).message}`);
+      showToast(`Submission failed: ${(err as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -872,9 +870,9 @@ export function IncidentForm({
     const STATIONS = ['BFP QC District III', 'BFP Makati Central', 'BFP Manila District IV', 'BFP Pasig Station 1', 'BFP Mandaluyong Station'];
     const CMDS = ['FINSP Juan dela Cruz', 'FSUPT Maria Santos', 'FO3 Roberto Reyes', 'FO1 Ana Garcia', 'FSMS Pedro Bautista'];
     const CATEGORIES = ['Residential', 'Commercial', 'Industrial', 'Institutional'];
-    const FIRE_ORIGINS = ['Kitchen', 'Electrical Wiring', 'Bedroom', 'Storage Room', 'Garage'];
-    const EXTENTS = ['Partial', 'Total', 'Minor Damage', 'Major Damage'];
-    const STAGES = ['Incipient', 'Free-burning', 'Smoldering', 'Flashover'];
+    const FIRE_ORIGINS = ['Kitchen / Cooking Area', 'Electrical Wiring', 'Bedroom', 'Storage Room', 'Garage', 'Living Room', 'Engine Compartment'];
+    const EXTENTS = ['None / Minor Damage', 'Confined to Object/Vehicle', 'Confined to Room', 'Confined to Structure or Property', 'Total Loss', 'Extended Beyond Structure or Property'];
+    const STAGES = ['Incipient', 'Free-burning', 'Smoldering', 'Flashover', 'Fully Developed'];
     const NARRATIVES = [
       'On or about (time), a call was received by the duty FCOS from a concerned citizen regarding a fire incident at the indicated address. Units were immediately dispatched. Upon arrival, fire was observed at the second floor of the involved structure. Fire was suppressed using standard hoseline operations. No casualties reported.',
       'Duty personnel received a report of a structural fire via telephone. Engine unit was dispatched immediately. Upon arrival, heavy smoke was visible from the structure. Fire was controlled after 45 minutes of suppression operations. One civilian was treated for minor smoke inhalation.',
@@ -925,7 +923,13 @@ export function IncidentForm({
       resources_bfp_ambulance: ri(0, 1),
       resources_non_bfp_ambulance: ri(0, 1),
       resources_bfp_rescue: ri(0, 1),
-      resources_non_bfp_rescue: '0',
+      resources_non_bfp_rescue: ri(0, 1),
+      tools_scba: ri(2, 8),
+      tools_rope: `${ri(1, 4)} sets (50m each)`,
+      tools_ladder: ri(1, 3),
+      tools_hoseline: `${ri(2, 8)} lengths (15m)`,
+      tools_hydraulic: ri(0, 2),
+      hydrant_location_distance: pick(['150m from scene, corner Mabini Ave.', '80m from scene, in front of barangay hall', '200m from scene, near public market', '50m from scene, beside park']),
       alarm_foua: rdatetime(notifDate),
       alarm_foua_commander: pick(CMDS),
       alarm_1st: rdatetime(notifDate),
@@ -936,16 +940,16 @@ export function IncidentForm({
       alarm_fo_commander: pick(CMDS),
       icp_present: pick(['with', 'without']),
       icp_location: 'In front of affected structure',
-      injured_civilian_m: ri(0, 2),
+      injured_civilian_m: ri(0, 3),
       injured_civilian_f: ri(0, 2),
-      fatal_civilian_m: '0',
-      fatal_civilian_f: '0',
-      injured_firefighter_m: '0',
+      injured_firefighter_m: ri(0, 2),
       injured_firefighter_f: '0',
+      injured_auxiliary_m: ri(0, 1),
+      injured_auxiliary_f: '0',
+      fatal_civilian_m: ri(0, 1),
+      fatal_civilian_f: ri(0, 1),
       fatal_firefighter_m: '0',
       fatal_firefighter_f: '0',
-      injured_auxiliary_m: '0',
-      injured_auxiliary_f: '0',
       fatal_auxiliary_m: '0',
       fatal_auxiliary_f: '0',
       pod_engine_commander: `${pick(['FINSP', 'FSUPT', 'FO3'])} ${pick(CMDS).split(' ').slice(1).join(' ')}`,
@@ -980,6 +984,18 @@ export function IncidentForm({
 
   return (
     <div className="bg-white p-6 rounded-lg shadow-md max-w-4xl mx-auto space-y-6">
+      {/* Floating toast popup */}
+      {toast && (
+        <div
+          role="alert"
+          className="fixed top-5 left-1/2 -translate-x-1/2 z-[200] flex items-start gap-3 bg-red-700 text-white text-sm font-semibold px-5 py-3.5 rounded-xl shadow-2xl max-w-sm w-full"
+          style={{ pointerEvents: 'auto' }}
+        >
+          <span className="flex-1 leading-snug">{toast}</span>
+          <button type="button" onClick={() => setToast(null)} className="text-white/70 hover:text-white text-xl leading-none -mt-0.5 shrink-0">×</button>
+        </div>
+      )}
+
       {/* Header Bar */}
       <div className="flex flex-wrap justify-between items-center gap-2 bg-red-800 -m-6 mb-4 p-4 rounded-t-lg text-white">
         <h2 className="text-xl font-bold">{isEditMode ? 'Edit Incident Report' : 'AFOR Report Entry'}</h2>
@@ -1004,12 +1020,6 @@ export function IncidentForm({
           )}
         </div>
       </div>
-
-      {formError && (
-        <div className="rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-          {formError}
-        </div>
-      )}
 
       <form onSubmit={handleSubmit} className="space-y-8 text-gray-900">
 
@@ -1038,14 +1048,14 @@ export function IncidentForm({
             </div>
 
             <div data-field-error={fieldErrors.has('notification_dt_time') ? 'true' : undefined}>
-              <label className={labelCls}>Time Fire Notification Received (24h){reqMark}</label>
-              <input name="notification_dt_time" type="text" pattern="\d{2}:\d{2}" maxLength={5} placeholder="HH:MM" className={errCls('notification_dt_time')} value={formState.notification_dt_time} onChange={handleChange} />
+              <label className={labelCls}>Time Fire Notification Received{reqMark}</label>
+              <input name="notification_dt_time" type="time" className={errCls('notification_dt_time')} value={formState.notification_dt_time} onChange={handleChange} />
             </div>
 
-            <div>
-              <label className={labelCls}>Region</label>
+            <div data-field-error={fieldErrors.has('region') ? 'true' : undefined}>
+              <label className={labelCls}>Region{reqMark}</label>
               <select
-                className={inputCls}
+                className={fieldErrors.has('region') ? errCls('region') : inputCls}
                 value={selectedRegionId ?? ''}
                 onChange={(e) => {
                   const rid = Number(e.target.value);
@@ -1127,13 +1137,13 @@ export function IncidentForm({
             </div>
 
             <div>
-              <label className={labelCls}>Time Engine Dispatched (24h)</label>
-              <input name="time_engine_dispatched" type="text" pattern="\d{2}:\d{2}" maxLength={5} placeholder="HH:MM" className={inputCls} value={formState.time_engine_dispatched} onChange={handleChange} />
+              <label className={labelCls}>Time Engine Dispatched</label>
+              <input name="time_engine_dispatched" type="time" className={inputCls} value={formState.time_engine_dispatched} onChange={handleChange} />
             </div>
 
             <div>
-              <label className={labelCls}>Time Arrived at Fire Scene (24h)</label>
-              <input name="time_arrived_at_scene" type="text" pattern="\d{2}:\d{2}" maxLength={5} placeholder="HH:MM" className={inputCls} value={formState.time_arrived_at_scene} onChange={handleChange} />
+              <label className={labelCls}>Time Arrived at Fire Scene</label>
+              <input name="time_arrived_at_scene" type="time" className={inputCls} value={formState.time_arrived_at_scene} onChange={handleChange} />
             </div>
 
             <div>
@@ -1164,8 +1174,8 @@ export function IncidentForm({
             </div>
 
             <div>
-              <label className={labelCls}>Time Returned to Base (24h)</label>
-              <input name="time_returned_to_base" type="text" pattern="\d{2}:\d{2}" maxLength={5} placeholder="HH:MM" className={inputCls} value={formState.time_returned_to_base} onChange={handleChange} />
+              <label className={labelCls}>Time Returned to Base</label>
+              <input name="time_returned_to_base" type="time" className={inputCls} value={formState.time_returned_to_base} onChange={handleChange} />
             </div>
 
             <div>

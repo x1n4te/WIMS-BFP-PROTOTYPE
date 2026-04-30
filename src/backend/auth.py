@@ -332,7 +332,7 @@ async def get_regional_encoder(
     Require REGIONAL_ENCODER role with an assigned region.
     Returns user dict augmented with assigned_region_id.
     """
-    if current_user.get("role") != "REGIONAL_ENCODER":
+    if current_user.get("role") not in ("REGIONAL_ENCODER", "ENCODER"):
         raise HTTPException(
             status_code=403, detail="REGIONAL_ENCODER privileges required"
         )
