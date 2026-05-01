@@ -1,17 +1,42 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
+import { fetchRegions } from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
 import { useUserProfile } from '@/lib/auth';
 import { Loader2, Save, Upload } from 'lucide-react';
+import type { Region } from '@/types/api';
+
+const PROBLEM_OPTIONS = [
+    'Inaccurate address / no landmarks', 'Geographically challenged', 'Road conditions', 'Road under construction',
+    'Traffic congestion', 'Road accidents', 'Vehicles failure to yield', 'Natural disasters',
+    'Civil disturbance', 'Uncooperative / panicked residents', 'Safety and security threats', 'Response delays (security/owner)',
+    'Engine failure / mechanical problems', 'Uncooperative fire auxiliary', 'Poor water supply', 'Intense heat and smoke',
+    'Structural hazards', 'Equipment malfunction', 'Lack of coordination', 'Breakdown in radio communication',
+    'HazMat contamination', 'Physical exhaustion', 'Emotional/psychological effects', 'Community complaints'
+];
+
+const normalizeProblemLabel = (value: string): string =>
+    value
+        .toLowerCase()
+        .replace(/[()]/g, ' ')
+        .replace(/[\/-]/g, ' ')
+        .replace(/\b(or|and)\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
 export function IncidentForm({ initialData }: { initialData?: Incident }) {
+    const router = useRouter();
     const { assignedRegionId } = useUserProfile();
     const [loading, setLoading] = useState(false);
     const [pendingCount, setPendingCount] = useState(0);
+    const [regions, setRegions] = useState<Region[]>([]);
     const [sketchFile, setSketchFile] = useState<File | null>(null);
     const [sketchPreview, setSketchPreview] = useState<string | null>(null);
+    const [sketchFiles, setSketchFiles] = useState<File[]>([]);
+    const [sketchPreviews, setSketchPreviews] = useState<string[]>([]);
 
     // Initial State - Flattened for Form, Mapped to Incident on Submit
     const [formState, setFormState] = useState({
@@ -127,6 +152,77 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
         { name: '', designation: '', remarks: '' }
     ]);
 
+    const toDateTimeLocalValue = (raw: unknown): string => {
+        if (!raw) return '';
+        const value = String(raw).trim();
+        const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+        if (match) return `${match[1]}T${match[2]}`;
+
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        const hh = String(date.getHours()).padStart(2, '0');
+        const min = String(date.getMinutes()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+    };
+
+    const alarmEntryToDateTimeLocal = (entry: unknown): string => {
+        if (!entry) return '';
+        if (typeof entry === 'string' || typeof entry === 'number') {
+            return toDateTimeLocalValue(entry);
+        }
+        if (typeof entry === 'object') {
+            const obj = entry as Record<string, unknown>;
+            return toDateTimeLocalValue(obj.time ?? obj.value ?? obj.datetime ?? '');
+        }
+        return '';
+    };
+
+    const normalizeRegionLabel = (value: unknown): string =>
+        String(value ?? '')
+            .toLowerCase()
+            .replace(/region/gi, ' ')
+            .replace(/[^a-z0-9]/g, '')
+            .trim();
+
+    const resolveRegionId = (): number | null => {
+        if (typeof assignedRegionId === 'number' && assignedRegionId > 0) {
+            return assignedRegionId;
+        }
+
+        if (typeof initialData?.region_id === 'number' && initialData.region_id > 0) {
+            return initialData.region_id;
+        }
+
+        const raw = formState.region?.trim();
+        if (!raw) return null;
+
+        const numeric = Number(raw);
+        if (Number.isInteger(numeric) && numeric > 0) {
+            return numeric;
+        }
+
+        const norm = normalizeRegionLabel(raw);
+        const match = regions.find((r) => normalizeRegionLabel(r.region_name) === norm);
+        return match?.region_id ?? null;
+    };
+
+    useEffect(() => {
+        let active = true;
+        void fetchRegions()
+            .then((items) => {
+                if (active) setRegions(items);
+            })
+            .catch(() => {
+                if (active) setRegions([]);
+            });
+        return () => {
+            active = false;
+        };
+    }, []);
+
     // Handle initialData pre-fill
     useEffect(() => {
         if (initialData) {
@@ -134,7 +230,34 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
             const sen = initialData.incident_sensitive_details || {};
             const res = (ns.resources_deployed || { trucks: {}, special_assets: {}, medical: {} }) as Record<string, Record<string, unknown>>;
             const timeline = ns.alarm_timeline || {};
-            const casualties = (ns.casualty_details || { injured: {}, fatalities: {} }) as { injured: Record<string, unknown>; fatalities: Record<string, unknown> };
+            const casualties = ((sen.casualty_details as { injured?: Record<string, unknown>; fatalities?: Record<string, unknown> }) || { injured: {}, fatalities: {} });
+            const injured = (casualties.injured || {}) as Record<string, unknown>;
+            const fatalities = (casualties.fatalities || {}) as Record<string, unknown>;
+            const civilianInjured = (injured.civilian as Record<string, unknown>) || {};
+            const firefighterInjured = ((injured.firefighter || injured.bfp) as Record<string, unknown>) || {};
+            const auxiliaryInjured = (injured.auxiliary as Record<string, unknown>) || {};
+            const civilianFatalities = (fatalities.civilian as Record<string, unknown>) || {};
+            const firefighterFatalities = ((fatalities.firefighter || fatalities.bfp) as Record<string, unknown>) || {};
+            const auxiliaryFatalities = (fatalities.auxiliary as Record<string, unknown>) || {};
+            const incomingProblems = Array.isArray(ns.problems_encountered)
+                ? ns.problems_encountered.map((p: unknown) => String(p)).filter(Boolean)
+                : [];
+            const normalizedOptionMap = new Map(
+                PROBLEM_OPTIONS.map((option) => [normalizeProblemLabel(option), option])
+            );
+            const selectedProblems: string[] = [];
+            const extraProblems: string[] = [];
+            for (const problem of incomingProblems) {
+                const normalized = normalizeProblemLabel(problem);
+                const matched = normalizedOptionMap.get(normalized);
+                if (matched) {
+                    selectedProblems.push(matched);
+                } else {
+                    extraProblems.push(problem);
+                }
+            }
+            const explicitOthers = typeof ns.problems_others === 'string' ? ns.problems_others : '';
+            const combinedOthers = Array.from(new Set([explicitOthers, ...extraProblems].map((p) => p.trim()).filter(Boolean))).join(', ');
 
             // @ts-expect-error -- prev spread preserves all fields; type checker cannot verify exhaustive return
             setFormState((prev) => ({
@@ -144,13 +267,13 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
                 notification_dt_date: ns.notification_dt ? ns.notification_dt.split('T')[0] : '',
                 notification_dt_time: ns.notification_dt ? ns.notification_dt.split('T')[1]?.substring(0, 5) : '',
                 region: ns.region || '',
-                province_district: ns.province_district || '',
+                province_district: ns.province_district || initialData._province_text || '',
                 city_municipality: initialData._city_text || ns.city_municipality || '',
                 incident_address: ns.incident_address || '',
                 nearest_landmark: ns.nearest_landmark || '',
                 caller_name: sen.caller_name || '',
                 caller_number: sen.caller_number || '',
-                receiver_name: ns.receiver_name || '',
+                receiver_name: sen.receiver_name || ns.receiver_name || '',
                 engine_dispatched: ns.engine_dispatched || '',
                 time_engine_dispatched: ns.time_engine_dispatched || '',
                 time_arrived_at_scene: ns.time_arrived_at_scene || '',
@@ -160,8 +283,8 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
                 time_returned_to_base: ns.time_returned_to_base || '',
                 total_gas_consumed_liters: ns.total_gas_consumed_liters?.toString() || '',
 
-                classification_of_involved: ns.classification_of_involved || '',
-                type_of_involved_general_category: ns.type_of_involved_general_category || '',
+                classification_of_involved: ns.classification_of_involved || ns.general_category || '',
+                type_of_involved_general_category: ns.type_of_involved_general_category || ns.sub_category || '',
                 owner_name: initialData.incident_sensitive_details?.owner_name || ns.owner_name || '',
                 establishment_name: initialData.incident_sensitive_details?.establishment_name || ns.establishment_name || '',
                 general_description_of_involved: ns.general_description_of_involved || '',
@@ -186,38 +309,102 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
                 resources_non_bfp_rescue: res.special_assets?.rescue_non_bfp?.toString() || '',
                 resources_others: res.special_assets?.others || '',
 
-                alarm_1st: timeline.alarm_1st || '',
-                alarm_2nd: timeline.alarm_2nd || '',
-                alarm_3rd: timeline.alarm_3rd || '',
-                alarm_4th: timeline.alarm_4th || '',
-                alarm_5th: timeline.alarm_5th || '',
-                alarm_tf_alpha: timeline.alarm_tf_alpha || '',
-                alarm_tf_bravo: timeline.alarm_tf_bravo || '',
-                alarm_tf_charlie: timeline.alarm_tf_charlie || '',
-                alarm_tf_delta: timeline.alarm_tf_delta || '',
-                alarm_general: timeline.alarm_general || '',
-                alarm_fuc: timeline.alarm_fuc || '',
-                alarm_fo: timeline.alarm_fo || '',
+                alarm_1st: alarmEntryToDateTimeLocal(timeline.alarm_1st),
+                alarm_2nd: alarmEntryToDateTimeLocal(timeline.alarm_2nd),
+                alarm_3rd: alarmEntryToDateTimeLocal(timeline.alarm_3rd),
+                alarm_4th: alarmEntryToDateTimeLocal(timeline.alarm_4th),
+                alarm_5th: alarmEntryToDateTimeLocal(timeline.alarm_5th),
+                alarm_tf_alpha: alarmEntryToDateTimeLocal(timeline.alarm_tf_alpha ?? timeline.tf_alpha),
+                alarm_tf_bravo: alarmEntryToDateTimeLocal(timeline.alarm_tf_bravo ?? timeline.tf_bravo),
+                alarm_tf_charlie: alarmEntryToDateTimeLocal(timeline.alarm_tf_charlie ?? timeline.tf_charlie),
+                alarm_tf_delta: alarmEntryToDateTimeLocal(timeline.alarm_tf_delta ?? timeline.tf_delta),
+                alarm_general: alarmEntryToDateTimeLocal(timeline.alarm_general ?? timeline.general),
+                alarm_fuc: alarmEntryToDateTimeLocal(timeline.alarm_fuc ?? timeline.fuc),
+                alarm_fo: alarmEntryToDateTimeLocal(timeline.alarm_fo ?? timeline.fo),
 
-                injured_civilian_m: casualties.injured?.civilian_m?.toString() || '',
-                injured_civilian_f: casualties.injured?.civilian_f?.toString() || '',
-                injured_firefighter_m: casualties.injured?.bfp_m?.toString() || '',
-                injured_firefighter_f: casualties.injured?.bfp_f?.toString() || '',
-                fatal_civilian_m: casualties.fatalities?.civilian_m?.toString() || '',
-                fatal_civilian_f: casualties.fatalities?.civilian_f?.toString() || '',
+                injured_civilian_m: (civilianInjured.m as number | string | undefined)?.toString() || '',
+                injured_civilian_f: (civilianInjured.f as number | string | undefined)?.toString() || '',
+                injured_firefighter_m: (firefighterInjured.m as number | string | undefined)?.toString() || '',
+                injured_firefighter_f: (firefighterInjured.f as number | string | undefined)?.toString() || '',
+                injured_auxiliary_m: (auxiliaryInjured.m as number | string | undefined)?.toString() || '',
+                injured_auxiliary_f: (auxiliaryInjured.f as number | string | undefined)?.toString() || '',
+                fatal_civilian_m: (civilianFatalities.m as number | string | undefined)?.toString() || '',
+                fatal_civilian_f: (civilianFatalities.f as number | string | undefined)?.toString() || '',
+                fatal_firefighter_m: (firefighterFatalities.m as number | string | undefined)?.toString() || '',
+                fatal_firefighter_f: (firefighterFatalities.f as number | string | undefined)?.toString() || '',
+                fatal_auxiliary_m: (auxiliaryFatalities.m as number | string | undefined)?.toString() || '',
+                fatal_auxiliary_f: (auxiliaryFatalities.f as number | string | undefined)?.toString() || '',
                 
                 incident_commander: initialData.incident_sensitive_details?.personnel_on_duty?.engine_commander || '',
                 ground_commander: initialData.incident_sensitive_details?.personnel_on_duty?.shift_in_charge || '',
                 pod_engine_commander: initialData.incident_sensitive_details?.personnel_on_duty?.engine_commander || '',
                 pod_shift_in_charge: initialData.incident_sensitive_details?.personnel_on_duty?.shift_in_charge || '',
 
-                narrative_report: initialData.narrative_report || '',
-                recommendations: initialData.recommendations || '',
-                disposition: initialData.disposition || '',
+                narrative_report: (sen.narrative_report as string) || '',
+                recommendations: (ns.recommendations as string) || '',
+                problems_encountered: selectedProblems,
+                problems_others: combinedOthers,
+                disposition: (sen.disposition as string) || '',
+                disposition_prepared_by: (sen.disposition_prepared_by as string) || '',
+                disposition_noted_by: (sen.disposition_noted_by as string) || '',
             }));
 
-            if (ns.other_personnel && Array.isArray(ns.other_personnel)) {
-                setOtherPersonnel(ns.other_personnel.map((p: Record<string, unknown>) => ({
+            const sketchB64 =
+                (typeof (sen as Record<string, unknown>).sketch_base64 === 'string'
+                    ? (sen as Record<string, unknown>).sketch_base64
+                    : null) ||
+                (typeof (initialData as Record<string, unknown>).sketch_base64 === 'string'
+                    ? (initialData as Record<string, unknown>).sketch_base64
+                    : null);
+            const sketchB64ListRaw =
+                (Array.isArray((sen as Record<string, unknown>).sketch_images_base64)
+                    ? (sen as Record<string, unknown>).sketch_images_base64
+                    : null) ||
+                (Array.isArray((initialData as Record<string, unknown>).sketch_images_base64)
+                    ? (initialData as Record<string, unknown>).sketch_images_base64
+                    : null) ||
+                [];
+            const sketchB64List = sketchB64ListRaw
+                .map((item) => (typeof item === 'string' ? item : ''))
+                .filter(Boolean);
+            if (sketchB64 && !sketchB64List.includes(sketchB64)) {
+                sketchB64List.unshift(sketchB64);
+            }
+            const sketchMime =
+                (typeof (initialData as Record<string, unknown>).sketch_mime_type === 'string'
+                    ? (initialData as Record<string, unknown>).sketch_mime_type
+                    : null) || 'image/png';
+            const sketchMimeListRaw =
+                (Array.isArray((initialData as Record<string, unknown>).sketch_mime_types)
+                    ? (initialData as Record<string, unknown>).sketch_mime_types
+                    : null) ||
+                (Array.isArray((sen as Record<string, unknown>).sketch_mime_types)
+                    ? (sen as Record<string, unknown>).sketch_mime_types
+                    : null) ||
+                [];
+            const sketchMimeList = sketchMimeListRaw
+                .map((item) => (typeof item === 'string' ? item : ''))
+                .filter(Boolean);
+
+            if (sketchB64List.length > 0) {
+                setSketchPreviews(sketchB64List);
+                setSketchPreview(sketchB64List[0]);
+                try {
+                    const files = sketchB64List.map((b64, index) => {
+                        const blob = base64ToBlob(b64);
+                        const mime = blob.type || sketchMimeList[index] || sketchMime;
+                        return new File([blob], `afor_sketch_${index + 1}`, { type: mime });
+                    });
+                    setSketchFiles(files);
+                    setSketchFile(files[0] || null);
+                } catch {
+                    // Keep preview(s) even if blob conversion fails.
+                }
+            }
+
+            const people = (sen.other_personnel || ns.other_personnel) as Record<string, unknown>[] | undefined;
+            if (people && Array.isArray(people)) {
+                setOtherPersonnel(people.map((p: Record<string, unknown>) => ({
                     name: (p.name as string) || '',
                     designation: (p.designation as string) || '',
                     remarks: (p.remarks as string) || ''
@@ -271,7 +458,13 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
 
                 // If there's a stored sketch, upload it now
                 const firstIncident = payload.incidents[0];
-                if (firstIncident?.incident_sensitive_details?.sketch_base64) {
+                const sketchList = firstIncident?.incident_sensitive_details?.sketch_images_base64 || [];
+                if (Array.isArray(sketchList) && sketchList.length > 0) {
+                    for (const sketchBase64 of sketchList) {
+                        const blob = base64ToBlob(sketchBase64);
+                        await edgeFunctions.uploadAttachment(incidentId, blob);
+                    }
+                } else if (firstIncident?.incident_sensitive_details?.sketch_base64) {
                     const blob = base64ToBlob(firstIncident.incident_sensitive_details.sketch_base64);
                     await edgeFunctions.uploadAttachment(incidentId, blob);
                 }
@@ -305,8 +498,9 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
-        if (!assignedRegionId) {
-            alert("No region assigned.");
+        const effectiveRegionId = resolveRegionId();
+        if (!effectiveRegionId) {
+            alert("No region indicated. Please select a region or ensure the AFOR region was detected.");
             return;
         }
 
@@ -315,9 +509,12 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
         try {
             // Map Form State to Incident Interface
             const incident: Incident = {
-                region_id: assignedRegionId,
+                region_id: effectiveRegionId,
                 incident_nonsensitive_details: {
                     notification_dt: formState.notification_dt_date && formState.notification_dt_time ? `${formState.notification_dt_date}T${formState.notification_dt_time}:00` : new Date().toISOString(),
+                    region: formState.region,
+                    province_district: formState.province_district,
+                    city_municipality: formState.city_municipality,
                     fire_station_name: formState.fire_station_name,
                     responder_type: formState.responder_type,
                     alarm_level: formState.alarm_level,
@@ -389,7 +586,10 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
                     },
 
                     recommendations: formState.recommendations,
-                    problems_encountered: formState.problems_encountered ? [...(formState.problems_encountered || []), formState.problems_others].filter(Boolean) : [],
+                    problems_encountered: [
+                        ...(formState.problems_encountered || []),
+                        ...String(formState.problems_others || '').split(',').map((s) => s.trim()).filter(Boolean),
+                    ],
                     other_personnel: otherPersonnel,
                 },
                 incident_sensitive_details: {
@@ -442,26 +642,34 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
             };
 
             const payload = {
-                region_id: assignedRegionId,
+                region_id: effectiveRegionId,
                 incidents: [incident]
             };
 
             if (navigator.onLine) {
                 const res = await edgeFunctions.uploadBundle(payload);
                 const incidentId = res.incident_ids[0];
+                if (!incidentId) {
+                    throw new Error('Upload succeeded but no incident ID was returned.');
+                }
                 
                 // Upload sketch if exists
-                if (sketchFile && incidentId) {
-                    await edgeFunctions.uploadAttachment(incidentId, sketchFile);
+                const filesToUpload = sketchFiles.length > 0 ? sketchFiles : (sketchFile ? [sketchFile] : []);
+                for (const file of filesToUpload) {
+                    await edgeFunctions.uploadAttachment(incidentId, file);
                 }
                 
                 alert(`Uploaded successfully! Incident ID: ${incidentId}`);
-                // Optional: Reset form here
+                router.push('/dashboard/regional');
+                router.refresh();
             } else {
                 // If offline, convert sketch to Base64 and store in payload
-                if (sketchFile) {
-                    const base64 = await fileToBase64(sketchFile);
+                const filesToStore = sketchFiles.length > 0 ? sketchFiles : (sketchFile ? [sketchFile] : []);
+                if (filesToStore.length > 0) {
+                    const base64List = await Promise.all(filesToStore.map((file) => fileToBase64(file)));
+                    const base64 = base64List[0];
                     incident.incident_sensitive_details!.sketch_base64 = base64;
+                    incident.incident_sensitive_details!.sketch_images_base64 = base64List;
                 }
                 await queueIncident(payload);
                 await checkPending();
@@ -514,6 +722,43 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
                         <div>
                             <label className="block text-sm font-bold text-gray-900 mb-1">Time Fire Notification Received</label>
                             <input name="notification_dt_time" type="time" className="w-full border border-gray-300 rounded p-2 text-gray-900 font-medium" value={formState.notification_dt_time} onChange={handleChange} />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-bold text-gray-900 mb-1">Region</label>
+                            <input
+                                name="region"
+                                list="afor-region-options"
+                                type="text"
+                                className="w-full border border-gray-300 rounded p-2 text-gray-900 font-medium"
+                                placeholder="e.g. NCR / Region IV-A"
+                                value={formState.region}
+                                onChange={handleChange}
+                            />
+                            <datalist id="afor-region-options">
+                                {regions.map((r) => (
+                                    <option key={r.region_id} value={r.region_name} />
+                                ))}
+                            </datalist>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-bold text-gray-900 mb-1">Province / District</label>
+                            <input
+                                name="province_district"
+                                type="text"
+                                className="w-full border border-gray-300 rounded p-2 text-gray-900 font-medium"
+                                value={formState.province_district}
+                                onChange={handleChange}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-bold text-gray-900 mb-1">City / Municipality</label>
+                            <input
+                                name="city_municipality"
+                                type="text"
+                                className="w-full border border-gray-300 rounded p-2 text-gray-900 font-medium"
+                                value={formState.city_municipality}
+                                onChange={handleChange}
+                            />
                         </div>
                         <div className="md:col-span-2">
                             <label className="block text-sm font-bold text-gray-900 mb-1">Complete Address of Fire Incident</label>
@@ -678,25 +923,42 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
                 <div className="space-y-4 border-b pb-4">
                     <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">H. Sketch of Fire Scene</h3>
                     <div className="border-2 border-dashed border-gray-300 rounded p-4 text-center bg-gray-50">
-                        {sketchPreview ? (
-                            <div className="relative group mx-auto w-full max-w-md">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img src={sketchPreview} alt="Sketch Preview" className="mx-auto h-48 object-contain rounded shadow" />
-                                <button type="button" onClick={() => { setSketchFile(null); setSketchPreview(null); }} className="absolute top-2 right-2 bg-red-600 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Loader2 className="w-4 h-4" /> {/* Fallback icon or just use 'x' */}
+                        {sketchPreviews.length > 0 ? (
+                            <div className="relative group mx-auto w-full max-w-3xl">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {sketchPreviews.map((preview, index) => (
+                                        <div key={`${preview.slice(0, 32)}-${index}`} className="rounded bg-white p-2 border">
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img src={preview} alt={`Sketch Preview ${index + 1}`} className="mx-auto h-40 object-contain rounded shadow" />
+                                        </div>
+                                    ))}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setSketchFile(null);
+                                        setSketchPreview(null);
+                                        setSketchFiles([]);
+                                        setSketchPreviews([]);
+                                    }}
+                                    className="absolute top-2 right-2 bg-red-600 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                    <Loader2 className="w-4 h-4" />
                                 </button>
                             </div>
                         ) : (
                             <label className="cursor-pointer block">
                                 <Upload className="w-8 h-8 mx-auto text-gray-400 mb-2" />
-                                <span className="text-sm text-gray-500">Click to upload photo sketch of scene</span>
-                                <input type="file" accept="image/*" className="hidden" onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                    const file = e.target.files?.[0];
-                                    if (file) {
-                                        setSketchFile(file);
-                                        const reader = new FileReader();
-                                        reader.onloadend = () => setSketchPreview(reader.result as string);
-                                        reader.readAsDataURL(file);
+                                <span className="text-sm text-gray-500">Click to upload sketch image(s) of scene</span>
+                                <input type="file" accept="image/*" multiple className="hidden" onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                    const files = Array.from(e.target.files || []);
+                                    if (files.length > 0) {
+                                        setSketchFiles(files);
+                                        setSketchFile(files[0] || null);
+                                        void Promise.all(files.map((file) => fileToBase64(file))).then((previews) => {
+                                            setSketchPreviews(previews);
+                                            setSketchPreview(previews[0] || null);
+                                        });
                                     }
                                 }} />
                             </label>
@@ -714,14 +976,7 @@ export function IncidentForm({ initialData }: { initialData?: Incident }) {
                 <div className="space-y-4 border-b pb-4">
                     <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">J. Problems Encountered</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-                        {[
-                            "Inaccurate address / no landmarks", "Geographically challenged", "Road conditions", "Road under construction",
-                            "Traffic congestion", "Road accidents", "Vehicles failure to yield", "Natural disasters",
-                            "Civil disturbance", "Uncooperative / panicked residents", "Safety and security threats", "Response delays (security/owner)",
-                            "Engine failure / mechanical problems", "Uncooperative fire auxiliary", "Poor water supply", "Intense heat and smoke",
-                            "Structural hazards", "Equipment malfunction", "Lack of coordination", "Breakdown in radio communication",
-                            "HazMat contamination", "Physical exhaustion", "Emotional/psychological effects", "Community complaints"
-                        ].map(prob => (
+                        {PROBLEM_OPTIONS.map(prob => (
                             <label key={prob} className="flex items-start gap-2">
                                 <input type="checkbox" className="mt-1 h-4 w-4" checked={(formState.problems_encountered || []).includes(prob)}
                                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => {

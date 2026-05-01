@@ -1,16 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import {
     fetchAdminUsers,
     updateAdminUser,
+    createAdminUser,
     fetchAdminSecurityLogs,
     updateAdminSecurityLog,
     fetchAuditLogs,
     analyzeSecurityLog,
+    fetchRegions,
 } from '@/lib/api';
+import { Region } from '@/types/api';
 import {
     BarChart3,
     Users,
@@ -22,6 +25,10 @@ import {
     CheckCircle,
     XCircle,
     Sparkles,
+    UserPlus,
+    Copy,
+    Eye,
+    EyeOff,
 } from 'lucide-react';
 
 interface AdminUser {
@@ -71,10 +78,26 @@ export default function AdminSystemPage() {
     const [loadingUsers, setLoadingUsers] = useState(false);
     const [loadingLogs, setLoadingLogs] = useState(false);
     const [loadingAudit, setLoadingAudit] = useState(false);
+    const [regions, setRegions] = useState<Region[]>([]);
     const [selectedLog, setSelectedLog] = useState<SecurityLog | null>(null);
     const [actionNote, setActionNote] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [analyzingLogId, setAnalyzingLogId] = useState<number | null>(null);
+
+    // Create User modal state
+    const [showCreateUser, setShowCreateUser] = useState(false);
+    const [createForm, setCreateForm] = useState({
+        first_name: '',
+        last_name: '',
+        email: '',
+        role: 'REGIONAL_ENCODER',
+        assigned_region_id: '',
+        contact_number: '',
+    });
+    const [isCreating, setIsCreating] = useState(false);
+    const [createdUser, setCreatedUser] = useState<{ username: string; temporary_password: string } | null>(null);
+    const [showTempPassword, setShowTempPassword] = useState(false);
+    const [copySuccess, setCopySuccess] = useState(false);
 
     useEffect(() => {
         if (!loading && role !== 'SYSTEM_ADMIN') {
@@ -87,8 +110,18 @@ export default function AdminSystemPage() {
             loadUsers();
             loadSecurityLogs();
             loadAuditLogs();
+            loadRegions();
         }
     }, [role]);
+
+    const loadRegions = async () => {
+        try {
+            const data = await fetchRegions();
+            setRegions(data);
+        } catch {
+            setRegions([]);
+        }
+    };
 
     const loadUsers = async () => {
         setLoadingUsers(true);
@@ -119,17 +152,17 @@ export default function AdminSystemPage() {
         try {
             const data = await fetchAuditLogs({ limit: 50, offset: 0 });
             setAuditLogs({
-              items: data.items.map((item): AuditItem => ({
-                audit_id: item.id,
-                user_id: item.user_id,
-                action_type: item.action,
-                table_affected: item.resource,
-                record_id: null,
-                ip_address: null,
-                user_agent: null,
-                timestamp: item.timestamp,
-              })),
-              total: data.total,
+                items: data.items.map((item): AuditItem => ({
+                    audit_id: item.id,
+                    user_id: item.user_id,
+                    action_type: item.action,
+                    table_affected: item.resource,
+                    record_id: null,
+                    ip_address: null,
+                    user_agent: null,
+                    timestamp: item.timestamp,
+                })),
+                total: data.total,
             });
         } catch {
             setAuditLogs({ items: [], total: 0 });
@@ -148,6 +181,44 @@ export default function AdminSystemPage() {
         } catch (e: unknown) {
             alert((e as { message?: string })?.message ?? 'Update failed');
         }
+    };
+
+    const handleCreateUser = async () => {
+        const payload = {
+            ...createForm,
+            assigned_region_id: createForm.role === 'REGIONAL_ENCODER' ? Number(createForm.assigned_region_id) : undefined,
+            first_name: createForm.first_name.trim(),
+            last_name: createForm.last_name.trim(),
+        };
+        if (!payload.first_name || !payload.last_name || !payload.email || !payload.role) {
+            alert('First name, last name, email, and role are required.');
+            return;
+        }
+        setIsCreating(true);
+        try {
+            const result = await createAdminUser({
+                email: payload.email,
+                first_name: payload.first_name,
+                last_name: payload.last_name,
+                role: payload.role,
+                contact_number: payload.contact_number || undefined,
+                assigned_region_id: payload.assigned_region_id,
+            });
+            setCreatedUser({ username: result.username, temporary_password: result.temporary_password });
+            setCreateForm({ first_name: '', last_name: '', email: '', role: 'REGIONAL_ENCODER', contact_number: '', assigned_region_id: '' });
+            await loadUsers();
+        } catch (e: unknown) {
+            alert((e as { message?: string })?.message ?? 'Failed to create user');
+        } finally {
+            setIsCreating(false);
+        }
+    };
+
+    const handleCopyPassword = () => {
+        if (!createdUser) return;
+        navigator.clipboard.writeText(createdUser.temporary_password);
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
     };
 
     const handleUpdateSecurityLog = async () => {
@@ -234,9 +305,18 @@ export default function AdminSystemPage() {
                         <Users className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
                         <span>Identity Governance</span>
                     </div>
-                    <button onClick={loadUsers} disabled={loadingUsers} className="flex items-center gap-1 text-sm font-medium disabled:opacity-50" style={{ color: 'var(--bfp-maroon)' }}>
-                        <RefreshCw className={`w-4 h-4 ${loadingUsers ? 'animate-spin' : ''}`} /> Refresh
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => { setShowCreateUser(true); setCreatedUser(null); }}
+                            className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md text-white"
+                            style={{ backgroundColor: 'var(--bfp-maroon)' }}
+                        >
+                            <UserPlus className="w-4 h-4" /> Create User
+                        </button>
+                        <button onClick={loadUsers} disabled={loadingUsers} className="flex items-center gap-1 text-sm font-medium disabled:opacity-50" style={{ color: 'var(--bfp-maroon)' }}>
+                            <RefreshCw className={`w-4 h-4 ${loadingUsers ? 'animate-spin' : ''}`} /> Refresh
+                        </button>
+                    </div>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
@@ -412,6 +492,153 @@ export default function AdminSystemPage() {
                                 </div>
                             )}
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Create User Modal */}
+            {showCreateUser && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                    <div className="rounded-xl shadow-2xl w-full max-w-lg bg-white overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center" style={{ backgroundColor: 'var(--sidebar-bg)' }}>
+                            <div className="flex items-center gap-2">
+                                <UserPlus className="w-5 h-5 text-white" />
+                                <h3 className="text-base font-bold text-white">Onboard New User</h3>
+                            </div>
+                            <button onClick={() => { setShowCreateUser(false); setCreatedUser(null); }} className="text-white/70 hover:text-white">
+                                <XCircle className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {createdUser ? (
+                            /* Success state — show the temporary password */
+                            <div className="p-6 space-y-4">
+                                <div className="flex items-center gap-2 text-green-700 font-semibold">
+                                    <CheckCircle className="w-5 h-5" />
+                                    <span>User created successfully!</span>
+                                </div>
+                                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+                                    <p className="text-sm text-amber-800 font-medium">⚠ Distribute this temporary password to the user securely. They must change it on first login.</p>
+                                    <div>
+                                        <p className="text-xs text-gray-500 mb-1">Username</p>
+                                        <p className="text-sm bg-white border border-gray-200 rounded px-3 py-1.5">{createdUser.username}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-xs text-gray-500 mb-1">Temporary Password</p>
+                                        <div className="flex items-center gap-2">
+                                            <p className="text-sm bg-white border border-gray-200 rounded px-3 py-1.5 flex-1 tracking-widest">
+                                                {showTempPassword ? createdUser.temporary_password : '••••••••••••••'}
+                                            </p>
+                                            <button onClick={() => setShowTempPassword(!showTempPassword)} className="p-2 text-gray-500 hover:text-gray-700">
+                                                {showTempPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                            </button>
+                                            <button onClick={handleCopyPassword} className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-md font-medium" style={{ backgroundColor: copySuccess ? '#16a34a' : 'var(--sidebar-bg)', color: 'white' }}>
+                                                <Copy className="w-4 h-4" />{copySuccess ? 'Copied!' : 'Copy'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => { setShowCreateUser(false); setCreatedUser(null); setShowTempPassword(false); }}
+                                    className="w-full py-2 rounded-md text-white font-medium"
+                                    style={{ backgroundColor: 'var(--sidebar-bg)' }}
+                                >
+                                    Done
+                                </button>
+                            </div>
+                        ) : (
+                            /* Form state */
+                            <div className="p-6 space-y-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="col-span-1">
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">First Name <span className="text-red-500">*</span></label>
+                                        <input
+                                            type="text"
+                                            value={createForm.first_name}
+                                            onChange={(e) => setCreateForm(p => ({ ...p, first_name: e.target.value }))}
+                                            placeholder="First Name"
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                                        />
+                                    </div>
+                                    <div className="col-span-1">
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Last Name <span className="text-red-500">*</span></label>
+                                        <input
+                                            type="text"
+                                            value={createForm.last_name}
+                                            onChange={(e) => setCreateForm(p => ({ ...p, last_name: e.target.value }))}
+                                            placeholder="Last Name"
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                                        />
+                                    </div>
+                                    <div className="col-span-2">
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Email Address <span className="text-red-500">*</span></label>
+                                        <input
+                                            type="email"
+                                            value={createForm.email}
+                                            onChange={(e) => setCreateForm(p => ({ ...p, email: e.target.value }))}
+                                            placeholder="juan@bfp.gov.ph"
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Role <span className="text-red-500">*</span></label>
+                                        <select
+                                            value={createForm.role}
+                                            onChange={(e) => setCreateForm(p => ({ ...p, role: e.target.value }))}
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                                        >
+                                            <option value="REGIONAL_ENCODER">Regional Encoder</option>
+                                            <option value="NATIONAL_VALIDATOR">National Validator</option>
+                                            <option value="NATIONAL_ANALYST">National Analyst</option>
+                                        </select>
+                                    </div>
+                                    {createForm.role === 'REGIONAL_ENCODER' && (
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Assigned Region <span className="text-red-500">*</span></label>
+                                            <select
+                                                value={createForm.assigned_region_id}
+                                                onChange={(e) => setCreateForm(p => ({ ...p, assigned_region_id: e.target.value }))}
+                                                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                                            >
+                                                <option value="">Select Region</option>
+                                                {regions.map((region) => (
+                                                    <option key={region.region_id} value={region.region_id}>
+                                                        {region.region_name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+                                    <div className="col-span-2">
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Contact Number</label>
+                                        <input
+                                            type="tel"
+                                            value={createForm.contact_number}
+                                            onChange={(e) => setCreateForm(p => ({ ...p, contact_number: e.target.value }))}
+                                            placeholder="e.g. 09171234567"
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2"
+                                        />
+                                    </div>
+                                </div>
+                                <p className="text-xs text-gray-500">A temporary password will be automatically generated and shown to you after creation. The user will be required to change it on first login.</p>
+                                <div className="flex gap-3 pt-2">
+                                    <button
+                                        onClick={handleCreateUser}
+                                        disabled={isCreating || !createForm.email || !createForm.first_name || !createForm.last_name}
+                                        className="flex-1 py-2.5 rounded-lg text-white font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+                                        style={{ backgroundColor: 'var(--sidebar-bg)' }}
+                                    >
+                                        {isCreating ? <><RefreshCw className="w-4 h-4 animate-spin" /> Creating…</> : <><UserPlus className="w-4 h-4" /> Create User</>}
+                                    </button>
+                                    <button
+                                        onClick={() => { setShowCreateUser(false); setCreatedUser(null); }}
+                                        className="px-5 py-2.5 rounded-lg bg-gray-100 text-gray-700 font-medium hover:bg-gray-200"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

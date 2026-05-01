@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **Bootstrap script execution order:** Renamed `002_validator_workflow.sql` → `05_validator_workflow.sql` and `002a_fix_ivh_legacy.sql` → `06_fix_ivh_legacy.sql`. Postgres init scripts execute in lexicographic order; numeric prefixes must align with logical dependencies (00 keycloak bootstrap, 01 schema DDL, 02 schema includes, 03 reference data, 04 indexes, 05+ migrations, 99 verification). Previous "002" prefix sorted before "01", causing FK constraint failures and "schema does not exist" errors on fresh initialization.
+- **Encoder region assignment:** Added encoder_test to region assignment in `05_validator_workflow.sql` migration. REGIONAL_ENCODER users require assigned_region_id for authorization checks; missing value caused client-side dashboard redirect loops during development.
+- **Admin client configuration:** Added `wims-admin-service` OAuth2 service account client to Keycloak realm (`src/keycloak/bfp-realm.json`) and configured backend environment variables (`KEYCLOAK_ADMIN_CLIENT_ID`, `KEYCLOAK_ADMIN_CLIENT_SECRET` in `src/docker-compose.yml`). Backend keycloak_admin.py service now successfully authenticates for admin operations (user lifecycle management); previously raised RuntimeError on `/api/admin/users/*` endpoints, returning 500 errors.
+- **Fresh stack initialization:** All three fixes combined allow `docker compose down -v && docker compose up -d --build` to complete successfully without FK constraint errors, missing schema errors, or 500 admin endpoint errors.
+
 ### Added
 - **Keycloak configuration persisted to realm JSON:** Audience mapper, 5 custom roles, and 5 test users now in `src/keycloak/bfp-realm.json`. Previously all config was done via admin API and lost on container recreation.
 - **Keycloak documentation:** `docs/ARCHITECTURE.md` now documents realm JSON vs scripts, auth env vars, and the KEYCLOAK_REALM_URL vs KEYCLOAK_ISSUER split.
@@ -15,11 +21,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Integration tests — Regional CRUD:** 15 tests in `tests/integration/test_regional_crud.py` covering create (minimal, nonsensitive, PII, unauthorized), read (list, detail, nonexistent), update (nonsensitive, sensitive, nonexistent, verified-blocked), delete (draft, nonexistent, pending-blocked, verified-blocked).
 - **Database session refactor:** `get_db()` (bare session, no RLS) and `get_db_with_rls(request)` (RLS-aware) split to avoid dependency cycle. Eager initialization of `_engine` and `_SessionLocal` at module load.
 - **Docs:** `CHANGELOG.md` moved to `docs/CHANGELOG.md`. Regional CRUD endpoints documented in `docs/API_AND_FUNCTIONS.md`. Database session management documented in `docs/ARCHITECTURE.md`.
+- **Encoder UX — search bar:** Added search support in encoder incident listing/lookup flows for faster retrieval of submitted/imported incidents.
+- **Validator workflow endpoints and UI:** Added region-scoped validator queue/action capabilities and validator dashboard/API client support to reflect encoder submissions in validator review.
 
 ### Changed
 - **`database.py`:** Removed lazy initialization pattern (`_engine = None`, `_SessionLocal = None`). Engine and sessionmaker now initialized eagerly at import time. Added `load_dotenv()` before `SQLALCHEMY_DATABASE_URL` resolution to ensure `.env` is loaded before connection URL is read.
 - **Error message leakage:** 4 instances of `str(e)` in `HTTPException.detail` replaced with generic messages + `logger.exception` in `regional.py`.
 - **Docker lockdown:** Suricata container mounts changed to read-only (`:ro`), healthchecks added for postgres/redis/keycloak, `depends_on` with health conditions.
+- **Encoder import reliability:** Improved Excel/AFOR parsing compatibility to better handle real-world workbook/input variations during encoder import.
+- **Frontend incident details representation:** Updated UI rendering of incident details for clearer and more accurate presentation.
 
 ### Removed
 - Stale files: `.ai-context/` (3 files), `SCHEMA_MERGE_NOTES.md`, `archive/sql/` (2 files), `implementation_plan.md`, `patch_realm.py`, `run_fire_incident_tests.sh`, `scan_xlsx.py`, `tasks.md`, `verify_coordinate_parser.py` (1,655 lines removed).
@@ -27,6 +37,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 - **`_SessionLocal` TypeError:** Tests failed with `'NoneType' object is not callable` due to lazy init not being called before test fixture import. Fixed by eager initialization.
 - **Database hostname resolution:** Tests failed with `could not translate host name "postgres"` because `load_dotenv()` ran after `SQLALCHEMY_DATABASE_URL` was read. Fixed by loading `.env` before URL resolution.
+- **Encoder commit/submit flow:** Fixed commit and submit behavior to reliably persist encoder actions and correctly transition records for downstream validator visibility.
 
 ### Added
 - **Security — AES-256-GCM PII encryption:** Implemented zero-trust AES-256-GCM encryption for `incident_sensitive_details` PII blob. `caller_name`, `caller_number`, `owner_name`, and `occupant_name` are now stored exclusively in an encrypted blob (`pii_blob_enc`) with a 12-byte nonce (`encryption_iv`), bound to the record via AAD (`incident_id:N`). Plaintext PII columns are always `NULL` for new writes; decryption falls back to legacy columns if blob is absent. Commits `182fb46`, `65fd600` (`src/backend/utils/crypto.py`, `src/backend/api/routes/regional.py`).

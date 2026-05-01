@@ -79,6 +79,15 @@ class KeycloakAuthenticator:
                 detail="JWKS URI missing in Identity Provider configuration",
             )
 
+        # Docker networking fix: Keycloak's OIDC discovery returns URLs with
+        # localhost:8080 which is unreachable from inside containers. Rewrite
+        # the JWKS URI to use the internal KEYCLOAK_REALM_URL host instead.
+        if "localhost" in jwks_uri:
+            jwks_uri = jwks_uri.replace(
+                "http://localhost:8080",
+                KEYCLOAK_REALM_URL.rsplit("/auth/realms", 1)[0],
+            )
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(jwks_uri)
@@ -230,6 +239,12 @@ async def get_current_wims_user(
     Resolve JWT payload to wims.users row. Ensures only authenticated
     Keycloak users present in wims.users can access protected routes.
 
+    Resolution order:
+    1) Match by keycloak_id = token sub
+    2) Fallback match by username when legacy rows are not yet linked
+       to a keycloak_id. If a username row is already linked to a
+       different keycloak_id, reject as identity mismatch.
+
     Also attaches the resolved user dict to request.state so that
     get_db() can call SET LOCAL wims.current_user_id for RLS enforcement.
     """
@@ -247,7 +262,7 @@ async def get_current_wims_user(
     try:
         row = db.execute(
             text(
-                "SELECT user_id, role FROM wims.users WHERE keycloak_id = :kid AND is_active = TRUE"
+                "SELECT user_id, role, username FROM wims.users WHERE keycloak_id = :kid AND is_active = TRUE"
             ),
             {"kid": keycloak_sub},
         ).fetchone()
@@ -256,9 +271,41 @@ async def get_current_wims_user(
         raise HTTPException(status_code=500, detail="Authentication system error")
 
     if row is None:
-        raise HTTPException(status_code=403, detail="User not found in WIMS")
+        preferred_username = token_payload.get("preferred_username")
+        if not preferred_username:
+            raise HTTPException(status_code=403, detail="User not found in WIMS")
 
-    user_dict = {"user_id": row[0], "keycloak_id": keycloak_sub, "role": row[1]}
+        try:
+            row_by_username = db.execute(
+                text(
+                    "SELECT user_id, role, keycloak_id, username "
+                    "FROM wims.users "
+                    "WHERE username = :uname AND is_active = TRUE"
+                ),
+                {"uname": preferred_username},
+            ).fetchone()
+        except DataError as e:
+            logger.error(
+                f"DB error validating username {preferred_username}: {e}"
+            )
+            raise HTTPException(status_code=500, detail="Authentication system error")
+
+        if row_by_username is None:
+            raise HTTPException(status_code=403, detail="User not found in WIMS")
+
+        existing_keycloak_id = row_by_username[2]
+        if existing_keycloak_id is not None and str(existing_keycloak_id) != keycloak_sub:
+            raise HTTPException(status_code=403, detail="User identity mismatch")
+
+        row = (row_by_username[0], row_by_username[1], row_by_username[3])
+
+    user_dict = {
+        "user_id": row[0],
+        "keycloak_id": keycloak_sub,
+        "role": row[1],
+        "username": row[2],
+        "kc_username": token_payload.get("preferred_username")
+    }
 
     # Attach to request.state so get_db() can set the RLS GUC for this transaction
     request.state.wims_user = user_dict
@@ -309,6 +356,53 @@ async def get_regional_encoder(
     except DataError as e:
         logger.error(
             f"DB error fetching region for user {current_user['user_id']}: {e}"
+        )
+        raise HTTPException(status_code=500, detail="Authentication system error")
+
+
+async def get_national_validator(
+    current_user: Annotated[dict, Depends(get_current_wims_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """
+    Require NATIONAL_VALIDATOR role with an assigned region.
+
+    Returns user dict augmented with assigned_region_id so every
+    validator endpoint can enforce region-scoped visibility without
+    repeating the DB lookup.
+
+    Raises:
+        403  — role is not NATIONAL_VALIDATOR
+        403  — user row missing or has no assigned_region_id
+        500  — unexpected DB error
+    """
+    if current_user.get("role") != "NATIONAL_VALIDATOR":
+        raise HTTPException(
+            status_code=403, detail="NATIONAL_VALIDATOR privileges required"
+        )
+
+    try:
+        row = db.execute(
+            text("SELECT assigned_region_id FROM wims.users WHERE user_id = :uid"),
+            {"uid": current_user["user_id"]},
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=403, detail="User not found or region assignment missing"
+            )
+        region_id = row[0]
+        if region_id is None:
+            raise HTTPException(
+                status_code=403,
+                detail="No region assigned to this validator — contact SYSTEM_ADMIN",
+            )
+        current_user["assigned_region_id"] = region_id
+        return current_user
+    except DataError as e:
+        logger.error(
+            "DB error fetching region for validator user_id=%s: %s",
+            current_user["user_id"],
+            e,
         )
         raise HTTPException(status_code=500, detail="Authentication system error")
 

@@ -21,22 +21,74 @@ const API_BASE = typeof window !== 'undefined'
   ? (process.env.NEXT_PUBLIC_API_URL || '/api')
   : process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api';
 
+export class ApiRequestError extends Error {
+  status: number;
+  detail?: unknown;
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+function errorMessageFromJson(json: unknown, fallback: string): string {
+  if (!json || typeof json !== 'object') return fallback;
+  const asObj = json as { message?: unknown; detail?: unknown };
+  if (typeof asObj.message === 'string' && asObj.message.trim()) {
+    return asObj.message;
+  }
+  if (typeof asObj.detail === 'string' && asObj.detail.trim()) {
+    return asObj.detail;
+  }
+  if (asObj.detail && typeof asObj.detail === 'object') {
+    if (Array.isArray(asObj.detail)) {
+      const first = asObj.detail[0] as { msg?: unknown; loc?: unknown } | undefined;
+      if (first) {
+        const msg = typeof first.msg === 'string' ? first.msg : 'Validation failed';
+        const loc = Array.isArray(first.loc) ? first.loc.join('.') : '';
+        return loc ? `${loc}: ${msg}` : msg;
+      }
+      return 'Validation failed';
+    }
+    const detailObj = asObj.detail as { message?: unknown; code?: unknown };
+    if (typeof detailObj.message === 'string' && detailObj.message.trim()) {
+      return detailObj.message;
+    }
+    if (typeof detailObj.code === 'string' && detailObj.code.trim()) {
+      return detailObj.code;
+    }
+  }
+  return fallback;
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = path.startsWith('http') ? path : `${API_BASE.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
+  const normalizedPath =
+    path === '/api' ? '/' : path.startsWith('/api/') ? path.slice(4) : path;
+  const url = normalizedPath.startsWith('http')
+    ? normalizedPath
+    : `${API_BASE.replace(/\/$/, '')}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
+  const headers = new Headers(options.headers ?? {});
+  const isFormDataBody = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (!isFormDataBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   const res = await fetch(url, {
     ...options,
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((json as { message?: string; detail?: string }).message ?? (json as { detail?: string }).detail ?? `Request failed: ${res.status}`);
+    throw new ApiRequestError(
+      errorMessageFromJson(json, `Request failed: ${res.status}`),
+      res.status,
+      (json as { detail?: unknown }).detail,
+    );
   }
   return json as T;
 }
@@ -161,6 +213,58 @@ export async function updateAdminUser(
   payload: { role?: string; assigned_region_id?: number; is_active?: boolean }
 ): Promise<{ status: string; user_id: string }> {
   return apiFetch(`/admin/users/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Create a new user (admin onboarding) - POST /admin/users */
+export async function createAdminUser(payload: {
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  contact_number?: string;
+  assigned_region_id?: number;
+}): Promise<{
+  status: string;
+  keycloak_id: string;
+  username: string;
+  role: string;
+  temporary_password: string;
+  note: string;
+}> {
+  return apiFetch('/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Fetch current user's profile details */
+export async function fetchMyProfile(): Promise<{ first_name: string; last_name: string; contact_number: string }> {
+  return apiFetch('/user/me/profile');
+}
+
+/** Update current user's own profile - PATCH /user/me */
+export async function updateMyProfile(payload: {
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  contact_number?: string;
+}): Promise<{ status: string; message: string }> {
+  return apiFetch('/user/me', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Change current user's own password - PATCH /user/me/password */
+export async function changeMyPassword(payload: {
+  current_password: string;
+  new_password: string;
+  otp_code?: string;
+}): Promise<{ status: string; message: string }> {
+  return apiFetch('/user/me/password', {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
@@ -317,8 +421,16 @@ export interface RegionalIncidentDetailResponse {
   verification_status: string;
   created_at: string | null;
   region_id: number;
+  latitude: number | null;
+  longitude: number | null;
   nonsensitive: Record<string, unknown>;
   sensitive: Record<string, unknown>;
+  attachments?: Array<{
+    attachment_id: number;
+    file_name: string;
+    mime_type: string | null;
+    url: string | null;
+  }>;
 }
 
 export async function fetchRegionalIncidents(
@@ -379,6 +491,7 @@ export async function commitAforImport(
   formKind: AforFormKind,
   options?: {
     wildlandRowSource?: WildlandRowSource;
+    duplicateStrategy?: 'REPLACE_ORIGINAL' | 'KEEP_ORIGINAL';
     /** WGS84 decimal degrees. PostGIS stores POINT(longitude latitude); not GeoJSON [lat, lon]. */
     latitude?: number;
     longitude?: number;
@@ -387,6 +500,9 @@ export async function commitAforImport(
   const body: Record<string, unknown> = { form_kind: formKind, rows };
   if (options?.wildlandRowSource != null) {
     body.wildland_row_source = options.wildlandRowSource;
+  }
+  if (options?.duplicateStrategy != null) {
+    body.duplicate_strategy = options.duplicateStrategy;
   }
   if (typeof options?.latitude === 'number' && typeof options?.longitude === 'number') {
     body.latitude = options.latitude;

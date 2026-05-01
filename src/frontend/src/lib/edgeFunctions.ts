@@ -79,6 +79,7 @@ export interface Incident {
         disposition_prepared_by?: string;
         disposition_noted_by?: string;
         sketch_base64?: string; // For PWA Offline Base64 storage
+        sketch_images_base64?: string[]; // Multiple sketches from AFOR import
     };
 }
 

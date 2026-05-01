@@ -12,7 +12,7 @@ import json
 import logging
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from auth import get_regional_encoder
+from auth import get_national_validator, get_regional_encoder
 from database import get_db, get_db_with_rls
 from services.analytics_read_model import sync_incidents_batch
 from utils.crypto import SecurityProvider, SecurityProviderError
@@ -212,11 +212,38 @@ def _safe_dt(val: Any) -> str | None:
     if not val:
         return None
 
+    # Excel stores dates/times as serial floats in many filled templates.
+    # Serial date epoch (Windows): 1899-12-30.
+    if isinstance(val, (int, float)):
+        try:
+            serial = float(val)
+            base = datetime(1899, 12, 30)
+            dt = base + timedelta(days=serial)
+            if serial < 1:
+                return dt.strftime("%H:%M:%S")
+            return dt.isoformat()
+        except Exception:
+            return None
+
+    raw_numeric = str(val).strip()
+    try:
+        serial = float(raw_numeric)
+        base = datetime(1899, 12, 30)
+        dt = base + timedelta(days=serial)
+        if serial < 1:
+            return dt.strftime("%H:%M:%S")
+        return dt.isoformat()
+    except (ValueError, TypeError):
+        pass
+
     dt_str = str(val).strip()
     for fmt in [
+        "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
+        "%m-%d-%Y %H:%M:%S",
         "%m-%d-%Y %H:%M",
         "%H:%M",
+        "%H:%M:%S",
         "%Y-%m-%d",
         "%m-%d-%Y",
         "%m/%d/%Y",
@@ -293,10 +320,32 @@ def _cell_str(ws: Any, coord: str) -> str:
 
 
 def _sheet_has_structural_markers(ws: Any) -> bool:
-    """Official structural AFOR: title in column A row 14, section header row 18."""
-    a14 = _cell_str(ws, "A14").upper()
-    a18 = _cell_str(ws, "A18").upper()
-    return "AFTER FIRE OPERATIONS REPORT" in a14 and "A. RESPONSE DETAILS" in a18
+    """Structural AFOR marker detection, tolerant to row shifts in filled templates."""
+    title_row, section_row = _find_structural_marker_rows(ws)
+    if title_row is None or section_row is None:
+        return False
+    # In official templates, section header appears a few rows after title.
+    return 2 <= (section_row - title_row) <= 8
+
+
+def _find_structural_marker_rows(ws: Any) -> tuple[int | None, int | None]:
+    """Find title/section marker rows by scanning the top-left block of the sheet."""
+    title_row: int | None = None
+    section_row: int | None = None
+
+    for row in range(1, 161):
+        row_values = [_cell_str(ws, f"{col}{row}").upper() for col in ("A", "B", "C", "D", "E", "F")]
+        combined = " ".join(v for v in row_values if v).strip()
+
+        if title_row is None and "AFTER FIRE OPERATIONS REPORT" in combined:
+            title_row = row
+        if section_row is None and "A. RESPONSE DETAILS" in combined:
+            section_row = row
+
+        if title_row is not None and section_row is not None:
+            break
+
+    return title_row, section_row
 
 
 def _sheet_has_wildland_markers(ws: Any) -> bool:
@@ -346,6 +395,10 @@ def detect_afor_template_kind(wb: Any) -> AforFormKind | None:
 
 
 def _pick_structural_worksheet(wb: Any) -> Any:
+    for name in wb.sheetnames:
+        ws = wb[name]
+        if _sheet_has_structural_markers(ws):
+            return ws
     for name in wb.sheetnames:
         if "AFOR" in name.upper():
             return wb[name]
@@ -566,9 +619,35 @@ class BfpXlsxParser:
 
     def __init__(self, ws):
         self.ws = ws
+        self._row_offset = self._infer_row_offset()
+
+    def _infer_row_offset(self) -> int:
+        """Infer row offset when users fill a structurally identical AFOR with shifted rows."""
+        title_row, section_row = _find_structural_marker_rows(self.ws)
+        if title_row is None:
+            return 0
+
+        offset = title_row - 14
+        # Validate offset with section marker when available.
+        if section_row is not None and (section_row - 18) != offset:
+            return 0
+        return offset
+
+    def _coord_with_offset(self, coord: str) -> str:
+        match = _COORD_RE.match(coord.upper())
+        if not match or self._row_offset == 0:
+            return coord
+
+        col, row_str = match.groups()
+        shifted_row = max(1, int(row_str) + self._row_offset)
+        return f"{col}{shifted_row}"
 
     def get(self, coord: str) -> Any:
-        val = self.ws[coord].value
+        shifted_coord = self._coord_with_offset(coord)
+        val = self.ws[shifted_coord].value
+        if val is None and shifted_coord != coord:
+            # Fallback to canonical location to support mixed/custom sheets.
+            val = self.ws[coord].value
         if val is None:
             return None
         if isinstance(val, str):
@@ -576,8 +655,69 @@ class BfpXlsxParser:
         return val
 
     def _is_marked(self, coord: str) -> bool:
-        val = str(self.get(coord)).strip().lower() if self.get(coord) else ""
-        return val in ["x", "1", "true", "v", "✓", "✔", "/"]
+        raw = self.get(coord)
+        if raw is None:
+            return False
+
+        if isinstance(raw, bool):
+            return raw
+
+        if isinstance(raw, (int, float)):
+            return raw != 0
+
+        val = str(raw).strip().lower()
+        if not val:
+            return False
+
+        if val.startswith("="):
+            expr = val.lstrip("=").strip().lower()
+            if expr in {"true", "1"}:
+                return True
+
+        return val in {
+            "x",
+            "1",
+            "true",
+            "v",
+            "/",
+            "yes",
+            "checked",
+            "☑",
+            "☒",
+            "✓",
+            "✔",
+            "✅",
+        }
+
+    def _first_nonempty(self, *coords: str) -> Any:
+        for coord in coords:
+            val = self.get(coord)
+            if val is None:
+                continue
+            if isinstance(val, str) and not val.strip():
+                continue
+            return val
+        return None
+
+    def _male_female_pair(self, row: int) -> tuple[Any, Any]:
+        # Some AFOR variants shift M/F columns by one; try common adjacent pairs.
+        candidate_pairs = [("D", "E"), ("C", "D"), ("E", "F"), ("F", "G")]
+        fallback_pair = (None, None)
+        for male_col, female_col in candidate_pairs:
+            male_val = self.get(f"{male_col}{row}")
+            female_val = self.get(f"{female_col}{row}")
+            if fallback_pair == (None, None):
+                fallback_pair = (male_val, female_val)
+
+            has_male = male_val not in (None, "")
+            has_female = female_val not in (None, "")
+            if has_male or has_female:
+                return male_val, female_val
+
+        return fallback_pair
+
+    def _is_marked_on_row(self, row: int, cols: tuple[str, ...] = ("B", "C", "D")) -> bool:
+        return any(self._is_marked(f"{col}{row}") for col in cols)
 
     def parse(self) -> dict[str, Any]:
         """Extract sections A through L into a comprehensive data dictionary."""
@@ -592,10 +732,16 @@ class BfpXlsxParser:
         # Section B: Classification
         classification = "Structural"
         cat_val = self.get("D48")
-        if self._is_marked("B49"):
+        if self._is_marked_on_row(49):
             classification = "Non-Structural"
             cat_val = self.get("D49")
-        elif self._is_marked("B50"):
+        elif self._is_marked_on_row(50):
+            classification = "Transportation"
+            cat_val = self.get("D50")
+        elif self.get("D49") not in (None, ""):
+            classification = "Non-Structural"
+            cat_val = self.get("D49")
+        elif self.get("D50") not in (None, ""):
             classification = "Transportation"
             cat_val = self.get("D50")
 
@@ -605,16 +751,20 @@ class BfpXlsxParser:
 
         # Extent of Damage
         extent = "None / Minor"
-        if self._is_marked("B57"):
+        if self._is_marked_on_row(57):
             extent = "Confined to Object"
-        elif self._is_marked("B58"):
+        elif self._is_marked_on_row(58):
             extent = "Confined to Room"
-        elif self._is_marked("B59"):
+        elif self._is_marked_on_row(59):
             extent = "Confined to Structure"
-        elif self._is_marked("B60"):
+        elif self._is_marked_on_row(60):
             extent = "Total Loss"
-        elif self._is_marked("B61"):
+        elif self._is_marked_on_row(61):
             extent = "Extended Beyond Structure"
+        else:
+            extent_text = str(self._first_nonempty("D57", "D58", "D59", "D60", "D61") or "").strip()
+            if extent_text:
+                extent = extent_text
 
         # Section J: Problems
         problems = []
@@ -646,10 +796,11 @@ class BfpXlsxParser:
             "B219": "Others",
         }
         for c, flavor in prob_map.items():
-            if self._is_marked(c):
+            row_num = int(c[1:])
+            if self._is_marked_on_row(row_num):
                 problems.append(flavor)
 
-        icp_present = self._is_marked("B102")
+        icp_present = self._is_marked_on_row(102)
         icp_location = self.get("D102") if icp_present else None
 
         # Section I: Narrative joining (Rows 160 to 190)
@@ -666,6 +817,13 @@ class BfpXlsxParser:
             rem = self.get(f"E{r}")
             if name and "N/A" not in str(name).upper():
                 others.append({"name": name, "designation": rem or ""})
+
+        inj_civ_m, inj_civ_f = self._male_female_pair(106)
+        inj_bfp_m, inj_bfp_f = self._male_female_pair(107)
+        inj_aux_m, inj_aux_f = self._male_female_pair(108)
+        fat_civ_m, fat_civ_f = self._male_female_pair(109)
+        fat_bfp_m, fat_bfp_f = self._male_female_pair(110)
+        fat_aux_m, fat_aux_f = self._male_female_pair(111)
 
         return {
             "responder_type": responder_type,
@@ -738,18 +896,18 @@ class BfpXlsxParser:
             },
             "icp_present": icp_present,
             "icp_location": icp_location,
-            "inj_civ_m": self.get("D106"),
-            "inj_civ_f": self.get("E106"),
-            "inj_bfp_m": self.get("D107"),
-            "inj_bfp_f": self.get("E107"),
-            "inj_aux_m": self.get("D108"),
-            "inj_aux_f": self.get("E108"),
-            "fat_civ_m": self.get("D109"),
-            "fat_civ_f": self.get("E109"),
-            "fat_bfp_m": self.get("D110"),
-            "fat_bfp_f": self.get("E110"),
-            "fat_aux_m": self.get("D111"),
-            "fat_aux_f": self.get("E111"),
+            "inj_civ_m": inj_civ_m,
+            "inj_civ_f": inj_civ_f,
+            "inj_bfp_m": inj_bfp_m,
+            "inj_bfp_f": inj_bfp_f,
+            "inj_aux_m": inj_aux_m,
+            "inj_aux_f": inj_aux_f,
+            "fat_civ_m": fat_civ_m,
+            "fat_civ_f": fat_civ_f,
+            "fat_bfp_m": fat_bfp_m,
+            "fat_bfp_f": fat_bfp_f,
+            "fat_aux_m": fat_aux_m,
+            "fat_aux_f": fat_aux_f,
             "pod_commander": self.get("D114"),
             "pod_shift": self.get("D115"),
             "pod_nozzleman": self.get("D116"),
@@ -781,6 +939,33 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
             return None
 
         if t:
+            # Native Excel conversions often give datetime/date + datetime.time objects.
+            if isinstance(d, datetime) and hasattr(t, "hour") and hasattr(t, "minute"):
+                try:
+                    return datetime.combine(d.date(), t).isoformat()
+                except Exception:
+                    pass
+
+            # Excel serial date/time support for real filled XLSX exports.
+            d_serial: float | None = None
+            t_serial: float | None = None
+            try:
+                d_serial = float(d)
+                t_serial = float(t)
+            except (TypeError, ValueError):
+                d_serial = None
+                t_serial = None
+
+            if d_serial is not None and t_serial is not None:
+                try:
+                    base = datetime(1899, 12, 30)
+                    date_dt = base + timedelta(days=d_serial)
+                    time_dt = base + timedelta(days=t_serial)
+                    merged = datetime.combine(date_dt.date(), time_dt.time())
+                    return merged.isoformat()
+                except Exception:
+                    pass
+
             date_part = (
                 d.strftime("%Y-%m-%d")
                 if hasattr(d, "strftime")
@@ -1743,7 +1928,9 @@ def get_regional_incident_detail(
     row = db.execute(
         text("""
             SELECT fi.incident_id, fi.verification_status, fi.created_at,
-                   fi.region_id, fi.encoder_id
+                   fi.region_id, fi.encoder_id,
+                   ST_Y(fi.location::geometry) AS latitude,
+                   ST_X(fi.location::geometry) AS longitude
             FROM wims.fire_incidents fi
             WHERE fi.incident_id = :iid AND fi.region_id = :rid AND fi.is_archived = FALSE
         """),
@@ -1810,6 +1997,8 @@ def get_regional_incident_detail(
         "verification_status": row[1],
         "created_at": row[2].isoformat() if row[2] else None,
         "region_id": row[3],
+        "latitude": float(row[5]) if row[5] is not None else None,
+        "longitude": float(row[6]) if row[6] is not None else None,
         "nonsensitive": row_to_dict(ns),
         "sensitive": sd_dict,
     }
@@ -2215,3 +2404,307 @@ def delete_incident(
     db.commit()
     logger.info("Soft-deleted incident %s in region %s", incident_id, region_id)
     return {"status": "deleted", "incident_id": incident_id}
+
+
+# ---------------------------------------------------------------------------
+# Validator Workflow
+# ---------------------------------------------------------------------------
+
+# Allowed actions a NATIONAL_VALIDATOR can submit and their target DB status.
+_VALIDATOR_ACTION_MAP: dict[str, str] = {
+    "accept": "VERIFIED",
+    "pending": "PENDING",
+    "reject": "REJECTED",
+}
+
+# Statuses a validator is allowed to transition an incident INTO.
+_VALIDATOR_TARGET_STATUSES = frozenset(_VALIDATOR_ACTION_MAP.values())
+
+# Statuses shown in the validator queue by default (encoder-submitted, awaiting review).
+_VALIDATOR_DEFAULT_QUEUE_STATUSES = ("PENDING", "PENDING_VALIDATION")
+
+
+class VerificationActionRequest(BaseModel):
+    """Body for PATCH /api/regional/incidents/{incident_id}/verification."""
+
+    action: str  # "accept" | "pending" | "reject"
+    notes: str | None = None  # Optional reason / validator notes
+
+
+@router.get("/validator/incidents")
+def get_validator_incident_queue(
+    user: Annotated[dict, Depends(get_national_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    status: Optional[str] = None,
+    show_all: bool = Query(default=False),
+    encoder_id: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """Validator incident queue — NATIONAL_VALIDATOR only.
+
+    Returns encoder-submitted fire incidents that belong to the validator's
+    assigned region.  encoder_id IS NOT NULL is always enforced so public/DMZ
+    submissions (encoder_id = NULL) are never surfaced here.
+
+    Query params
+    ------------
+    status      — filter to a single verification_status value.
+                  Defaults to PENDING and PENDING_VALIDATION when omitted.
+    show_all    — when true and status is omitted, include all statuses
+                  (DRAFT/PENDING/PENDING_VALIDATION/VERIFIED/REJECTED)
+                  for encoder-submitted incidents in the validator's region.
+    encoder_id  — filter to incidents submitted by one specific encoder UUID.
+    limit/offset — pagination.
+
+    Region isolation: every row is guaranteed to have
+    fire_incidents.region_id = validator.assigned_region_id.
+    """
+    region_id = user["assigned_region_id"]
+
+    where_clauses = [
+        "fi.region_id = :region_id",
+        "fi.is_archived = FALSE",
+        "fi.encoder_id IS NOT NULL",   # encoder-submitted only — never public DMZ rows
+    ]
+    params: dict[str, Any] = {
+        "region_id": region_id,
+        "limit": limit,
+        "offset": offset,
+    }
+
+    if status:
+        where_clauses.append("fi.verification_status = :status")
+        params["status"] = status
+    elif not show_all:
+        # Default: show the two awaiting-review statuses
+        where_clauses.append(
+            "fi.verification_status = ANY(:default_statuses)"
+        )
+        params["default_statuses"] = list(_VALIDATOR_DEFAULT_QUEUE_STATUSES)
+
+    if encoder_id:
+        where_clauses.append("fi.encoder_id = CAST(:encoder_id AS uuid)")
+        params["encoder_id"] = encoder_id
+
+    where_sql = " AND ".join(where_clauses)
+
+    rows = db.execute(
+        text(f"""
+            SELECT
+                fi.incident_id,
+                fi.verification_status,
+                fi.encoder_id,
+                fi.region_id,
+                fi.created_at,
+                nd.notification_dt,
+                nd.general_category,
+                nd.alarm_level,
+                nd.fire_station_name,
+                nd.structures_affected,
+                nd.households_affected,
+                nd.responder_type,
+                nd.fire_origin,
+                nd.extent_of_damage
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd
+                   ON nd.incident_id = fi.incident_id
+            WHERE {where_sql}
+            ORDER BY fi.created_at ASC
+            LIMIT :limit OFFSET :offset
+        """),
+        params,
+    ).fetchall()
+
+    total = (
+        db.execute(
+            text(f"""
+                SELECT COUNT(*)
+                FROM wims.fire_incidents fi
+                WHERE {where_sql}
+            """),
+            {k: v for k, v in params.items() if k not in ("limit", "offset")},
+        ).scalar()
+        or 0
+    )
+
+    return {
+        "items": [
+            {
+                "incident_id": r[0],
+                "verification_status": r[1],
+                "encoder_id": str(r[2]) if r[2] else None,
+                "region_id": r[3],
+                "created_at": r[4].isoformat() if r[4] else None,
+                "notification_dt": r[5].isoformat() if r[5] else None,
+                "general_category": r[6],
+                "alarm_level": r[7],
+                "fire_station_name": r[8],
+                "structures_affected": r[9],
+                "households_affected": r[10],
+                "responder_type": r[11],
+                "fire_origin": r[12],
+                "extent_of_damage": r[13],
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.patch("/incidents/{incident_id}/verification")
+def verify_incident(
+    incident_id: int,
+    body: VerificationActionRequest,
+    user: Annotated[dict, Depends(get_national_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Apply a validator decision to one encoder-submitted incident.
+
+    NATIONAL_VALIDATOR only.  Enforces strict region isolation and encoder
+    linkage before writing anything to the database.
+
+    Allowed actions
+    ---------------
+    accept  → VERIFIED
+    pending → PENDING
+    reject  → REJECTED
+
+    Audit trail
+    -----------
+    Every call inserts one row into wims.incident_verification_history in the
+    same transaction as the status update — if either write fails, both roll back.
+
+    Error responses
+    ---------------
+    400 — unknown action value
+    403 — incident belongs to a different region, or has no encoder_id (public DMZ row)
+    404 — incident not found or is archived
+    409 — incident already has the requested target status (idempotency guard)
+    """
+    region_id = user["assigned_region_id"]
+    validator_user_id = user["user_id"]
+
+    # --- 1. Validate action value before touching the DB ---
+    action = (body.action or "").strip().lower()
+    if action not in _VALIDATOR_ACTION_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown action '{body.action}'. "
+                f"Allowed values: {sorted(_VALIDATOR_ACTION_MAP.keys())}"
+            ),
+        )
+    target_status = _VALIDATOR_ACTION_MAP[action]
+
+    # --- 2. Fetch the incident (existence + archive check) ---
+    incident_row = db.execute(
+        text("""
+            SELECT incident_id, verification_status, region_id, encoder_id
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid AND is_archived = FALSE
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if incident_row is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    inc_region_id = incident_row[2]
+    inc_encoder_id = incident_row[3]
+    current_status = incident_row[1]
+
+    # --- 3. Region isolation — strict, no fall-through ---
+    if inc_region_id != region_id:
+        # Return 403, not 404, so the caller knows this is a permission boundary
+        # and not a missing record.  Do NOT leak the actual region in the message.
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to act on incidents outside your assigned region",
+        )
+
+    # --- 4. Encoder linkage — reject public/DMZ rows ---
+    if inc_encoder_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="This incident was submitted via public DMZ (no encoder) and cannot be processed through the validator workflow",
+        )
+
+    # --- 5. Idempotency guard — avoid pointless writes ---
+    if current_status == target_status:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Incident is already in status '{current_status}'",
+        )
+
+    # --- 6. Apply update + audit in one transaction ---
+    try:
+        db.execute(
+            text("""
+                UPDATE wims.fire_incidents
+                SET verification_status = :new_status,
+                    updated_at = now()
+                WHERE incident_id = :iid
+            """),
+            {"new_status": target_status, "iid": incident_id},
+        )
+
+        db.execute(
+            text("""
+                INSERT INTO wims.incident_verification_history (
+                    target_type,
+                    target_id,
+                    action_by_user_id,
+                    previous_status,
+                    new_status,
+                    notes
+                ) VALUES (
+                    'OFFICIAL',
+                    :iid,
+                    CAST(:uid AS uuid),
+                    :prev_status,
+                    :new_status,
+                    :notes
+                )
+            """),
+            {
+                "iid": incident_id,
+                "uid": str(validator_user_id),
+                "prev_status": current_status,
+                "new_status": target_status,
+                "notes": body.notes or None,
+            },
+        )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to apply verification action for incident_id=%s", incident_id
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to apply verification action — transaction rolled back",
+        )
+
+    logger.info(
+        "Validator user_id=%s applied action='%s' to incident_id=%s "
+        "(region_id=%s, %s → %s)",
+        validator_user_id,
+        action,
+        incident_id,
+        region_id,
+        current_status,
+        target_status,
+    )
+
+    return {
+        "incident_id": incident_id,
+        "previous_status": current_status,
+        "new_status": target_status,
+        "action": action,
+        "encoder_id": str(inc_encoder_id),
+        "region_id": inc_region_id,
+    }

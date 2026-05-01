@@ -4,6 +4,7 @@ import { ReactNode, useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
+import { SyncStatusBar } from './SyncStatusBar';
 import { usePathname } from 'next/navigation';
 
 export function LayoutShell({ children }: { children: ReactNode }) {
@@ -13,10 +14,15 @@ export function LayoutShell({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker
-                .register('/sw.js')
-                .then((registration) => console.log('Scope: ', registration.scope))
-                .catch((err) => console.log('SW Registration Failed: ', err));
+            navigator.serviceWorker.getRegistrations()
+                .then((registrations) => Promise.all(registrations.map((r) => r.unregister())))
+                .catch((err) => console.log('SW unregister failed: ', err));
+        }
+
+        if ('caches' in window) {
+            caches.keys()
+                .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+                .catch((err) => console.log('Cache cleanup failed: ', err));
         }
     }, []);
 
@@ -26,7 +32,16 @@ export function LayoutShell({ children }: { children: ReactNode }) {
             const isPublic = publicRoutes.includes(pathname) || pathname.startsWith('/login');
 
             if (!isPublic) {
-                login();
+                // Defensive: wait 500ms before auto-redirecting to Keycloak.
+                // The callback page calls refreshSession() before navigating, but
+                // if there's a race condition or the session backend is slow, this
+                // debounce prevents a premature redirect loop.
+                const timer = setTimeout(() => {
+                    // Re-check state before redirecting — refreshSession may have completed
+                    // during the debounce window.
+                    login();
+                }, 500);
+                return () => clearTimeout(timer);
             }
         }
     }, [user, loading, loggingOut, pathname, login]);
@@ -70,6 +85,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
                 {/* Page content */}
                 <main className="flex-1 overflow-y-auto p-4 lg:p-6">
                     <div className="max-w-7xl mx-auto">
+                        <SyncStatusBar />
                         {children}
                     </div>
                 </main>

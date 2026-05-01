@@ -1,18 +1,27 @@
 """System Admin API — Identity, Security Telemetry, Audit Oversight.
 All endpoints protected by get_system_admin. No DELETE endpoints (Immutability Law)."""
 
+import logging
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, EmailStr, field_validator
+from keycloak.exceptions import KeycloakError
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import get_system_admin
 from database import get_db, get_db_with_rls
 from services.ai_service import analyze_threat_log
 from services.analytics_read_model import backfill_analytics_facts
+from services.keycloak_admin import (
+    create_keycloak_user,
+    generate_temp_password,
+    set_user_enabled,
+)
 
+logger = logging.getLogger("wims.admin")
 router = APIRouter(tags=["admin"])
 
 
@@ -27,6 +36,29 @@ VALID_ROLES = (
     "NATIONAL_ANALYST",
     "SYSTEM_ADMIN",
 )
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    first_name: str
+    last_name: str
+    role: str
+    contact_number: Optional[str] = None
+    assigned_region_id: Optional[int] = None
+
+    @field_validator("role")
+    @classmethod
+    def role_must_be_valid(cls, v: str) -> str:
+        if v not in VALID_ROLES:
+            raise ValueError(f"role must be one of {VALID_ROLES}")
+        return v
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Name must not be blank")
+        return v.strip()
 
 
 class UserUpdate(BaseModel):
@@ -50,6 +82,117 @@ class SecurityLogUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 # Identity Management
 # ---------------------------------------------------------------------------
+
+
+@router.post("/users", status_code=201)
+def create_user(
+    body: UserCreate,
+    _admin: Annotated[dict, Depends(get_system_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """
+    Onboard a new user.
+
+    1. Creates the user in Keycloak with a temporary password (must change on first login).
+    2. Assigns the requested realm role in Keycloak.
+    3. Inserts a linked row into wims.users.
+    4. Returns the generated temporary password in plaintext for the admin to distribute.
+    """
+    # Use email as username (FRS: email serves as username)
+    username = str(body.email).lower()[:50]
+
+    # Generate a secure temporary password
+    temp_password = generate_temp_password()
+
+    # --- Create in Keycloak ---
+    try:
+        keycloak_id = create_keycloak_user(
+            email=str(body.email),
+            first_name=body.first_name,
+            last_name=body.last_name,
+            username=username,
+            role=body.role,
+            temp_password=temp_password,
+            contact_number=body.contact_number,
+        )
+    except KeycloakError as e:
+        error_str = str(e)
+        if "409" in error_str or "Conflict" in error_str:
+            raise HTTPException(
+                status_code=409,
+                detail="A user with this email already exists in the identity provider.",
+            )
+        logger.exception("Keycloak user creation failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to create user in identity provider. Try again later.",
+        )
+
+    # --- Validate region_id exists (FK guard) ---
+    if body.assigned_region_id is not None:
+        region_exists = db.execute(
+            text("SELECT 1 FROM wims.ref_regions WHERE region_id = :rid"),
+            {"rid": body.assigned_region_id},
+        ).fetchone()
+        if not region_exists:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Region ID {body.assigned_region_id} does not exist. Please select a valid region.",
+            )
+
+    # --- Insert into wims.users ---
+    try:
+        db.execute(
+            text("""
+                INSERT INTO wims.users (keycloak_id, username, role, assigned_region_id, contact_number, is_active)
+                VALUES (CAST(:kid AS uuid), :username, :role, :region_id, :contact_number, TRUE)
+                ON CONFLICT (keycloak_id) DO UPDATE SET
+                    username = EXCLUDED.username,
+                    role = EXCLUDED.role,
+                    assigned_region_id = EXCLUDED.assigned_region_id,
+                    contact_number = EXCLUDED.contact_number,
+                    is_active = TRUE,
+                    updated_at = now()
+            """),
+            {
+                "kid": keycloak_id,
+                "username": username,
+                "role": body.role,
+                "region_id": body.assigned_region_id,
+                "contact_number": body.contact_number,
+            },
+        )
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        error_str = str(e.orig)
+        if "assigned_region_id" in error_str or "ref_regions" in error_str:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Region ID {body.assigned_region_id} does not exist. Please select a valid region.",
+            )
+        logger.exception(f"DB IntegrityError for new user keycloak_id={keycloak_id}")
+        raise HTTPException(status_code=500, detail="Database constraint violation. Check user data.")
+    except Exception:
+        db.rollback()
+        logger.exception(f"DB insert failed for new user keycloak_id={keycloak_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="User created in Keycloak but database sync failed. Contact system administrator.",
+        )
+
+    logger.info(f"New user onboarded: keycloak_id={keycloak_id} email={body.email} role={body.role}")
+
+    return {
+        "status": "created",
+        "keycloak_id": keycloak_id,
+        "username": username,
+        "role": body.role,
+        # Returned IN PLAINTEXT for admin to distribute — prototype behaviour.
+        # In production, deliver via secure email instead.
+        "temporary_password": temp_password,
+        "note": "Distribute this temporary password to the user securely. They will be required to change it on first login.",
+    }
 
 
 @router.get("/users")
@@ -95,7 +238,11 @@ def update_user(
     _admin: Annotated[dict, Depends(get_system_admin)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
-    """Update role, assigned_region_id, or is_active. No DELETE."""
+    """
+    Update role, assigned_region_id, or is_active for a given user.
+    When is_active is set to False the user is also disabled in Keycloak
+    and all active sessions are immediately revoked. No DELETE.
+    """
     updates = []
     params: dict = {"uid": user_id}
     if body.role is not None:
@@ -111,11 +258,36 @@ def update_user(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    # Fetch keycloak_id BEFORE the update so we can synchronise Keycloak
+    kc_row = db.execute(
+        text("SELECT keycloak_id FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
+        {"uid": user_id},
+    ).fetchone()
+    if kc_row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    keycloak_id = str(kc_row[0]) if kc_row[0] else None
+
     sql = f"UPDATE wims.users SET {', '.join(updates)}, updated_at = now() WHERE user_id = CAST(:uid AS uuid)"
     result = db.execute(text(sql), params)
     db.commit()
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # --- Synchronise is_active state with Keycloak ---
+    if body.is_active is not None and keycloak_id:
+        try:
+            set_user_enabled(keycloak_id, enabled=body.is_active)
+        except KeycloakError as e:
+            # DB is already updated — warn but don't roll back; admin can retry
+            logger.error(
+                f"Keycloak sync failed for user {user_id} (keycloak_id={keycloak_id}): {e}"
+            )
+            return {
+                "status": "partial",
+                "user_id": user_id,
+                "warning": "Database updated but Keycloak account state could not be synchronized. The user's login status in Keycloak may differ. Retry or contact your Keycloak administrator.",
+            }
+
     return {"status": "ok", "user_id": user_id}
 
 
