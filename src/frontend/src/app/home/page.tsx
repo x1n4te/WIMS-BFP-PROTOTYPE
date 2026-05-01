@@ -10,14 +10,12 @@ interface IncidentSummary {
     incident_id: number;
     region_id: number;
     verification_status: string;
-    incident_nonsensitive_details: {
-        notification_dt: string;
-        barangay: string;
-        general_category: string;
-        alarm_level: string;
-        specific_type: string;
-        incident_type: string;
-    }
+    notification_dt?: string;
+    barangay?: string;
+    general_category?: string;
+    alarm_level?: string;
+    specific_type?: string;
+    incident_type?: string;
 }
 
 export default function HomePage() {
@@ -43,20 +41,22 @@ export default function HomePage() {
         if (!authLoading) loadIncidents();
     }, [authLoading, assignedRegionId, loadIncidents]);
 
-    const nonsensitive = (i: IncidentSummary) => i.incident_nonsensitive_details;
-    const ongoingIncidents = incidents.filter(i =>
-        ['DRAFT', 'PENDING'].includes(i.verification_status) ||
-        (i.verification_status === 'VERIFIED' && new Date(nonsensitive(i).notification_dt).getTime() > Date.now() - 24 * 60 * 60 * 1000)
-    ).filter(i =>
-        nonsensitive(i).barangay?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        nonsensitive(i).specific_type?.toLowerCase().includes(searchTerm.toLowerCase())
+    const ongoingIncidents = incidents.filter(i => {
+        const hasDate = !!i.notification_dt;
+        const isRecent = hasDate && new Date(i.notification_dt!).getTime() > Date.now() - 24 * 60 * 60 * 1000;
+        
+        return ['DRAFT', 'PENDING', 'PENDING_VALIDATION'].includes(i.verification_status) ||
+               (i.verification_status === 'VERIFIED' && isRecent);
+    }).filter(i =>
+        (i.barangay || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (i.specific_type || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
 
     const fireOutIncidents = incidents.filter(i =>
         i.verification_status === 'VERIFIED' || i.verification_status === 'REJECTED'
     ).filter(i =>
-        nonsensitive(i).barangay?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        nonsensitive(i).specific_type?.toLowerCase().includes(searchTerm.toLowerCase())
+        (i.barangay || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (i.specific_type || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
 
     if (authLoading) return <div className="p-8 text-center" style={{ color: 'var(--text-muted)' }}>Loading Operations Center...</div>;
@@ -136,21 +136,21 @@ function IncidentCard({ incident, type }: { incident: IncidentSummary, type: 'on
                 <MapPin className={`w-4 h-4 mt-0.5 ${type === 'ongoing' ? 'text-red-500' : 'text-green-500'}`} />
                 <div>
                     <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Location</span>
-                    <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>Region {incident.region_id}, {incident.incident_nonsensitive_details.barangay}</div>
+                    <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>Region {incident.region_id}, {incident.barangay || 'Unknown Barangay'}</div>
                 </div>
             </div>
             <div className="grid grid-cols-[20px_1fr] gap-2 mb-1">
                 <Building className="w-4 h-4 text-blue-500 mt-0.5" />
                 <div>
                     <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Establishment</span>
-                    <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>{incident.incident_nonsensitive_details.specific_type || incident.incident_nonsensitive_details.general_category}</div>
+                    <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>{incident.specific_type || incident.general_category || 'Uncategorized'}</div>
                 </div>
             </div>
             <div className="grid grid-cols-[20px_1fr] gap-2 mt-2">
                 <Users className="w-4 h-4 mt-0.5" style={{ color: 'var(--text-muted)' }} />
                 <div>
                     <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Alarm Level</span>
-                    <div style={{ color: 'var(--text-primary)' }}>{incident.incident_nonsensitive_details.alarm_level}</div>
+                    <div style={{ color: 'var(--text-primary)' }}>{incident.alarm_level || 'Not Set'}</div>
                 </div>
             </div>
             <div className="flex items-center justify-between mt-3 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
@@ -161,7 +161,7 @@ function IncidentCard({ incident, type }: { incident: IncidentSummary, type: 'on
                     </span>
                 </div>
                 <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    {new Date(incident.incident_nonsensitive_details.notification_dt).toLocaleString()}
+                    {incident.notification_dt ? new Date(incident.notification_dt).toLocaleString() : 'No date'}
                 </span>
             </div>
         </div>

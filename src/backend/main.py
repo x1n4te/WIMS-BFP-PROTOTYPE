@@ -383,3 +383,105 @@ async def get_me(
         "user_id": str(user_id),
         "assigned_region_id": assigned_region_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Analytics Summary — Dashboard (all authenticated users)
+# ---------------------------------------------------------------------------
+class AnalyticsSummaryRequest(BaseModel):
+    from_date: str | None = None
+    to_date: str | None = None
+    region_id: int | None = None
+    province_id: int | None = None
+    city_id: int | None = None
+
+
+@app.post("/api/analytics-summary")
+async def get_analytics_summary(
+    body: AnalyticsSummaryRequest,
+    _user: Annotated[dict, Depends(auth.get_current_wims_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Dashboard summary counts — reads fire_incidents directly so that
+    triage-promoted incidents (no nonsensitive_details row) are included.
+    Accessible to all authenticated WIMS users.
+    """
+    from sqlalchemy import text as _text
+
+    where_clauses = [
+        "fi.verification_status = 'VERIFIED'",
+        "fi.is_archived = FALSE",
+    ]
+    params: dict = {}
+
+    if body.from_date:
+        where_clauses.append("fi.created_at >= CAST(:from_date AS timestamptz)")
+        params["from_date"] = body.from_date
+    if body.to_date:
+        where_clauses.append("fi.created_at <= CAST(:to_date AS timestamptz) + interval '1 day'")
+        params["to_date"] = body.to_date
+    if body.region_id is not None:
+        where_clauses.append("fi.region_id = :region_id")
+        params["region_id"] = body.region_id
+    if body.city_id is not None:
+        where_clauses.append("nd.city_id = :city_id")
+        params["city_id"] = body.city_id
+
+    where_sql = " AND ".join(where_clauses)
+    join_sql = "LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id"
+    if body.city_id is not None:
+        # city_id is on nonsensitive_details so we need the join in WHERE too
+        join_sql = "JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id"
+
+    # Total
+    total = db.execute(
+        _text(f"SELECT COUNT(*) FROM wims.fire_incidents fi {join_sql} WHERE {where_sql}"),
+        params,
+    ).scalar() or 0
+
+    # By region
+    by_region_rows = db.execute(
+        _text(f"""
+            SELECT r.region_name, COUNT(*) as cnt
+            FROM wims.fire_incidents fi
+            {join_sql}
+            LEFT JOIN wims.ref_regions r ON r.region_id = fi.region_id
+            WHERE {where_sql}
+            GROUP BY r.region_name ORDER BY cnt DESC
+        """),
+        params,
+    ).fetchall()
+
+    # By alarm level
+    by_alarm_rows = db.execute(
+        _text(f"""
+            SELECT COALESCE(nd.alarm_level, 'Unknown') as alarm_level, COUNT(*) as cnt
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+            WHERE {where_sql}
+            GROUP BY nd.alarm_level ORDER BY cnt DESC
+        """),
+        params,
+    ).fetchall()
+
+    # By general category
+    by_category_rows = db.execute(
+        _text(f"""
+            SELECT COALESCE(nd.general_category, 'UNCATEGORIZED') as general_category, COUNT(*) as cnt
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+            WHERE {where_sql}
+            GROUP BY nd.general_category ORDER BY cnt DESC
+        """),
+        params,
+    ).fetchall()
+
+    return {
+        "status": "ok",
+        "total_incidents": total,
+        "by_region": [{"region_name": r[0] or "Unknown", "count": r[1]} for r in by_region_rows],
+        "by_alarm_level": [{"alarm_level": r[0], "count": r[1]} for r in by_alarm_rows],
+        "by_general_category": [{"general_category": r[0], "count": r[1]} for r in by_category_rows],
+    }
+

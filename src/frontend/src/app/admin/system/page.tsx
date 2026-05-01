@@ -12,6 +12,9 @@ import {
     fetchAuditLogs,
     analyzeSecurityLog,
     fetchRegions,
+    fetchActiveSessions,
+    revokeUserSessions,
+    fetchSystemHealth,
 } from '@/lib/api';
 import { Region } from '@/types/api';
 import {
@@ -29,6 +32,9 @@ import {
     Copy,
     Eye,
     EyeOff,
+    Activity,
+    Server,
+    Database,
 } from 'lucide-react';
 
 interface AdminUser {
@@ -67,6 +73,16 @@ interface AuditItem {
     timestamp: string | null;
 }
 
+interface ActiveSession {
+    session_id: string;
+    user_id: string;
+    username: string;
+    role: string;
+    ip_address: string;
+    start: number;
+    last_access: number;
+}
+
 export default function AdminSystemPage() {
     const router = useRouter();
     const { user, loading } = useAuth();
@@ -75,14 +91,18 @@ export default function AdminSystemPage() {
     const [users, setUsers] = useState<AdminUser[]>([]);
     const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([]);
     const [auditLogs, setAuditLogs] = useState<{ items: AuditItem[]; total: number }>({ items: [], total: 0 });
+    const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
+    const [health, setHealth] = useState<any>(null);
     const [loadingUsers, setLoadingUsers] = useState(false);
     const [loadingLogs, setLoadingLogs] = useState(false);
     const [loadingAudit, setLoadingAudit] = useState(false);
+    const [loadingSessions, setLoadingSessions] = useState(false);
     const [regions, setRegions] = useState<Region[]>([]);
     const [selectedLog, setSelectedLog] = useState<SecurityLog | null>(null);
     const [actionNote, setActionNote] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [analyzingLogId, setAnalyzingLogId] = useState<number | null>(null);
+    const [isRevoking, setIsRevoking] = useState<string | null>(null);
 
     // Create User modal state
     const [showCreateUser, setShowCreateUser] = useState(false);
@@ -111,8 +131,31 @@ export default function AdminSystemPage() {
             loadSecurityLogs();
             loadAuditLogs();
             loadRegions();
+            loadSessions();
+            loadHealth();
         }
     }, [role]);
+
+    const loadHealth = async () => {
+        try {
+            const data = await fetchSystemHealth();
+            setHealth(data);
+        } catch {
+            setHealth({ status: 'ERROR', components: {} });
+        }
+    };
+
+    const loadSessions = async () => {
+        setLoadingSessions(true);
+        try {
+            const data = await fetchActiveSessions();
+            setActiveSessions(data as ActiveSession[]);
+        } catch {
+            setActiveSessions([]);
+        } finally {
+            setLoadingSessions(false);
+        }
+    };
 
     const loadRegions = async () => {
         try {
@@ -152,14 +195,14 @@ export default function AdminSystemPage() {
         try {
             const data = await fetchAuditLogs({ limit: 50, offset: 0 });
             setAuditLogs({
-                items: data.items.map((item): AuditItem => ({
-                    audit_id: item.id,
+                items: data.items.map((item: any): AuditItem => ({
+                    audit_id: item.audit_id,
                     user_id: item.user_id,
-                    action_type: item.action,
-                    table_affected: item.resource,
-                    record_id: null,
-                    ip_address: null,
-                    user_agent: null,
+                    action_type: item.action_type,
+                    table_affected: item.table_affected,
+                    record_id: item.record_id,
+                    ip_address: item.ip_address,
+                    user_agent: item.user_agent,
                     timestamp: item.timestamp,
                 })),
                 total: data.total,
@@ -178,6 +221,9 @@ export default function AdminSystemPage() {
         try {
             await updateAdminUser(userId, payload);
             await loadUsers();
+            if (payload.is_active === false) {
+                await loadSessions();
+            }
         } catch (e: unknown) {
             alert((e as { message?: string })?.message ?? 'Update failed');
         }
@@ -258,6 +304,18 @@ export default function AdminSystemPage() {
         }
     };
 
+    const handleRevokeSession = async (userId: string) => {
+        setIsRevoking(userId);
+        try {
+            await revokeUserSessions(userId);
+            await loadSessions();
+        } catch (e: unknown) {
+            alert((e as { message?: string })?.message ?? 'Failed to revoke session');
+        } finally {
+            setIsRevoking(null);
+        }
+    };
+
     if (loading || role !== 'SYSTEM_ADMIN') {
         return (
             <div className="flex items-center justify-center min-h-[50vh] text-gray-500">
@@ -268,7 +326,7 @@ export default function AdminSystemPage() {
 
     const systemStats = [
         { label: 'Total Users', value: users.length.toString(), icon: Users },
-        { label: 'Active Sessions', value: '—', icon: BarChart3 },
+        { label: 'Active Sessions', value: activeSessions.length.toString(), icon: BarChart3 },
         { label: 'Total API Requests', value: '—', icon: BarChart3 },
     ];
 
@@ -298,6 +356,55 @@ export default function AdminSystemPage() {
                     ))}
                 </div>
             </section>
+
+            {health && (
+                <section id="health" className="card overflow-hidden">
+                    <div className="card-header flex items-center justify-between" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
+                        <div className="flex items-center gap-2">
+                            <Activity className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
+                            <span>System Health</span>
+                            <span className={`ml-2 px-2 py-0.5 rounded text-xs font-bold text-white ${health.status === 'HEALTHY' ? 'bg-green-600' : 'bg-red-600'}`}>
+                                {health.status}
+                            </span>
+                        </div>
+                        <button onClick={loadHealth} className="flex items-center gap-1 text-sm font-medium hover:opacity-80 transition-opacity" style={{ color: 'var(--bfp-maroon)' }}>
+                            <RefreshCw className="w-4 h-4" /> Refresh
+                        </button>
+                    </div>
+                    <div className="card-body grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="p-4 rounded-lg flex items-center justify-between" style={{ backgroundColor: '#f8f9fa', border: '1px solid var(--border-color)' }}>
+                            <div className="flex items-center gap-3">
+                                <Database className="w-5 h-5 text-gray-500" />
+                                <div>
+                                    <div className="text-sm font-semibold">PostgreSQL</div>
+                                    <div className="text-xs text-gray-500">{health.components.database?.latency_ms ?? 0}ms</div>
+                                </div>
+                            </div>
+                            <span className={`w-3 h-3 rounded-full ${health.components.database?.status === 'HEALTHY' ? 'bg-green-500' : 'bg-red-500'}`} />
+                        </div>
+                        <div className="p-4 rounded-lg flex items-center justify-between" style={{ backgroundColor: '#f8f9fa', border: '1px solid var(--border-color)' }}>
+                            <div className="flex items-center gap-3">
+                                <Server className="w-5 h-5 text-gray-500" />
+                                <div>
+                                    <div className="text-sm font-semibold">Redis</div>
+                                    <div className="text-xs text-gray-500">{health.components.redis?.latency_ms ?? 0}ms</div>
+                                </div>
+                            </div>
+                            <span className={`w-3 h-3 rounded-full ${health.components.redis?.status === 'HEALTHY' ? 'bg-green-500' : 'bg-red-500'}`} />
+                        </div>
+                        <div className="p-4 rounded-lg flex items-center justify-between" style={{ backgroundColor: '#f8f9fa', border: '1px solid var(--border-color)' }}>
+                            <div className="flex items-center gap-3">
+                                <Server className="w-5 h-5 text-gray-500" />
+                                <div>
+                                    <div className="text-sm font-semibold">Keycloak</div>
+                                    <div className="text-xs text-gray-500">{health.components.keycloak?.latency_ms ?? 0}ms</div>
+                                </div>
+                            </div>
+                            <span className={`w-3 h-3 rounded-full ${health.components.keycloak?.status === 'HEALTHY' ? 'bg-green-500' : 'bg-red-500'}`} />
+                        </div>
+                    </div>
+                </section>
+            )}
 
             <section id="governance" className="card overflow-hidden">
                 <div className="card-header flex items-center justify-between" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
@@ -337,6 +444,51 @@ export default function AdminSystemPage() {
                         </tbody>
                     </table>
                     {users.length === 0 && !loadingUsers && <div className="p-8 text-center text-gray-500">No users found.</div>}
+                </div>
+            </section>
+
+            <section id="sessions" className="card overflow-hidden">
+                <div className="card-header flex items-center justify-between" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
+                    <div className="flex items-center gap-2">
+                        <BarChart3 className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
+                        <span>Active Sessions</span>
+                    </div>
+                    <button onClick={loadSessions} disabled={loadingSessions} className="flex items-center gap-1 text-sm font-medium disabled:opacity-50" style={{ color: 'var(--bfp-maroon)' }}>
+                        <RefreshCw className={`w-4 h-4 ${loadingSessions ? 'animate-spin' : ''}`} /> Refresh
+                    </button>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP Address</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Access</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {activeSessions.map((s) => (
+                                <tr key={s.session_id} className="hover:bg-gray-50">
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{s.username}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{s.role}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-500">{s.ip_address}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(s.last_access).toLocaleString()}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                                        <button 
+                                            onClick={() => handleRevokeSession(s.user_id)} 
+                                            disabled={isRevoking === s.user_id}
+                                            className="text-red-600 hover:text-red-800 text-sm font-medium disabled:opacity-50"
+                                        >
+                                            {isRevoking === s.user_id ? 'Revoking...' : 'Force Logout'}
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {activeSessions.length === 0 && !loadingSessions && <div className="p-8 text-center text-gray-500">No active sessions found.</div>}
                 </div>
             </section>
 
@@ -657,7 +809,7 @@ function UserRow({ user, onUpdate }: { user: AdminUser; onUpdate: (id: string, p
         onUpdate(user.user_id, { role: editRole, assigned_region_id: editRegion ? parseInt(editRegion, 10) : undefined, is_active: editActive });
         setExpanded(false);
     };
-    const ROLES = ['ENCODER', 'VALIDATOR', 'ANALYST', 'ADMIN', 'SYSTEM_ADMIN'];
+    const ROLES = ['CIVILIAN_REPORTER', 'REGIONAL_ENCODER', 'NATIONAL_VALIDATOR', 'NATIONAL_ANALYST', 'SYSTEM_ADMIN'];
     return (
         <>
             <tr className="hover:bg-gray-50">

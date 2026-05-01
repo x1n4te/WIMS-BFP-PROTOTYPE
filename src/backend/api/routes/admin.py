@@ -4,7 +4,7 @@ All endpoints protected by get_system_admin. No DELETE endpoints (Immutability L
 import logging
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr, field_validator
 from keycloak.exceptions import KeycloakError
 from sqlalchemy import text
@@ -20,6 +20,7 @@ from services.keycloak_admin import (
     generate_temp_password,
     set_user_enabled,
 )
+from utils.audit import log_system_audit
 
 logger = logging.getLogger("wims.admin")
 router = APIRouter(tags=["admin"])
@@ -87,6 +88,7 @@ class SecurityLogUpdate(BaseModel):
 @router.post("/users", status_code=201)
 def create_user(
     body: UserCreate,
+    request: Request,
     _admin: Annotated[dict, Depends(get_system_admin)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
@@ -181,7 +183,16 @@ def create_user(
             detail="User created in Keycloak but database sync failed. Contact system administrator.",
         )
 
-    logger.info(f"New user onboarded: keycloak_id={keycloak_id} email={body.email} role={body.role}")
+    log_system_audit(
+        db=db,
+        user_id=_admin["user_id"],
+        action_type="CREATE_USER",
+        table_affected="users",
+        record_id=None,  # We don't have the new internal user_id easily here as it might be serial or uuid
+        request=request
+    )
+
+    db.commit()
 
     return {
         "status": "created",
@@ -235,6 +246,7 @@ def get_users(
 def update_user(
     user_id: str,
     body: UserUpdate,
+    request: Request,
     _admin: Annotated[dict, Depends(get_system_admin)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
@@ -269,15 +281,38 @@ def update_user(
 
     sql = f"UPDATE wims.users SET {', '.join(updates)}, updated_at = now() WHERE user_id = CAST(:uid AS uuid)"
     result = db.execute(text(sql), params)
+    
+    # Log audit for update
+    actions = []
+    if body.role: actions.append(f"ROLE_CHANGE_TO_{body.role}")
+    if body.is_active is not None: actions.append("DEACTIVATE" if not body.is_active else "ACTIVATE")
+    
+    for action_name in actions:
+        log_system_audit(
+            db=db,
+            user_id=_admin["user_id"],
+            action_type=action_name,
+            table_affected="users",
+            record_id=None, # user_id is uuid in db, but table expects int. We skip for users table or just pass 0.
+            request=request
+        )
+    
     db.commit()
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="User not found")
 
     # --- Synchronise is_active state with Keycloak ---
     if body.is_active is not None and keycloak_id:
+        from utils.session import session_manager
         try:
             set_user_enabled(keycloak_id, enabled=body.is_active)
-        except KeycloakError as e:
+            if body.is_active is False:
+                # Also revoke all active sessions if we are disabling the user
+                from services.keycloak_admin import _get_admin_client
+                adm = _get_admin_client()
+                adm.user_logout(keycloak_id)
+                session_manager.revoke_all_sessions(keycloak_id)
+        except Exception as e:
             # DB is already updated — warn but don't roll back; admin can retry
             logger.error(
                 f"Keycloak sync failed for user {user_id} (keycloak_id={keycloak_id}): {e}"
@@ -285,11 +320,123 @@ def update_user(
             return {
                 "status": "partial",
                 "user_id": user_id,
-                "warning": "Database updated but Keycloak account state could not be synchronized. The user's login status in Keycloak may differ. Retry or contact your Keycloak administrator.",
+                "warning": f"Database updated but Keycloak sync failed: {e}",
             }
 
     return {"status": "ok", "user_id": user_id}
 
+
+@router.get("/active-sessions")
+def get_active_sessions(
+    _admin: Annotated[dict, Depends(get_system_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Fetch all active sessions for all users."""
+    users = db.execute(text("SELECT user_id, keycloak_id, username, role FROM wims.users WHERE is_active = TRUE")).fetchall()
+    
+    from services.keycloak_admin import _get_admin_client
+    adm = _get_admin_client()
+    
+    active_sessions = []
+    for u in users:
+        if not u.keycloak_id:
+            continue
+        try:
+            sessions = adm.get_sessions(str(u.keycloak_id))
+            for s in sessions:
+                active_sessions.append({
+                    "session_id": s.get("id"),
+                    "user_id": str(u.user_id),
+                    "username": u.username,
+                    "role": u.role,
+                    "ip_address": s.get("ipAddress"),
+                    "start": s.get("start"),
+                    "last_access": s.get("lastAccess"),
+                    "clients": s.get("clients", {})
+                })
+        except Exception as e:
+            logger.warning(f"Failed to fetch sessions for {u.keycloak_id}: {e}")
+            
+    # sort by last_access desc
+    active_sessions.sort(key=lambda x: x.get("last_access", 0), reverse=True)
+    return active_sessions
+
+@router.post("/users/{user_id}/logout")
+def force_logout_user(
+    user_id: str,
+    _admin: Annotated[dict, Depends(get_system_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Force logout all sessions for a user."""
+    row = db.execute(text("SELECT keycloak_id FROM wims.users WHERE user_id = CAST(:uid AS uuid)"), {"uid": user_id}).fetchone()
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    from services.keycloak_admin import _get_admin_client
+    from utils.session import session_manager
+    
+    adm = _get_admin_client()
+    kid = str(row[0])
+    try:
+        adm.user_logout(kid)
+        # Instant revocation in backend via Redis
+        session_manager.revoke_all_sessions(kid)
+    except Exception as e:
+        logger.warning(f"Failed to logout user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke sessions")
+        
+    return {"status": "ok"}
+
+
+@router.get("/health")
+def get_system_health(
+    _admin: Annotated[dict, Depends(get_system_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Fetch health status for all system components."""
+    health = {
+        "status": "HEALTHY",
+        "components": {
+            "database": {"status": "UNKNOWN", "latency_ms": 0},
+            "redis": {"status": "UNKNOWN", "latency_ms": 0},
+            "keycloak": {"status": "UNKNOWN", "latency_ms": 0},
+        }
+    }
+    
+    import time
+    # Check DB
+    try:
+        t0 = time.time()
+        db.execute(text("SELECT 1"))
+        health["components"]["database"] = {"status": "HEALTHY", "latency_ms": round((time.time()-t0)*1000)}
+    except Exception as e:
+        health["components"]["database"] = {"status": "UNHEALTHY", "error": str(e), "latency_ms": 0}
+        health["status"] = "DEGRADED"
+
+    # Check Redis
+    try:
+        import redis
+        import os
+        r = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+        t0 = time.time()
+        r.ping()
+        health["components"]["redis"] = {"status": "HEALTHY", "latency_ms": round((time.time()-t0)*1000)}
+    except Exception as e:
+        health["components"]["redis"] = {"status": "UNHEALTHY", "error": str(e), "latency_ms": 0}
+        health["status"] = "DEGRADED"
+
+    # Check Keycloak
+    try:
+        from services.keycloak_admin import _get_admin_client
+        t0 = time.time()
+        adm = _get_admin_client()
+        adm.users_count()
+        health["components"]["keycloak"] = {"status": "HEALTHY", "latency_ms": round((time.time()-t0)*1000)}
+    except Exception as e:
+        health["components"]["keycloak"] = {"status": "UNHEALTHY", "error": str(e), "latency_ms": 0}
+        health["status"] = "DEGRADED"
+
+    return health
 
 # ---------------------------------------------------------------------------
 # Security Telemetry

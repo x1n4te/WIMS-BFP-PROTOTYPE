@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import DataError
 
 from database import get_db
+from utils.session import session_manager
 
 logger = logging.getLogger("wims.auth")
 
@@ -181,6 +182,15 @@ class KeycloakAuthenticator:
                         raise HTTPException(
                             status_code=401, detail="Invalid token: client mismatch"
                         )
+                    # --- Instant Revocation Check ---
+                    sub = payload.get("sub")
+                    iat = payload.get("iat")
+                    if sub and iat and session_manager.is_token_revoked(sub, iat):
+                        logger.warning(f"Rejecting revoked token for user sub={sub}")
+                        raise HTTPException(
+                            status_code=401, detail="Session revoked. Please log in again."
+                        )
+                        
                     return payload
                 except HTTPException:
                     raise
@@ -392,19 +402,44 @@ async def get_national_validator(
             )
         region_id = row[0]
         if region_id is None:
-            raise HTTPException(
-                status_code=403,
-                detail="No region assigned to this validator — contact SYSTEM_ADMIN",
-            )
+            # National Validators might not have a specific region, allowing them to see all.
+            pass
         current_user["assigned_region_id"] = region_id
         return current_user
-    except DataError as e:
-        logger.error(
-            "DB error fetching region for validator user_id=%s: %s",
-            current_user["user_id"],
-            e,
-        )
+    except Exception as e:
+        logger.error(f"Error in get_national_validator: {e}")
         raise HTTPException(status_code=500, detail="Authentication system error")
+
+
+async def get_incident_viewer(
+    current_user: Annotated[dict, Depends(get_current_wims_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """
+    Allow SYSTEM_ADMIN, NATIONAL_ANALYST, NATIONAL_VALIDATOR, or REGIONAL_ENCODER.
+    Returns user dict augmented with assigned_region_id.
+    """
+    allowed_roles = {
+        "SYSTEM_ADMIN",
+        "NATIONAL_ANALYST",
+        "NATIONAL_VALIDATOR",
+        "REGIONAL_ENCODER",
+    }
+    if current_user.get("role") not in allowed_roles:
+        raise HTTPException(
+            status_code=403, detail="Incident viewing privileges required"
+        )
+
+    try:
+        row = db.execute(
+            text("SELECT assigned_region_id FROM wims.users WHERE user_id = :uid"),
+            {"uid": current_user["user_id"]},
+        ).fetchone()
+        current_user["assigned_region_id"] = row[0] if row else None
+        return current_user
+    except Exception as e:
+        logger.error(f"Error fetching region for viewer: {e}")
+        raise HTTPException(status_code=500, detail="Internal auth error")
 
 
 async def get_analyst_or_admin(

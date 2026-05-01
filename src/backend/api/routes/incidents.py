@@ -3,12 +3,13 @@ import json
 import logging
 import os
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+import auth
 from auth import get_current_wims_user
 from database import get_db_with_rls
 from schemas.incident import IncidentCreate, IncidentResponse
@@ -407,3 +408,98 @@ def create_incident(
         status=row[3],
         created_at=row[4],
     )
+
+
+@router.get("/incidents")
+def get_incidents(
+    user: Annotated[dict, Depends(auth.get_incident_viewer)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    """
+    Fetch fire incidents. Scoped to region if user has one, otherwise national.
+    """
+    region_id = user.get("assigned_region_id")
+
+    where_clauses = ["fi.is_archived = FALSE"]
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+
+    if region_id is not None:
+        where_clauses.append("fi.region_id = :region_id")
+        params["region_id"] = region_id
+
+    if category:
+        where_clauses.append("nd.general_category = :category")
+        params["category"] = category
+    if status:
+        where_clauses.append("fi.verification_status = :status")
+        params["status"] = status
+
+    where_sql = " AND ".join(where_clauses)
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT fi.incident_id, fi.verification_status, fi.created_at,
+                   nd.notification_dt, nd.general_category, nd.alarm_level,
+                   nd.fire_station_name, nd.structures_affected,
+                   nd.households_affected, nd.individuals_affected,
+                   nd.responder_type, nd.fire_origin, nd.extent_of_damage,
+                   sd.owner_name, sd.establishment_name, sd.caller_name,
+                   nd.barangay, nd.specific_type
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+            LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
+            WHERE {where_sql}
+            ORDER BY fi.created_at DESC
+            LIMIT :limit OFFSET :offset
+        """
+        ),
+        params,
+    ).fetchall()
+
+    total = (
+        db.execute(
+            text(
+                f"""
+            SELECT COUNT(*) FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+            WHERE {where_sql}
+        """
+            ),
+            {k: v for k, v in params.items() if k not in ("limit", "offset")},
+        ).scalar()
+        or 0
+    )
+
+    return {
+        "items": [
+            {
+                "incident_id": r[0],
+                "verification_status": r[1],
+                "created_at": r[2].isoformat() if r[2] else None,
+                "notification_dt": r[3].isoformat() if r[3] else None,
+                "general_category": r[4],
+                "alarm_level": r[5],
+                "fire_station_name": r[6],
+                "structures_affected": r[7],
+                "households_affected": r[8],
+                "individuals_affected": r[9],
+                "responder_type": r[10],
+                "fire_origin": r[11],
+                "extent_of_damage": r[12],
+                "owner_name": r[13],
+                "establishment_name": r[14],
+                "caller_name": r[15],
+                "barangay": r[16],
+                "specific_type": r[17],
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }

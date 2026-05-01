@@ -2,13 +2,19 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import get_current_wims_user
 from database import get_db_with_rls
 from services.analytics_read_model import sync_incident_to_analytics
+from utils.audit import log_system_audit
+
+from pydantic import BaseModel
+
+class BulkPromoteRequest(BaseModel):
+    report_ids: list[int]
 
 router = APIRouter(prefix="/api/triage", tags=["triage"])
 
@@ -61,6 +67,7 @@ def get_pending_reports(
 @router.post("/{report_id}/promote", status_code=201)
 def promote_report(
     report_id: int,
+    request: Request,
     user: Annotated[dict, Depends(_require_encoder_or_validator)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
@@ -127,6 +134,15 @@ def promote_report(
             {"uid": user_id, "iid": incident_id, "rid": report_id},
         )
 
+        log_system_audit(
+            db=db,
+            user_id=user_id,
+            action_type="PROMOTE_REPORT",
+            table_affected="fire_incidents",
+            record_id=incident_id,
+            request=request
+        )
+
         db.commit()
     except HTTPException:
         db.rollback()
@@ -139,3 +155,67 @@ def promote_report(
     db.commit()
 
     return {"report_id": report_id, "incident_id": incident_id}
+
+@router.post("/bulk-promote", status_code=201)
+def bulk_promote_reports(
+    body: BulkPromoteRequest,
+    request: Request,
+    user: Annotated[dict, Depends(_require_encoder_or_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """
+    Promote multiple PENDING citizen_reports to official fire_incidents.
+    """
+    user_id = user["user_id"]
+    
+    region_row = db.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
+    if not region_row:
+        raise HTTPException(status_code=500, detail="No ref_regions seed data")
+    region_id = region_row[0]
+
+    promoted = []
+    failed = []
+
+    for rid in body.report_ids:
+        try:
+            report = db.execute(
+                text("SELECT status FROM wims.citizen_reports WHERE report_id = :rid"),
+                {"rid": rid}
+            ).fetchone()
+            
+            if not report or report[0] != "PENDING":
+                failed.append(rid)
+                continue
+
+            result = db.execute(
+                text("""
+                    INSERT INTO wims.fire_incidents (region_id, encoder_id, location, verification_status)
+                    SELECT :region_id, :encoder_id, location, 'VERIFIED'
+                    FROM wims.citizen_reports
+                    WHERE report_id = :rid
+                    RETURNING incident_id
+                """),
+                {"region_id": region_id, "encoder_id": user_id, "rid": rid},
+            )
+            incident_id = result.fetchone()[0]
+
+            db.execute(
+                text("""
+                    UPDATE wims.citizen_reports
+                    SET status = 'VERIFIED', validated_by = :uid, verified_incident_id = :iid
+                    WHERE report_id = :rid
+                """),
+                {"uid": user_id, "iid": incident_id, "rid": rid},
+            )
+            
+            promoted.append({"report_id": rid, "incident_id": incident_id})
+        except Exception:
+            failed.append(rid)
+            
+    db.commit()
+    
+    for item in promoted:
+        sync_incident_to_analytics(db, item["incident_id"])
+    db.commit()
+
+    return {"promoted": promoted, "failed": failed}

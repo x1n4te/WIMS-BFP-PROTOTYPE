@@ -3,6 +3,25 @@
 All notable changes to the WIMS-BFP project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] — 2026-05-02
+
+### Added
+- **Security & Audit:** Implemented a centralized **System Audit Logging** utility in the backend, integrated into Triage, Incident Verification, and User Management workflows.
+- **Security:** Added **Instant Session Revocation** via Redis. Force Logout now immediately invalidates active JWTs across the system.
+- **Admin Hub:** New **System Health Dashboard** featuring real-time connectivity and latency monitoring for Database, Redis, and Keycloak.
+- **Admin Hub:** New **Active Session Viewer** allowing administrators to monitor and terminate suspicious sessions in real-time.
+- **Civilian Features:** **Public Report Status Tracker** (/report/track) allowing citizens to securely track reports without authentication.
+- **Triage Workflow:** Implemented **Bulk Promotion** capability, allowing encoders to process multiple reports in a single batch transaction.
+
+### Fixed
+- **Audit UI:** Fixed frontend data mapping for Audit Logs (variable name mismatch between API and Table).
+- **User Admin:** Standardized frontend roles (`CIVILIAN_REPORTER`, `REGIONAL_ENCODER`, etc.) to match strict backend validation.
+- **Auth Flow:** Fixed "ghost maneuvering" by adding real-time token revocation checks in the backend middleware.
+
+### Changed
+- **Deactivation Logic:** Account deactivation now triggers both Keycloak disabling and immediate session purging for maximum security.
+- **Auth Callback:** Refactored the authentication sync flow to include a backend-side session verification step.
+
 ## [Unreleased]
 
 ### Fixed

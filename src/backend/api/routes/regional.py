@@ -24,6 +24,7 @@ from auth import get_national_validator, get_regional_encoder
 from database import get_db, get_db_with_rls
 from services.analytics_read_model import sync_incidents_batch
 from utils.crypto import SecurityProvider, SecurityProviderError
+from utils.audit import log_system_audit
 
 
 # ── Lazy SecurityProvider singleton (avoids import-time env check in test mocks) ──
@@ -1831,89 +1832,7 @@ async def commit_afor_import(
     )
 
 
-@router.get("/incidents")
-def get_regional_incidents(
-    user: Annotated[dict, Depends(get_regional_encoder)],
-    db: Annotated[Session, Depends(get_db_with_rls)],
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-    category: Optional[str] = None,
-    status: Optional[str] = None,
-):
-    """
-    Fetch fire incidents scoped to the user's assigned region.
-    Joins nonsensitive details for summary view.
-    """
-    region_id = user["assigned_region_id"]
 
-    where_clauses = ["fi.region_id = :region_id", "fi.is_archived = FALSE"]
-    params: dict[str, Any] = {"region_id": region_id, "limit": limit, "offset": offset}
-
-    if category:
-        where_clauses.append("nd.general_category = :category")
-        params["category"] = category
-    if status:
-        where_clauses.append("fi.verification_status = :status")
-        params["status"] = status
-
-    where_sql = " AND ".join(where_clauses)
-
-    rows = db.execute(
-        text(f"""
-            SELECT fi.incident_id, fi.verification_status, fi.created_at,
-                   nd.notification_dt, nd.general_category, nd.alarm_level,
-                   nd.fire_station_name, nd.structures_affected,
-                   nd.households_affected, nd.individuals_affected,
-                   nd.responder_type, nd.fire_origin, nd.extent_of_damage,
-                   sd.owner_name, sd.establishment_name, sd.caller_name
-            FROM wims.fire_incidents fi
-            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
-            LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
-            WHERE {where_sql}
-            ORDER BY fi.created_at DESC
-            LIMIT :limit OFFSET :offset
-        """),
-        params,
-    ).fetchall()
-
-    total = (
-        db.execute(
-            text(f"""
-            SELECT COUNT(*) FROM wims.fire_incidents fi
-            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
-            WHERE {where_sql}
-        """),
-            {k: v for k, v in params.items() if k not in ("limit", "offset")},
-        ).scalar()
-        or 0
-    )
-
-    return {
-        "items": [
-            {
-                "incident_id": r[0],
-                "verification_status": r[1],
-                "created_at": r[2].isoformat() if r[2] else None,
-                "notification_dt": r[3].isoformat() if r[3] else None,
-                "general_category": r[4],
-                "alarm_level": r[5],
-                "fire_station_name": r[6],
-                "structures_affected": r[7],
-                "households_affected": r[8],
-                "individuals_affected": r[9],
-                "responder_type": r[10],
-                "fire_origin": r[11],
-                "extent_of_damage": r[12],
-                "owner_name": r[13],
-                "establishment_name": r[14],
-                "caller_name": r[15],
-            }
-            for r in rows
-        ],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
 
 
 @router.get("/incidents/{incident_id}")
@@ -2463,15 +2382,17 @@ def get_validator_incident_queue(
     region_id = user["assigned_region_id"]
 
     where_clauses = [
-        "fi.region_id = :region_id",
         "fi.is_archived = FALSE",
         "fi.encoder_id IS NOT NULL",   # encoder-submitted only — never public DMZ rows
     ]
     params: dict[str, Any] = {
-        "region_id": region_id,
         "limit": limit,
         "offset": offset,
     }
+
+    if region_id is not None:
+        where_clauses.append("fi.region_id = :region_id")
+        params["region_id"] = region_id
 
     if status:
         where_clauses.append("fi.verification_status = :status")
@@ -2558,6 +2479,7 @@ def get_validator_incident_queue(
 def verify_incident(
     incident_id: int,
     body: VerificationActionRequest,
+    request: Request,
     user: Annotated[dict, Depends(get_national_validator)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
@@ -2617,7 +2539,7 @@ def verify_incident(
     current_status = incident_row[1]
 
     # --- 3. Region isolation — strict, no fall-through ---
-    if inc_region_id != region_id:
+    if region_id is not None and inc_region_id != region_id:
         # Return 403, not 404, so the caller knows this is a permission boundary
         # and not a missing record.  Do NOT leak the actual region in the message.
         raise HTTPException(
@@ -2654,19 +2576,17 @@ def verify_incident(
         db.execute(
             text("""
                 INSERT INTO wims.incident_verification_history (
-                    target_type,
-                    target_id,
+                    incident_id,
                     action_by_user_id,
                     previous_status,
                     new_status,
-                    notes
+                    comments
                 ) VALUES (
-                    'OFFICIAL',
                     :iid,
                     CAST(:uid AS uuid),
                     :prev_status,
                     :new_status,
-                    :notes
+                    :comments
                 )
             """),
             {
@@ -2674,8 +2594,17 @@ def verify_incident(
                 "uid": str(validator_user_id),
                 "prev_status": current_status,
                 "new_status": target_status,
-                "notes": body.notes or None,
+                "comments": body.notes or None,
             },
+        )
+
+        log_system_audit(
+            db=db,
+            user_id=validator_user_id,
+            action_type=f"VERIFY_{action.upper()}",
+            table_affected="fire_incidents",
+            record_id=incident_id,
+            request=request
         )
 
         db.commit()
