@@ -172,7 +172,9 @@ def create_user(
                 detail=f"Region ID {body.assigned_region_id} does not exist. Please select a valid region.",
             )
         logger.exception(f"DB IntegrityError for new user keycloak_id={keycloak_id}")
-        raise HTTPException(status_code=500, detail="Database constraint violation. Check user data.")
+        raise HTTPException(
+            status_code=500, detail="Database constraint violation. Check user data."
+        )
     except Exception:
         db.rollback()
         logger.exception(f"DB insert failed for new user keycloak_id={keycloak_id}")
@@ -181,7 +183,9 @@ def create_user(
             detail="User created in Keycloak but database sync failed. Contact system administrator.",
         )
 
-    logger.info(f"New user onboarded: keycloak_id={keycloak_id} email={body.email} role={body.role}")
+    logger.info(
+        f"New user onboarded: keycloak_id={keycloak_id} email={body.email} role={body.role}"
+    )
 
     return {
         "status": "created",

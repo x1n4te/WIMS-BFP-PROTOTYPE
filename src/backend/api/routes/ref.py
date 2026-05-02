@@ -55,7 +55,9 @@ def get_provinces(
                 "SELECT province_id, province_name, region_id FROM wims.ref_provinces ORDER BY province_name"
             ),
         ).fetchall()
-    return [{"province_id": r[0], "province_name": r[1], "region_id": r[2]} for r in rows]
+    return [
+        {"province_id": r[0], "province_name": r[1], "region_id": r[2]} for r in rows
+    ]
 
 
 @router.get("/cities")
@@ -81,8 +83,9 @@ def get_cities(
         if not ids:
             return []
         q = text(
-            "SELECT city_id, city_name, province_id FROM wims.ref_cities WHERE province_id IN (" + 
-            ",".join([str(i) for i in ids]) + ") ORDER BY city_name"
+            "SELECT city_id, city_name, province_id FROM wims.ref_cities WHERE province_id IN ("
+            + ",".join([str(i) for i in ids])
+            + ") ORDER BY city_name"
         )
         rows = db.execute(q).fetchall()
     else:

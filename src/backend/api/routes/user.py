@@ -38,11 +38,13 @@ router = APIRouter(prefix="/api/user", tags=["user-profile"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class ProfileUpdate(BaseModel):
     """Fields a user is allowed to update on their own profile."""
+
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    email: Optional[EmailStr] = None      # Will update Keycloak AND db username
+    email: Optional[EmailStr] = None  # Will update Keycloak AND db username
     contact_number: Optional[str] = None  # Stored in Keycloak AND DB
     # Note: no password required here — the JWT token already confirms identity.
     # Password is only needed when changing the password itself.
@@ -66,6 +68,7 @@ class ProfileUpdate(BaseModel):
 
 class PasswordChange(BaseModel):
     """Payload for self-service password change."""
+
     current_password: str
     new_password: str
     otp_code: Optional[str] = None  # Required only if user has 2FA/OTP enrolled
@@ -90,6 +93,7 @@ class PasswordChange(BaseModel):
 # Routes
 # ---------------------------------------------------------------------------
 
+
 @router.get("/me/profile")
 def get_my_profile(
     current_user: Annotated[dict, Depends(get_current_wims_user)],
@@ -98,16 +102,17 @@ def get_my_profile(
     """Retrieve full name and contact number (names from Keycloak, number from DB)."""
     keycloak_id = current_user["keycloak_id"]
     profile = get_user_profile(keycloak_id)
-    
+
     # Sync contact_number from database
     row = db.execute(
         text("SELECT contact_number FROM wims.users WHERE keycloak_id = :kid"),
-        {"kid": keycloak_id}
+        {"kid": keycloak_id},
     ).fetchone()
     if row and row[0]:
         profile["contact_number"] = row[0]
-        
+
     return profile
+
 
 @router.patch("/me")
 def update_my_profile(
@@ -156,8 +161,10 @@ def update_my_profile(
 
             if update_fields:
                 db.execute(
-                    text(f"UPDATE wims.users SET {', '.join(update_fields)}, updated_at = now() WHERE user_id = :uid"),
-                    params
+                    text(
+                        f"UPDATE wims.users SET {', '.join(update_fields)}, updated_at = now() WHERE user_id = :uid"
+                    ),
+                    params,
                 )
                 db.commit()
         except Exception:
@@ -201,10 +208,14 @@ def change_my_password(
         token_kwargs = {}
         if body.otp_code:
             token_kwargs["totp"] = body.otp_code
-        kc_openid.token(username=target_username, password=body.current_password, **token_kwargs)
+        kc_openid.token(
+            username=target_username, password=body.current_password, **token_kwargs
+        )
     except KeycloakError as e:
         logger.warning(f"Change PW verification failed for {keycloak_id}: {e}")
-        raise HTTPException(status_code=401, detail="Incorrect current password or OTP code")
+        raise HTTPException(
+            status_code=401, detail="Incorrect current password or OTP code"
+        )
 
     try:
         change_user_password(keycloak_id, body.new_password)
