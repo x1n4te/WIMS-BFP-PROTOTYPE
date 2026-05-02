@@ -19,6 +19,7 @@ from services.keycloak_admin import (
     create_keycloak_user,
     generate_temp_password,
     set_user_enabled,
+    logout_user_sessions,
 )
 
 logger = logging.getLogger("wims.admin")
@@ -258,14 +259,15 @@ def update_user(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    # Fetch keycloak_id BEFORE the update so we can synchronise Keycloak
+    # Fetch keycloak_id and current role BEFORE the update so we can synchronise Keycloak
     kc_row = db.execute(
-        text("SELECT keycloak_id FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
+        text("SELECT keycloak_id, role FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
         {"uid": user_id},
     ).fetchone()
     if kc_row is None:
         raise HTTPException(status_code=404, detail="User not found")
     keycloak_id = str(kc_row[0]) if kc_row[0] else None
+    current_role = kc_row[1]
 
     sql = f"UPDATE wims.users SET {', '.join(updates)}, updated_at = now() WHERE user_id = CAST(:uid AS uuid)"
     result = db.execute(text(sql), params)
@@ -287,6 +289,10 @@ def update_user(
                 "user_id": user_id,
                 "warning": "Database updated but Keycloak account state could not be synchronized. The user's login status in Keycloak may differ. Retry or contact your Keycloak administrator.",
             }
+
+    # --- Invalidate sessions if role changed (security event) ---
+    if body.role is not None and body.role != current_role and keycloak_id:
+        logout_user_sessions(keycloak_id)
 
     return {"status": "ok", "user_id": user_id}
 

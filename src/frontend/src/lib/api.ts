@@ -621,3 +621,32 @@ export async function fetchComparativeData(filters: ComparativeFilters): Promise
   return apiFetch<ComparativeResponse>(`/analytics/comparative${qs}`);
 }
 
+// ---------------------------------------------------------------------------
+// Sessions API (SYSTEM_ADMIN only)
+// ---------------------------------------------------------------------------
+
+export interface KeycloakSession {
+  id: string;
+  ipAddress: string;
+  start: number;
+  lastAccess: number;
+  username?: string;
+}
+
+/** List all active Keycloak sessions for a user (by Keycloak UUID). */
+export async function fetchUserSessions(
+  keycloakId: string
+): Promise<{ sessions: KeycloakSession[] }> {
+  return apiFetch<{ sessions: KeycloakSession[] }>(`/admin/sessions/${keycloakId}`);
+}
+
+/** Terminate all active sessions for a user (session_id is accepted by the API but all sessions are revoked). */
+export async function terminateUserSessions(
+  keycloakId: string,
+  sessionId: string
+): Promise<{ status: string; user_id: string }> {
+  return apiFetch<{ status: string; user_id: string }>(
+    `/admin/sessions/${keycloakId}/${sessionId}`,
+    { method: 'DELETE' }
+  );
+}

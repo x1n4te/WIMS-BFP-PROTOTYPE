@@ -12,6 +12,9 @@ import {
     fetchAuditLogs,
     analyzeSecurityLog,
     fetchRegions,
+    fetchUserSessions,
+    terminateUserSessions,
+    KeycloakSession,
 } from '@/lib/api';
 import { Region } from '@/types/api';
 import {
@@ -29,6 +32,8 @@ import {
     Copy,
     Eye,
     EyeOff,
+    LogOut,
+    Monitor,
 } from 'lucide-react';
 
 interface AdminUser {
@@ -84,6 +89,12 @@ export default function AdminSystemPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [analyzingLogId, setAnalyzingLogId] = useState<number | null>(null);
 
+    // Sessions state
+    const [sessionsByUser, setSessionsByUser] = useState<Record<string, KeycloakSession[]>>({});
+    const [loadingSessions, setLoadingSessions] = useState(false);
+    const [selectedSessionUser, setSelectedSessionUser] = useState<AdminUser | null>(null);
+    const [terminatingUser, setTerminatingUser] = useState<string | null>(null);
+
     // Create User modal state
     const [showCreateUser, setShowCreateUser] = useState(false);
     const [createForm, setCreateForm] = useState({
@@ -107,11 +118,15 @@ export default function AdminSystemPage() {
 
     useEffect(() => {
         if (role === 'SYSTEM_ADMIN') {
-            loadUsers();
+            loadUsers().then(async () => {
+                const data = await fetchAdminUsers().catch(() => []);
+                await loadAllUserSessions(data as AdminUser[]);
+            });
             loadSecurityLogs();
             loadAuditLogs();
             loadRegions();
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [role]);
 
     const loadRegions = async () => {
@@ -132,6 +147,36 @@ export default function AdminSystemPage() {
             setUsers([]);
         } finally {
             setLoadingUsers(false);
+        }
+    };
+
+    const loadAllUserSessions = async (userList: AdminUser[]) => {
+        setLoadingSessions(true);
+        const results: Record<string, KeycloakSession[]> = {};
+        await Promise.allSettled(
+            userList.map(async (u) => {
+                try {
+                    const res = await fetchUserSessions(u.user_id);
+                    results[u.user_id] = res.sessions ?? [];
+                } catch {
+                    results[u.user_id] = [];
+                }
+            })
+        );
+        setSessionsByUser(results);
+        setLoadingSessions(false);
+    };
+
+    const handleTerminateSessions = async (u: AdminUser) => {
+        setTerminatingUser(u.user_id);
+        try {
+            await terminateUserSessions(u.user_id, 'all');
+            setSessionsByUser((prev) => ({ ...prev, [u.user_id]: [] }));
+            setSelectedSessionUser(null);
+        } catch (e: unknown) {
+            alert((e as { message?: string })?.message ?? 'Failed to terminate sessions');
+        } finally {
+            setTerminatingUser(null);
         }
     };
 
@@ -266,9 +311,13 @@ export default function AdminSystemPage() {
         );
     }
 
+    const totalActiveSessions = loadingSessions
+        ? '…'
+        : Object.values(sessionsByUser).reduce((sum, s) => sum + s.length, 0).toString();
+
     const systemStats = [
         { label: 'Total Users', value: users.length.toString(), icon: Users },
-        { label: 'Active Sessions', value: '—', icon: BarChart3 },
+        { label: 'Active Sessions', value: totalActiveSessions, icon: Monitor },
         { label: 'Total API Requests', value: '—', icon: BarChart3 },
     ];
 
@@ -327,12 +376,19 @@ export default function AdminSystemPage() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Region</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Active</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sessions</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
                             {users.map((u) => (
-                                <UserRow key={u.user_id} user={u} onUpdate={handleUpdateUser} />
+                                <UserRow
+                                    key={u.user_id}
+                                    user={u}
+                                    onUpdate={handleUpdateUser}
+                                    sessionCount={sessionsByUser[u.user_id]?.length ?? 0}
+                                    onViewSessions={() => setSelectedSessionUser(u)}
+                                />
                             ))}
                         </tbody>
                     </table>
@@ -496,6 +552,54 @@ export default function AdminSystemPage() {
                 </div>
             )}
 
+            {/* Sessions Modal */}
+            {selectedSessionUser && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                    <div className="rounded-lg shadow-xl max-w-lg w-full bg-[var(--background)] text-[var(--foreground)] overflow-hidden">
+                        <div className="p-5 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+                            <div className="flex items-center gap-2">
+                                <Monitor className="w-4 h-4 text-gray-500" />
+                                <h3 className="text-base font-bold">Active Sessions — {selectedSessionUser.username}</h3>
+                            </div>
+                            <button onClick={() => setSelectedSessionUser(null)} className="text-gray-500 hover:text-gray-700">
+                                <XCircle className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-5 space-y-3">
+                            {(sessionsByUser[selectedSessionUser.user_id] ?? []).length === 0 ? (
+                                <p className="text-sm text-gray-500 text-center py-4">No active sessions.</p>
+                            ) : (
+                                <ul className="divide-y divide-gray-100">
+                                    {(sessionsByUser[selectedSessionUser.user_id] ?? []).map((s) => (
+                                        <li key={s.id} className="py-2.5 text-sm">
+                                            <div className="flex justify-between items-start">
+                                                <div>
+                                                    <div className="font-mono text-gray-700">{s.ipAddress ?? '—'}</div>
+                                                    <div className="text-xs text-gray-400 mt-0.5">
+                                                        Started: {s.start ? new Date(s.start).toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : '—'} &middot; Last access: {s.lastAccess ? new Date(s.lastAccess).toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : '—'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                            <div className="pt-2 border-t border-gray-100 flex justify-between items-center">
+                                <span className="text-xs text-gray-400">Terminating ends all active sessions for this user.</span>
+                                <button
+                                    onClick={() => handleTerminateSessions(selectedSessionUser)}
+                                    disabled={terminatingUser === selectedSessionUser.user_id || (sessionsByUser[selectedSessionUser.user_id] ?? []).length === 0}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-50"
+                                >
+                                    <LogOut className="w-4 h-4" />
+                                    {terminatingUser === selectedSessionUser.user_id ? 'Terminating…' : 'Terminate All'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Create User Modal */}
             {showCreateUser && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
@@ -646,7 +750,12 @@ export default function AdminSystemPage() {
     );
 }
 
-function UserRow({ user, onUpdate }: { user: AdminUser; onUpdate: (id: string, p: { role?: string; assigned_region_id?: number; is_active?: boolean }) => void }) {
+function UserRow({ user, onUpdate, sessionCount, onViewSessions }: {
+    user: AdminUser;
+    onUpdate: (id: string, p: { role?: string; assigned_region_id?: number; is_active?: boolean }) => void;
+    sessionCount: number;
+    onViewSessions: () => void;
+}) {
     const [expanded, setExpanded] = useState(false);
     const [editRole, setEditRole] = useState(user.role);
     const [editRegion, setEditRegion] = useState(user.assigned_region_id?.toString() ?? '');
@@ -666,6 +775,19 @@ function UserRow({ user, onUpdate }: { user: AdminUser; onUpdate: (id: string, p
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{user.assigned_region_id ?? '—'}</td>
                 <td className="px-6 py-4 whitespace-nowrap">{user.is_active ? <CheckCircle className="w-5 h-5 text-green-600" /> : <XCircle className="w-5 h-5 text-red-500" />}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{user.created_at ? new Date(user.created_at).toLocaleDateString() : '—'}</td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                    <button
+                        onClick={onViewSessions}
+                        className="flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-800"
+                    >
+                        <Monitor className="w-4 h-4" />
+                        {sessionCount > 0 ? (
+                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold">{sessionCount}</span>
+                        ) : (
+                            <span className="text-gray-400">0</span>
+                        )}
+                    </button>
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap text-right">
                     <button onClick={() => setExpanded(!expanded)} className="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center gap-1 ml-auto">
                         {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />} Edit
@@ -674,7 +796,7 @@ function UserRow({ user, onUpdate }: { user: AdminUser; onUpdate: (id: string, p
             </tr>
             {expanded && (
                 <tr className="bg-gray-50">
-                    <td colSpan={6} className="px-6 py-4">
+                    <td colSpan={7} className="px-6 py-4">
                         <div className="flex flex-wrap gap-4 items-end">
                             <div>
                                 <label className="block text-xs font-medium text-gray-500 mb-1">Role</label>

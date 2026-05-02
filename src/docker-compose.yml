@@ -102,6 +102,8 @@ services:
       - KEYCLOAK_AUDIENCE=wims-web
       - KEYCLOAK_ADMIN_CLIENT_ID=wims-admin-service
       - KEYCLOAK_ADMIN_CLIENT_SECRET=wims-admin-secret-key-change-in-prod
+      - KEYCLOAK_ADMIN_USER=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
       - OLLAMA_URL=http://ollama:11434
     volumes:
       - incident_attachments_data:/app/storage
