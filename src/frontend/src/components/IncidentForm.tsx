@@ -1572,7 +1572,7 @@ export function IncidentForm({
               const normalizedProb = normalizeProblemLabel(prob);
               const isChecked = (formState.problems_encountered || []).some((p) => normalizeProblemLabel(p) === normalizedProb);
               const checkboxId = `problem-checkbox-${idx}`;
-              
+
               return (
                 <label key={`${idx}-${prob}`} htmlFor={checkboxId} className="flex items-start gap-2 cursor-pointer">
                   <input
@@ -1585,7 +1585,7 @@ export function IncidentForm({
                       setFormState((prev) => {
                         const current = prev.problems_encountered || [];
                         let updated: string[];
-                        
+
                         if (checked) {
                           // Add the canonical form if not already present
                           if (!current.some((p) => normalizeProblemLabel(p) === normalizedProb)) {
@@ -1597,7 +1597,7 @@ export function IncidentForm({
                           // Remove all variants that normalize to this problem
                           updated = current.filter((p) => normalizeProblemLabel(p) !== normalizedProb);
                         }
-                        
+
                         return { ...prev, problems_encountered: updated };
                       });
                     }}

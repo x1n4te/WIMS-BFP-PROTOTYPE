@@ -1,13 +1,9 @@
 """
-Keycloak Admin Service — Client Credentials (Service Account) Grant.
+Keycloak Admin Service.
 
-Authenticates as the `wims-admin-service` client in the `bfp` realm using
-KEYCLOAK_ADMIN_CLIENT_ID / KEYCLOAK_ADMIN_CLIENT_SECRET from environment.
-Exposes helper methods for user lifecycle management that are used by the
-admin and user-profile API routes.
-
-Design principle: this module never stores human admin passwords; tokens are
-obtained via client-credentials grant scoped to realm-management only.
+Uses Keycloak administrative credentials from environment for user lifecycle and
+session-governance operations. Keep these credentials scoped to local/dev or a
+least-privileged admin account; do not expose them to self-service frontend code.
 """
 
 import os
@@ -31,6 +27,8 @@ _KC_BASE_URL = _KC_SERVER_URL.split("/realms/")[0] + "/"
 _KC_REALM = "bfp"
 _KC_CLIENT_ID = os.environ.get("KEYCLOAK_ADMIN_CLIENT_ID", "wims-admin-service")
 _KC_CLIENT_SECRET = os.environ.get("KEYCLOAK_ADMIN_CLIENT_SECRET", "")
+_KC_ADMIN_USER = os.environ.get("KEYCLOAK_ADMIN_USER", "admin")
+_KC_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "admin")
 
 # Password alphabet: upper + lower + digits + safe special chars.
 # Avoids confusable chars (0/O, l/1) and shell-sensitive chars.
@@ -48,20 +46,16 @@ _PWD_LENGTH = (
 
 def _get_admin_client() -> KeycloakAdmin:
     """
-    Return a KeycloakAdmin instance authenticated via client_credentials.
-    Raises RuntimeError if credentials are not configured.
+    Return a KeycloakAdmin instance authenticated via the Keycloak master admin
+    user. This avoids service-account permission issues and works reliably across
+    all Keycloak versions.
     """
-    if not _KC_CLIENT_SECRET:
-        raise RuntimeError(
-            "KEYCLOAK_ADMIN_CLIENT_SECRET is not set. "
-            "Configure the wims-admin-service client in Keycloak and set the env var."
-        )
-
     connection = KeycloakOpenIDConnection(
         server_url=_KC_BASE_URL,
+        username=_KC_ADMIN_USER,
+        password=_KC_ADMIN_PASSWORD,
         realm_name=_KC_REALM,
-        client_id=_KC_CLIENT_ID,
-        client_secret_key=_KC_CLIENT_SECRET,
+        user_realm_name="master",
         verify=True,
     )
     return KeycloakAdmin(connection=connection)
@@ -167,6 +161,27 @@ def set_user_enabled(keycloak_id: str, *, enabled: bool) -> None:
     except KeycloakError as e:
         logger.error(f"Keycloak set_user_enabled failed for {keycloak_id}: {e}")
         raise
+
+
+def logout_user_sessions(keycloak_id: str) -> None:
+    """Revoke all active Keycloak sessions for a user without disabling the account."""
+    adm = _get_admin_client()
+    try:
+        adm.user_logout(user_id=keycloak_id)
+        logger.info(f"Sessions revoked for Keycloak user {keycloak_id}")
+    except KeycloakError as e:
+        # Sessions may already be expired — warn but do not fail the caller
+        logger.warning(f"Could not revoke sessions for {keycloak_id}: {e}")
+
+
+def get_user_sessions(keycloak_id: str) -> list[dict]:
+    """Return all active sessions for a user from Keycloak."""
+    adm = _get_admin_client()
+    try:
+        return adm.get_sessions(user_id=keycloak_id) or []
+    except KeycloakError as e:
+        logger.error(f"Could not fetch sessions for {keycloak_id}: {e}")
+        return []
 
 
 def update_user_profile(

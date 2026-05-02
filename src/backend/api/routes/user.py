@@ -23,6 +23,7 @@ from keycloak import KeycloakOpenID
 from services.keycloak_admin import (
     update_user_profile,
     change_user_password,
+    logout_user_sessions,
     get_user_profile,
     _KC_BASE_URL,
     _KC_REALM,
@@ -224,5 +225,7 @@ def change_my_password(
             status_code=502,
             detail="Failed to update password in identity provider. Try again later.",
         )
+
+    logout_user_sessions(keycloak_id)
 
     return {"status": "ok", "message": "Password changed successfully"}

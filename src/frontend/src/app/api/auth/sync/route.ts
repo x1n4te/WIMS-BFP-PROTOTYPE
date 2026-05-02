@@ -5,6 +5,9 @@ const BACKEND_URL =
   process.env.API_SERVER_URL ||
   (process.env.NEXT_PUBLIC_BASE_URL?.replace(/:\d+$/, '') + '/api');
 
+const ACCESS_TOKEN_COOKIE_MAX_AGE = 5 * 60; // 5 minutes: match Keycloak accessTokenLifespan
+const REFRESH_TOKEN_COOKIE_MAX_AGE = 8 * 60 * 60; // 8 hours: match SSO session max
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -19,7 +22,7 @@ export async function POST(req: NextRequest) {
         secure: IS_PROD,
         sameSite: 'lax',
         path: '/',
-        maxAge: 60 * 60 * 24, // 24h
+        maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE,
       });
       const { refresh_token: refreshToken } = body as { refresh_token?: string };
       if (refreshToken) {
@@ -28,7 +31,7 @@ export async function POST(req: NextRequest) {
           secure: IS_PROD,
           sameSite: 'lax',
           path: '/',
-          maxAge: 60 * 60 * 24 * 7, // 7 days
+          maxAge: REFRESH_TOKEN_COOKIE_MAX_AGE,
         });
       }
       return response;
@@ -71,7 +74,7 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 24, // 24h
+      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE,
     });
     if (data.refresh_token) {
       response.cookies.set('refresh_token', data.refresh_token, {
@@ -79,7 +82,7 @@ export async function POST(req: NextRequest) {
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/',
-        maxAge: 60 * 60 * 24 * 7, // 7 days
+        maxAge: REFRESH_TOKEN_COOKIE_MAX_AGE,
       });
     }
     return response;

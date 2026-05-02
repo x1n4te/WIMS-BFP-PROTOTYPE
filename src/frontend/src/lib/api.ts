@@ -735,3 +735,32 @@ export async function fetchTopN(filters: { metric: string; dimension: string; li
   return apiFetch<TopNItem[]>(`/analytics/top-n${qs}`);
 }
 
+// ---------------------------------------------------------------------------
+// Sessions API (SYSTEM_ADMIN only)
+// ---------------------------------------------------------------------------
+
+export interface KeycloakSession {
+  id: string;
+  ipAddress: string;
+  start: number;
+  lastAccess: number;
+  username?: string;
+}
+
+/** List all active Keycloak sessions for a user by internal WIMS user_id. */
+export async function fetchUserSessions(
+  userId: string
+): Promise<{ sessions: KeycloakSession[] }> {
+  return apiFetch<{ sessions: KeycloakSession[] }>(`/admin/sessions/${userId}`);
+}
+
+/** Terminate all active sessions for a user; Keycloak adapter revokes all sessions. */
+export async function terminateUserSessions(
+  userId: string,
+  sessionId: string
+): Promise<{ status: string; user_id: string }> {
+  return apiFetch<{ status: string; user_id: string }>(
+    `/admin/sessions/${userId}/${sessionId}`,
+    { method: 'DELETE' }
+  );
+}

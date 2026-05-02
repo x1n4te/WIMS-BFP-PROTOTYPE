@@ -14,7 +14,7 @@ export default function LoginPage() {
         if (!loading && user) {
             const role = (user as { role?: string })?.role;
             const assignedRegionId = (user as { assignedRegionId?: number | null })?.assignedRegionId ?? null;
-            
+
             // REGIONAL_ENCODER and NATIONAL_VALIDATOR require assigned region
             if (role === 'REGIONAL_ENCODER' && assignedRegionId) {
                 router.push('/dashboard/regional');

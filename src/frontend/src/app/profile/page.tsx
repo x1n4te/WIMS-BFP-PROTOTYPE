@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 
 export default function ProfilePage() {
-    const { user, loading } = useAuth();
+    const { user, loading, logout } = useAuth();
     const typedUser = user as {
         username?: string;
         email?: string;
@@ -101,8 +101,8 @@ export default function ProfilePage() {
             setPwdMsg({ type: 'error', text: 'Passwords do not match.' });
             return;
         }
-        if (pwdForm.new_password.length < 8) {
-            setPwdMsg({ type: 'error', text: 'Password must be at least 8 characters long.' });
+        if (pwdForm.new_password.length < 12) {
+            setPwdMsg({ type: 'error', text: 'Password must be at least 12 characters long.' });
             return;
         }
         setSavingPwd(true);
@@ -113,8 +113,9 @@ export default function ProfilePage() {
             };
             if (pwdForm.otp_code.trim()) payload.otp_code = pwdForm.otp_code.trim();
             await changeMyPassword(payload);
-            setPwdMsg({ type: 'success', text: 'Password changed successfully. Use your new password on next login.' });
+            setPwdMsg({ type: 'success', text: 'Password changed successfully. Logging you out for security…' });
             setPwdForm({ current_password: '', new_password: '', confirm_password: '', otp_code: '' });
+            setTimeout(() => logout(), 1500);
         } catch (e: unknown) {
             setPwdMsg({ type: 'error', text: (e as { message?: string })?.message ?? 'Password change failed.' });
         } finally {
@@ -293,7 +294,7 @@ export default function ProfilePage() {
                 </div>
                 <div className="card-body space-y-4">
                     <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                        Your new password must be at least 8 characters long and contain uppercase letters, numbers, and at least one special character.
+                        Your new password must be at least 12 characters long and contain uppercase letters, numbers, and at least one special character.
                     </p>
 
                     <div>
@@ -354,7 +355,7 @@ export default function ProfilePage() {
                                 {[1, 2, 3, 4].map(level => {
                                     const specialChars = "!@#$%^&*()-_=+[]{}|;:'\\\",.<>?/`~";
                                     const strength = [
-                                        pwdForm.new_password.length >= 8,
+                                        pwdForm.new_password.length >= 12,
                                         /[A-Z]/.test(pwdForm.new_password),
                                         /[0-9]/.test(pwdForm.new_password),
                                         [...pwdForm.new_password].some(c => specialChars.includes(c)),
@@ -368,8 +369,8 @@ export default function ProfilePage() {
                                     );
                                 })}
                                 <span className="text-xs text-gray-400 ml-1">
-                                    {[pwdForm.new_password.length >= 8, /[A-Z]/.test(pwdForm.new_password), /[0-9]/.test(pwdForm.new_password), [...pwdForm.new_password].some(c => "!@#$%^&*()-_=+[]{}|;:'\\\",.<>?/`~".includes(c))].filter(Boolean).length <= 2 ? 'Weak' :
-                                        [pwdForm.new_password.length >= 8, /[A-Z]/.test(pwdForm.new_password), /[0-9]/.test(pwdForm.new_password), [...pwdForm.new_password].some(c => "!@#$%^&*()-_=+[]{}|;:'\\\",.<>?/`~".includes(c))].filter(Boolean).length === 3 ? 'Fair' : 'Strong'}
+                                    {[pwdForm.new_password.length >= 12, /[A-Z]/.test(pwdForm.new_password), /[0-9]/.test(pwdForm.new_password), [...pwdForm.new_password].some(c => "!@#$%^&*()-_=+[]{}|;:'\\\",.<>?/`~".includes(c))].filter(Boolean).length <= 2 ? 'Weak' :
+                                        [pwdForm.new_password.length >= 12, /[A-Z]/.test(pwdForm.new_password), /[0-9]/.test(pwdForm.new_password), [...pwdForm.new_password].some(c => "!@#$%^&*()-_=+[]{}|;:'\\\",.<>?/`~".includes(c))].filter(Boolean).length === 3 ? 'Fair' : 'Strong'}
                                 </span>
                             </div>
                         )}

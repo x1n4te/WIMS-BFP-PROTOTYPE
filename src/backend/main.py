@@ -28,7 +28,16 @@ import auth
 from auth import get_current_user
 from database import get_db
 
-from api.routes import incidents, admin, civilian, triage, regional, analytics, ref
+from api.routes import (
+    incidents,
+    admin,
+    civilian,
+    triage,
+    regional,
+    analytics,
+    ref,
+    sessions,
+)
 from api.routes.public_dmz import router as public_dmz_router
 from api.routes.user import router as user_profile_router
 
@@ -71,6 +80,7 @@ def _resolve_role_from_token(payload: dict) -> str:
 app = FastAPI(title="WIMS-BFP Backend")
 app.include_router(incidents.router)
 app.include_router(admin.router, prefix="/api/admin")
+app.include_router(sessions.router, prefix="/api/admin")
 app.include_router(
     user_profile_router
 )  # PATCH /api/user/me, PATCH /api/user/me/password

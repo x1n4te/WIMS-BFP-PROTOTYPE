@@ -1,10 +1,10 @@
 # M4: Incident Workflow (REGIONAL_ENCODER + NATIONAL_VALIDATOR)
 
-**Status:** Open  
-**Open Issues:** 9  
-**Closed Issues:** 0  
-**Created:** 2026-04-27  
-**Updated:** 2026-04-27  
+**Status:** Open
+**Open Issues:** 9
+**Closed Issues:** 0
+**Created:** 2026-04-27
+**Updated:** 2026-04-27
 
 ## Milestone Overview
 
@@ -84,7 +84,7 @@ Detect and present duplicates before committing AFOR import.
 #### Details
 - **Detection Query:** Before commit, query for incidents with same `(region_id, incident_date, alarm_level)` within 1km radius using `ST_DWithin`
 - **UI Flow:** Show duplicates to encoder in confirmation modal
-- **Encoder Options:** 
+- **Encoder Options:**
   - Skip duplicate
   - Merge (update existing)
   - Force create
@@ -183,7 +183,7 @@ National Validator can view all verification actions across regions.
 
 #### Details
 - **Endpoint:** `GET /api/validator/audit-logs`
-- **Available Filters:** 
+- **Available Filters:**
   - `date_from`, `date_to`
   - `region_id`
   - `validator_id`
@@ -257,4 +257,3 @@ National Validator can view all verification actions across regions.
 - **Draft expiry** requires Celery task configuration (see backend setup)
 - **Diff view** should highlight changes visually for clarity
 - All timestamps should be in UTC
-

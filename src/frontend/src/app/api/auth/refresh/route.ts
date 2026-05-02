@@ -6,6 +6,8 @@ const KEYCLOAK_TOKEN_URL = process.env.NEXT_PUBLIC_AUTH_API_URL
 
 const CLIENT_ID = process.env.NEXT_PUBLIC_OIDC_CLIENT_ID || 'wims-web';
 const IS_PROD = process.env.NODE_ENV === 'production';
+const ACCESS_TOKEN_COOKIE_MAX_AGE = 5 * 60; // 5 minutes: match Keycloak accessTokenLifespan
+const REFRESH_TOKEN_COOKIE_MAX_AGE = 8 * 60 * 60; // 8 hours: match SSO session max
 
 export async function POST(req: NextRequest) {
   const refreshToken = req.cookies.get('refresh_token')?.value;
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest) {
       secure: IS_PROD,
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 24,
+      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE,
     });
     if (data.refresh_token) {
       response.cookies.set('refresh_token', data.refresh_token, {
@@ -50,7 +52,7 @@ export async function POST(req: NextRequest) {
         secure: IS_PROD,
         sameSite: 'lax',
         path: '/',
-        maxAge: 60 * 60 * 24 * 7,
+        maxAge: REFRESH_TOKEN_COOKIE_MAX_AGE,
       });
     }
     return response;
