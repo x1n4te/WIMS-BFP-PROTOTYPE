@@ -72,7 +72,9 @@ app = FastAPI(title="WIMS-BFP Backend")
 app.include_router(incidents.router)
 app.include_router(admin.router, prefix="/api/admin")
 app.include_router(sessions.router, prefix="/api/admin")
-app.include_router(user_profile_router)  # PATCH /api/user/me, PATCH /api/user/me/password
+app.include_router(
+    user_profile_router
+)  # PATCH /api/user/me, PATCH /api/user/me/password
 app.include_router(civilian.router)
 app.include_router(triage.router)
 app.include_router(regional.router)
@@ -316,6 +318,7 @@ async def auth_callback(
 
     return {
         "access_token": access_token,
+        "refresh_token": token_data.get("refresh_token"),
         "user_id": str(user_id),
     }
 

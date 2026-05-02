@@ -65,7 +65,7 @@ function errorMessageFromJson(json: unknown, fallback: string): string {
 
 export async function apiFetch<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit & { _retried?: boolean } = {}
 ): Promise<T> {
   const normalizedPath =
     path === '/api' ? '/' : path.startsWith('/api/') ? path.slice(4) : path;
@@ -77,11 +77,24 @@ export async function apiFetch<T>(
   if (!isFormDataBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
+  const { _retried, ...fetchOptions } = options;
   const res = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     credentials: 'include',
     headers,
   });
+  if (res.status === 401 && !_retried) {
+    try {
+      const refreshRes = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+      if (refreshRes.ok) {
+        return apiFetch<T>(path, { ...options, _retried: true });
+      }
+    } catch { /* ignore, fall through to throw */ }
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
+    throw new ApiRequestError('Session expired. Please log in again.', 401);
+  }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new ApiRequestError(
@@ -249,7 +262,8 @@ export async function fetchMyProfile(): Promise<{ first_name: string; last_name:
 export async function updateMyProfile(payload: {
   first_name?: string;
   last_name?: string;
-  email?: string;
+  // NOTE: email intentionally excluded — government email is SYSADMIN-controlled only.
+  // Display-only read is handled separately via GET /user/me/profile (future).
   contact_number?: string;
 }): Promise<{ status: string; message: string }> {
   return apiFetch('/user/me', {
@@ -406,6 +420,7 @@ export interface RegionalIncidentListItem {
   owner_name: string | null;
   establishment_name: string | null;
   caller_name: string | null;
+  is_wildland: boolean;
 }
 
 export interface RegionalIncidentsListResponse {
@@ -423,8 +438,14 @@ export interface RegionalIncidentDetailResponse {
   region_id: number;
   latitude: number | null;
   longitude: number | null;
+  is_wildland: boolean;
+  wildland_fire_type: string | null;
+  wildland_area_hectares: number | null;
+  wildland_area_display: string | null;
   nonsensitive: Record<string, unknown>;
   sensitive: Record<string, unknown>;
+  rejection_reason: string | null;
+  rejection_at: string | null;
   attachments?: Array<{
     attachment_id: number;
     file_name: string;
@@ -446,9 +467,42 @@ export async function fetchRegionalIncident(
   return apiFetch<RegionalIncidentDetailResponse>(`/regional/incidents/${incidentId}`);
 }
 
+export async function createRegionalIncident(
+  body: Record<string, unknown>
+): Promise<{ status: string; incident_id: number; verification_status: string }> {
+  return apiFetch('/regional/incidents', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function updateRegionalIncident(
+  incidentId: number,
+  body: Record<string, unknown>
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/incidents/${incidentId}`, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export async function submitIncidentForReview(
+  incidentId: number
+): Promise<{ status: string; incident_id: number; verification_status: string }> {
+  return apiFetch(`/regional/incidents/${incidentId}/submit`, { method: 'PATCH' });
+}
+
+export async function unpendIncident(
+  incidentId: number
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/incidents/${incidentId}/unpend`, { method: 'PATCH' });
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function fetchRegionalStats(): Promise<any> {
   return apiFetch<Record<string, unknown>>('/regional/stats');
+}
+
+export async function fetchValidatorStats(): Promise<{
+  total_verified: number;
+  pending_validation: number;
+  by_category: { category: string; count: number }[];
+}> {
+  return apiFetch('/regional/validator/stats');
 }
 
 export type AforFormKind = 'STRUCTURAL_AFOR' | 'WILDLAND_AFOR';
@@ -622,6 +676,66 @@ export async function fetchComparativeData(filters: ComparativeFilters): Promise
 }
 
 // ---------------------------------------------------------------------------
+// AQ-06 / AQ-07 / AQ-08 / AQ-13 / AQ-14 — New analytics types and functions
+// ---------------------------------------------------------------------------
+
+export interface TypeDistributionItem {
+  type: string;
+  count: number;
+}
+
+export interface TopBarangayItem {
+  barangay: string;
+  count: number;
+}
+
+export interface ResponseTimeRegionItem {
+  region_id: number;
+  region_name: string;
+  avg_response_time: number;
+  min_response_time: number;
+  max_response_time: number;
+}
+
+export interface CompareRegionItem {
+  region_id: number;
+  region_name: string;
+  total_incidents: number;
+  avg_response_time: number | null;
+  top_type: string | null;
+}
+
+export interface TopNItem {
+  name: string;
+  value: number;
+}
+
+export async function fetchTypeDistribution(filters: { start_date?: string; end_date?: string; region_id?: number } = {}): Promise<TypeDistributionItem[]> {
+  const qs = buildAnalyticsParams({ start_date: filters.start_date, end_date: filters.end_date, region_id: filters.region_id });
+  return apiFetch<TypeDistributionItem[]>(`/analytics/type-distribution${qs}`);
+}
+
+export async function fetchTopBarangays(filters: { limit?: number; start_date?: string; end_date?: string; incident_type?: string } = {}): Promise<TopBarangayItem[]> {
+  const qs = buildAnalyticsParams({ limit: filters.limit, start_date: filters.start_date, end_date: filters.end_date, incident_type: filters.incident_type });
+  return apiFetch<TopBarangayItem[]>(`/analytics/top-barangays${qs}`);
+}
+
+export async function fetchResponseTimeByRegion(filters: { start_date?: string; end_date?: string } = {}): Promise<ResponseTimeRegionItem[]> {
+  const qs = buildAnalyticsParams({ start_date: filters.start_date, end_date: filters.end_date });
+  return apiFetch<ResponseTimeRegionItem[]>(`/analytics/response-time-by-region${qs}`);
+}
+
+export async function fetchCompareRegions(filters: { region_ids: string; start_date?: string; end_date?: string; incident_type?: string }): Promise<CompareRegionItem[]> {
+  const qs = buildAnalyticsParams({ region_ids: filters.region_ids, start_date: filters.start_date, end_date: filters.end_date, incident_type: filters.incident_type });
+  return apiFetch<CompareRegionItem[]>(`/analytics/compare-regions${qs}`);
+}
+
+export async function fetchTopN(filters: { metric: string; dimension: string; limit?: number; start_date?: string; end_date?: string }): Promise<TopNItem[]> {
+  const qs = buildAnalyticsParams({ metric: filters.metric, dimension: filters.dimension, limit: filters.limit, start_date: filters.start_date, end_date: filters.end_date });
+  return apiFetch<TopNItem[]>(`/analytics/top-n${qs}`);
+}
+
+// ---------------------------------------------------------------------------
 // Sessions API (SYSTEM_ADMIN only)
 // ---------------------------------------------------------------------------
 
@@ -633,20 +747,20 @@ export interface KeycloakSession {
   username?: string;
 }
 
-/** List all active Keycloak sessions for a user (by Keycloak UUID). */
+/** List all active Keycloak sessions for a user by internal WIMS user_id. */
 export async function fetchUserSessions(
-  keycloakId: string
+  userId: string
 ): Promise<{ sessions: KeycloakSession[] }> {
-  return apiFetch<{ sessions: KeycloakSession[] }>(`/admin/sessions/${keycloakId}`);
+  return apiFetch<{ sessions: KeycloakSession[] }>(`/admin/sessions/${userId}`);
 }
 
-/** Terminate all active sessions for a user (session_id is accepted by the API but all sessions are revoked). */
+/** Terminate all active sessions for a user; Keycloak adapter revokes all sessions. */
 export async function terminateUserSessions(
-  keycloakId: string,
+  userId: string,
   sessionId: string
 ): Promise<{ status: string; user_id: string }> {
   return apiFetch<{ status: string; user_id: string }>(
-    `/admin/sessions/${keycloakId}/${sessionId}`,
+    `/admin/sessions/${userId}/${sessionId}`,
     { method: 'DELETE' }
   );
 }

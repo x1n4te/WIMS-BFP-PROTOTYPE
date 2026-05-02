@@ -6,6 +6,7 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
   ReactNode,
 } from 'react';
 import { useRouter } from 'next/navigation';
@@ -31,11 +32,13 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const PROACTIVE_REFRESH_INTERVAL_MS = 4 * 60 * 1000; // refresh before 5-minute access token expiry
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
+  const refreshInFlightRef = useRef(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -44,10 +47,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [loading]);
 
+  const refreshAccessToken = useCallback(async (): Promise<boolean> => {
+    if (refreshInFlightRef.current) {
+      return true;
+    }
+
+    refreshInFlightRef.current = true;
+    try {
+      const res = await fetch('/api/auth/refresh', { method: 'POST' });
+      if (!res.ok) {
+        console.log('[AuthContext] refreshAccessToken: refresh failed', res.status);
+        return false;
+      }
+      console.log('[AuthContext] refreshAccessToken: token refreshed');
+      return true;
+    } catch (err) {
+      console.error('[AuthContext] refreshAccessToken: request failed', err);
+      return false;
+    } finally {
+      refreshInFlightRef.current = false;
+    }
+  }, []);
+
   const fetchSession = useCallback(async () => {
     console.log('[AuthContext] fetchSession: starting');
     try {
-      const res = await fetch('/api/auth/session');
+      const requestSession = () => fetch('/api/auth/session');
+      let res = await requestSession();
+
+      if (res.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          res = await requestSession();
+        }
+      }
+
       if (res.ok) {
         const data = await res.json();
         if (data.user) {
@@ -68,12 +102,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       console.log('[AuthContext] fetchSession: loading=false');
     }
-  }, []);
+  }, [refreshAccessToken]);
 
   useEffect(() => {
     console.log('[AuthContext] useEffect: initializing auth');
     fetchSession();
   }, [fetchSession]);
+
+  useEffect(() => {
+    if (!user || loggingOut) {
+      return;
+    }
+
+    const refreshAndReloadSession = async () => {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        await fetchSession();
+        return;
+      }
+      setUser(null);
+    };
+
+    const intervalId = window.setInterval(
+      () => void refreshAndReloadSession(),
+      PROACTIVE_REFRESH_INTERVAL_MS
+    );
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshAndReloadSession();
+      }
+    };
+
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [fetchSession, loggingOut, refreshAccessToken, user]);
 
   const login = useCallback(async () => {
     console.log('[AuthContext] login: called');

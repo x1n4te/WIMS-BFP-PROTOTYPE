@@ -5,6 +5,9 @@ const BACKEND_URL =
   process.env.API_SERVER_URL ||
   (process.env.NEXT_PUBLIC_BASE_URL?.replace(/:\d+$/, '') + '/api');
 
+const ACCESS_TOKEN_COOKIE_MAX_AGE = 5 * 60; // 5 minutes: match Keycloak accessTokenLifespan
+const REFRESH_TOKEN_COOKIE_MAX_AGE = 8 * 60 * 60; // 8 hours: match SSO session max
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -12,14 +15,25 @@ export async function POST(req: NextRequest) {
 
     // Accept access_token from client-side signinCallback() flow
     if (access_token) {
+      const IS_PROD = process.env.NODE_ENV === 'production';
       const response = NextResponse.json({ user_id: 'ok' });
       response.cookies.set('access_token', access_token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: IS_PROD,
         sameSite: 'lax',
         path: '/',
-        maxAge: 28800, // 8h — matches ssoSessionMaxLifespan
+        maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE,
       });
+      const { refresh_token: refreshToken } = body as { refresh_token?: string };
+      if (refreshToken) {
+        response.cookies.set('refresh_token', refreshToken, {
+          httpOnly: true,
+          secure: IS_PROD,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: REFRESH_TOKEN_COOKIE_MAX_AGE,
+        });
+      }
       return response;
     }
 
@@ -60,8 +74,17 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 24, // 24h
+      maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE,
     });
+    if (data.refresh_token) {
+      response.cookies.set('refresh_token', data.refresh_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: REFRESH_TOKEN_COOKIE_MAX_AGE,
+      });
+    }
     return response;
   } catch (err) {
     console.error('Auth sync error:', err);
