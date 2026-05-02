@@ -4,10 +4,10 @@
 -- 3) SYSTEM_ADMIN/NATIONAL_ANALYST retain global visibility
 
 -- fire_incidents
-ALTER TABLE wims.fire_incidents DROP POLICY IF EXISTS fire_incidents_select;
-ALTER TABLE wims.fire_incidents DROP POLICY IF EXISTS fire_incidents_insert;
-ALTER TABLE wims.fire_incidents DROP POLICY IF EXISTS fire_incidents_update;
-ALTER TABLE wims.fire_incidents DROP POLICY IF EXISTS fire_incidents_delete;
+DROP POLICY IF EXISTS fire_incidents_select ON wims.fire_incidents;
+DROP POLICY IF EXISTS fire_incidents_insert ON wims.fire_incidents;
+DROP POLICY IF EXISTS fire_incidents_update ON wims.fire_incidents;
+DROP POLICY IF EXISTS fire_incidents_delete ON wims.fire_incidents;
 
 CREATE POLICY fire_incidents_select
 ON wims.fire_incidents
@@ -49,10 +49,14 @@ USING (
 );
 
 -- incident_nonsensitive_details
-ALTER TABLE wims.incident_nonsensitive_details DROP POLICY IF EXISTS incident_nonsensitive_details_region_select;
-ALTER TABLE wims.incident_nonsensitive_details DROP POLICY IF EXISTS incident_nonsensitive_details_region_insert;
-ALTER TABLE wims.incident_nonsensitive_details DROP POLICY IF EXISTS incident_nonsensitive_details_region_update;
-ALTER TABLE wims.incident_nonsensitive_details DROP POLICY IF EXISTS incident_nonsensitive_details_region_delete;
+DROP POLICY IF EXISTS incident_nonsensitive_details_region_select ON wims.incident_nonsensitive_details;
+DROP POLICY IF EXISTS incident_nonsensitive_details_owner_select ON wims.incident_nonsensitive_details;
+DROP POLICY IF EXISTS incident_nonsensitive_details_region_insert ON wims.incident_nonsensitive_details;
+DROP POLICY IF EXISTS incident_nonsensitive_details_owner_insert ON wims.incident_nonsensitive_details;
+DROP POLICY IF EXISTS incident_nonsensitive_details_region_update ON wims.incident_nonsensitive_details;
+DROP POLICY IF EXISTS incident_nonsensitive_details_owner_update ON wims.incident_nonsensitive_details;
+DROP POLICY IF EXISTS incident_nonsensitive_details_region_delete ON wims.incident_nonsensitive_details;
+DROP POLICY IF EXISTS incident_nonsensitive_details_owner_delete ON wims.incident_nonsensitive_details;
 
 CREATE POLICY incident_nonsensitive_details_owner_select
 ON wims.incident_nonsensitive_details
@@ -111,10 +115,14 @@ USING (
 );
 
 -- incident_sensitive_details
-ALTER TABLE wims.incident_sensitive_details DROP POLICY IF EXISTS incident_sensitive_details_region_select;
-ALTER TABLE wims.incident_sensitive_details DROP POLICY IF EXISTS incident_sensitive_details_region_insert;
-ALTER TABLE wims.incident_sensitive_details DROP POLICY IF EXISTS incident_sensitive_details_region_update;
-ALTER TABLE wims.incident_sensitive_details DROP POLICY IF EXISTS incident_sensitive_details_region_delete;
+DROP POLICY IF EXISTS incident_sensitive_details_region_select ON wims.incident_sensitive_details;
+DROP POLICY IF EXISTS incident_sensitive_details_owner_select ON wims.incident_sensitive_details;
+DROP POLICY IF EXISTS incident_sensitive_details_region_insert ON wims.incident_sensitive_details;
+DROP POLICY IF EXISTS incident_sensitive_details_owner_insert ON wims.incident_sensitive_details;
+DROP POLICY IF EXISTS incident_sensitive_details_region_update ON wims.incident_sensitive_details;
+DROP POLICY IF EXISTS incident_sensitive_details_owner_update ON wims.incident_sensitive_details;
+DROP POLICY IF EXISTS incident_sensitive_details_region_delete ON wims.incident_sensitive_details;
+DROP POLICY IF EXISTS incident_sensitive_details_owner_delete ON wims.incident_sensitive_details;
 
 CREATE POLICY incident_sensitive_details_owner_select
 ON wims.incident_sensitive_details

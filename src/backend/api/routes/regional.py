@@ -86,6 +86,8 @@ class RegionalStatsResponse(BaseModel):
     by_category: list[dict[str, Any]]
     by_alarm_level: list[dict[str, Any]]
     by_status: list[dict[str, Any]]
+    wildland_total: int = 0
+    by_wildland_type: list[dict[str, Any]] = []
 
 
 AFOR_WGS84_INVALID_CODE = "AFOR_WGS84_INVALID"
@@ -1984,10 +1986,12 @@ def get_regional_incidents(
                    nd.fire_station_name, nd.structures_affected,
                    nd.households_affected, nd.individuals_affected,
                    nd.responder_type, nd.fire_origin, nd.extent_of_damage,
-                   sd.owner_name, sd.establishment_name, sd.caller_name
+                   sd.owner_name, sd.establishment_name, sd.caller_name,
+                   CASE WHEN iwa.incident_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_wildland
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
+            LEFT JOIN wims.incident_wildland_afor iwa ON iwa.incident_id = fi.incident_id
             WHERE {where_sql}
             ORDER BY fi.created_at DESC
             LIMIT :limit OFFSET :offset
@@ -2026,6 +2030,7 @@ def get_regional_incidents(
                 "owner_name": r[13],
                 "establishment_name": r[14],
                 "caller_name": r[15],
+                "is_wildland": bool(r[16]),
             }
             for r in rows
         ],
@@ -2195,6 +2200,22 @@ def get_regional_incident_detail(
             "IVH schema missing notes/comments or timestamp columns; skipping rejection history lookup."
         )
 
+    # Check if incident has a wildland AFOR record (separate form from structural AFOR)
+    wildland_row = db.execute(
+        text("""
+            SELECT wildland_fire_type, total_area_burned_hectares, total_area_burned_display
+            FROM wims.incident_wildland_afor
+            WHERE incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+    is_wildland = wildland_row is not None
+    wildland_fire_type = wildland_row[0] if wildland_row else None
+    wildland_area_hectares = (
+        float(wildland_row[1]) if wildland_row and wildland_row[1] is not None else None
+    )
+    wildland_area_display = wildland_row[2] if wildland_row else None
+
     return {
         "incident_id": row[0],
         "verification_status": row[1],
@@ -2202,6 +2223,10 @@ def get_regional_incident_detail(
         "region_id": row[3],
         "latitude": float(row[5]) if row[5] is not None else None,
         "longitude": float(row[6]) if row[6] is not None else None,
+        "is_wildland": is_wildland,
+        "wildland_fire_type": wildland_fire_type,
+        "wildland_area_hectares": wildland_area_hectares,
+        "wildland_area_display": wildland_area_display,
         "nonsensitive": nonsensitive,
         "sensitive": sd_dict,
         "rejection_reason": rejection_reason,
@@ -2297,11 +2322,41 @@ def get_regional_stats(
         {"eid": str(encoder_id)},
     ).fetchall()
 
+    # Wildland fire stats (separate AFOR form)
+    wildland_total = (
+        db.execute(
+            text("""
+                SELECT COUNT(*)
+                FROM wims.incident_wildland_afor iwa
+                JOIN wims.fire_incidents fi ON fi.incident_id = iwa.incident_id
+                WHERE fi.encoder_id = CAST(:eid AS uuid) AND fi.is_archived = FALSE
+            """),
+            {"eid": str(encoder_id)},
+        ).scalar()
+        or 0
+    )
+
+    wildland_type_rows = db.execute(
+        text("""
+            SELECT iwa.wildland_fire_type, COUNT(*) as cnt
+            FROM wims.incident_wildland_afor iwa
+            JOIN wims.fire_incidents fi ON fi.incident_id = iwa.incident_id
+            WHERE fi.encoder_id = CAST(:eid AS uuid) AND fi.is_archived = FALSE
+            GROUP BY iwa.wildland_fire_type
+            ORDER BY cnt DESC
+        """),
+        {"eid": str(encoder_id)},
+    ).fetchall()
+
     return RegionalStatsResponse(
         total_incidents=total,
         by_category=[{"category": r[0], "count": r[1]} for r in by_cat_rows],
         by_alarm_level=[{"alarm_level": r[0], "count": r[1]} for r in by_alarm_rows],
         by_status=[{"status": r[0], "count": r[1]} for r in by_status_rows],
+        wildland_total=wildland_total,
+        by_wildland_type=[
+            {"fire_type": r[0], "count": r[1]} for r in wildland_type_rows
+        ],
     )
 
 
