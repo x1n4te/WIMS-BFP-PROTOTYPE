@@ -1379,7 +1379,7 @@ async def import_afor_file(
             rows, form_kind = parse_xlsx_content(content, region_id)
     except ValueError as e:
         logger.warning("AFOR type detection failed: %s", e)
-        raise HTTPException(status_code=400, detail="Unrecognized AFOR file format")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception:
         logger.exception("Failed to parse AFOR file")
         raise HTTPException(status_code=400, detail="Failed to parse file")
