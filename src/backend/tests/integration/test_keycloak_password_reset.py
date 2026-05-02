@@ -34,7 +34,6 @@ import os
 import re
 import time
 import uuid
-from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
