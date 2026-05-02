@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import get_current_wims_user, get_national_validator, get_regional_encoder
-from database import get_db, get_db_with_rls
+from database import get_db_with_rls
 from services.analytics_read_model import sync_incidents_batch
 from utils.crypto import SecurityProvider, SecurityProviderError
 
@@ -599,7 +599,10 @@ def _find_structural_marker_rows(ws: Any) -> tuple[int | None, int | None]:
     section_row: int | None = None
 
     for row in range(1, 161):
-        row_values = [_cell_str(ws, f"{col}{row}").upper() for col in ("A", "B", "C", "D", "E", "F")]
+        row_values = [
+            _cell_str(ws, f"{col}{row}").upper()
+            for col in ("A", "B", "C", "D", "E", "F")
+        ]
         combined = " ".join(v for v in row_values if v).strip()
 
         if title_row is None and "AFTER FIRE OPERATIONS REPORT" in combined:
@@ -981,7 +984,9 @@ class BfpXlsxParser:
 
         return fallback_pair
 
-    def _is_marked_on_row(self, row: int, cols: tuple[str, ...] = ("B", "C", "D")) -> bool:
+    def _is_marked_on_row(
+        self, row: int, cols: tuple[str, ...] = ("B", "C", "D")
+    ) -> bool:
         return any(self._is_marked(f"{col}{row}") for col in cols)
 
     def parse(self) -> dict[str, Any]:
@@ -1027,7 +1032,9 @@ class BfpXlsxParser:
         elif self._is_marked_on_row(61):
             extent = "Extended Beyond Structure"
         else:
-            extent_text = str(self._first_nonempty("D57", "D58", "D59", "D60", "D61") or "").strip()
+            extent_text = str(
+                self._first_nonempty("D57", "D58", "D59", "D60", "D61") or ""
+            ).strip()
             if extent_text:
                 extent = extent_text
 
@@ -2057,7 +2064,9 @@ async def commit_afor_import(
                 "distance_from_station_km": ns.get("distance_from_station_km"),
                 "notification_dt": ns.get("notification_dt"),
                 "alarm_level": ns.get("alarm_level", ""),
-                "general_category": _normalize_general_category(ns.get("general_category", "") or ""),
+                "general_category": _normalize_general_category(
+                    ns.get("general_category", "") or ""
+                ),
                 "sub_category": ns.get("sub_category", ""),
                 "civ_inj": _group_total(injured_groups, "civilian"),
                 "civ_fat": _group_total(fatal_groups, "civilian"),
@@ -2242,7 +2251,10 @@ def get_regional_incidents(
     """
     encoder_id = user["user_id"]
 
-    where_clauses = ["fi.encoder_id = CAST(:encoder_id AS uuid)", "fi.is_archived = FALSE"]
+    where_clauses = [
+        "fi.encoder_id = CAST(:encoder_id AS uuid)",
+        "fi.is_archived = FALSE",
+    ]
     params: dict[str, Any] = {
         "encoder_id": str(encoder_id),
         "limit": limit,
@@ -2360,7 +2372,9 @@ def get_regional_incident_detail(
         ).fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail="Incident not found or access denied")
+        raise HTTPException(
+            status_code=404, detail="Incident not found or access denied"
+        )
 
     # Fetch nonsensitive
     ns = db.execute(
@@ -2437,16 +2451,22 @@ def get_regional_incident_detail(
     # Fetch the most recent rejection reason with compatibility across IVH schemas.
     ivh_has_notes = _incident_verification_history_has_column(db, "notes")
     ivh_has_comments = _incident_verification_history_has_column(db, "comments")
-    ivh_has_action_timestamp = _incident_verification_history_has_column(db, "action_timestamp")
+    ivh_has_action_timestamp = _incident_verification_history_has_column(
+        db, "action_timestamp"
+    )
     ivh_has_created_at = _incident_verification_history_has_column(db, "created_at")
     ivh_uses_target_columns = _incident_verification_history_uses_target_columns(db)
 
     rejection_reason = None
     rejection_at = None
 
-    if (ivh_has_notes or ivh_has_comments) and (ivh_has_action_timestamp or ivh_has_created_at):
+    if (ivh_has_notes or ivh_has_comments) and (
+        ivh_has_action_timestamp or ivh_has_created_at
+    ):
         notes_column = "notes" if ivh_has_notes else "comments"
-        timestamp_column = "action_timestamp" if ivh_has_action_timestamp else "created_at"
+        timestamp_column = (
+            "action_timestamp" if ivh_has_action_timestamp else "created_at"
+        )
         incident_filter = (
             "target_type = 'OFFICIAL' AND target_id = :iid"
             if ivh_uses_target_columns
@@ -2464,7 +2484,9 @@ def get_regional_incident_detail(
             {"iid": incident_id},
         ).fetchone()
         rejection_reason = rejection_row[0] if rejection_row else None
-        rejection_at = rejection_row[1].isoformat() if rejection_row and rejection_row[1] else None
+        rejection_at = (
+            rejection_row[1].isoformat() if rejection_row and rejection_row[1] else None
+        )
     else:
         logger.warning(
             "IVH schema missing notes/comments or timestamp columns; skipping rejection history lookup."
@@ -2501,12 +2523,15 @@ def get_validator_stats(
         """),
     ).fetchall()
 
-    pending_count = db.execute(
-        text("""
+    pending_count = (
+        db.execute(
+            text("""
             SELECT COUNT(*) FROM wims.fire_incidents
             WHERE verification_status = 'PENDING_VALIDATION' AND is_archived = FALSE
         """),
-    ).scalar() or 0
+        ).scalar()
+        or 0
+    )
 
     total_verified = sum(r[1] for r in by_cat_rows)
     return {
@@ -2584,6 +2609,7 @@ def get_regional_stats(
 
 class IncidentCreateRequest(BaseModel):
     """Create a new fire incident with nonsensitive + optional sensitive details."""
+
     latitude: float
     longitude: float
     region_id: int | None = None
@@ -2630,6 +2656,7 @@ class IncidentCreateRequest(BaseModel):
 
 class IncidentUpdateRequest(BaseModel):
     """Update an existing DRAFT/PENDING incident."""
+
     # Nonsensitive fields
     notification_dt: str | None = None
     alarm_level: str | None = None
@@ -2690,7 +2717,10 @@ def create_incident(
     """Create a new fire incident (DRAFT) with nonsensitive + optional sensitive details."""
     region_id = body.region_id or user.get("assigned_region_id")
     if region_id is None:
-        raise HTTPException(status_code=400, detail="region_id is required when no assigned region is set")
+        raise HTTPException(
+            status_code=400,
+            detail="region_id is required when no assigned region is set",
+        )
     encoder_id = user["user_id"]
 
     # Insert fire_incidents core row
@@ -2700,19 +2730,41 @@ def create_incident(
             VALUES (:eid, :rid, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), 'DRAFT')
             RETURNING incident_id
         """),
-        {"eid": encoder_id, "rid": region_id, "lon": body.longitude, "lat": body.latitude},
+        {
+            "eid": encoder_id,
+            "rid": region_id,
+            "lon": body.longitude,
+            "lat": body.latitude,
+        },
     ).fetchone()
     incident_id = incident_row[0]
 
     # Insert nonsensitive details
     ns_fields = {
-        "notification_dt", "alarm_level", "general_category", "sub_category",
-        "specific_type", "occupancy_type", "city_id", "barangay_id",
-        "distance_from_station_km", "estimated_damage_php", "civilian_injured",
-        "civilian_deaths", "firefighter_injured", "firefighter_deaths",
-        "families_affected", "structures_affected", "households_affected",
-        "individuals_affected", "responder_type", "fire_origin", "extent_of_damage",
-        "stage_of_fire", "fire_station_name", "total_response_time_minutes",
+        "notification_dt",
+        "alarm_level",
+        "general_category",
+        "sub_category",
+        "specific_type",
+        "occupancy_type",
+        "city_id",
+        "barangay_id",
+        "distance_from_station_km",
+        "estimated_damage_php",
+        "civilian_injured",
+        "civilian_deaths",
+        "firefighter_injured",
+        "firefighter_deaths",
+        "families_affected",
+        "structures_affected",
+        "households_affected",
+        "individuals_affected",
+        "responder_type",
+        "fire_origin",
+        "extent_of_damage",
+        "stage_of_fire",
+        "fire_station_name",
+        "total_response_time_minutes",
         "recommendations",
     }
     ns_params = {"iid": incident_id}
@@ -2731,7 +2783,9 @@ def create_incident(
 
     if len(ns_cols) > 1:
         db.execute(
-            text(f"INSERT INTO wims.incident_nonsensitive_details ({', '.join(ns_cols)}) VALUES ({', '.join(ns_vals)})"),
+            text(
+                f"INSERT INTO wims.incident_nonsensitive_details ({', '.join(ns_cols)}) VALUES ({', '.join(ns_vals)})"
+            ),
             ns_params,
         )
 
@@ -2740,8 +2794,14 @@ def create_incident(
     has_pii = any(getattr(body, f, None) for f in pii_fields)
 
     sd_fields = {
-        "street_address", "landmark", "narrative_report", "establishment_name",
-        "receiver_name", "prepared_by_officer", "noted_by_officer", "remarks",
+        "street_address",
+        "landmark",
+        "narrative_report",
+        "establishment_name",
+        "receiver_name",
+        "prepared_by_officer",
+        "noted_by_officer",
+        "remarks",
     }
     sd_params = {"iid": incident_id}
     sd_cols = ["incident_id"]
@@ -2751,13 +2811,18 @@ def create_incident(
         pii_dict = {f: getattr(body, f) or "" for f in pii_fields}
         try:
             sp = _get_security_provider()
-            nonce_b64, ct_b64 = sp.encrypt_json(pii_dict, f"incident_id:{incident_id}".encode())
+            nonce_b64, ct_b64 = sp.encrypt_json(
+                pii_dict, f"incident_id:{incident_id}".encode()
+            )
             sd_cols.extend(["pii_blob_enc", "encryption_iv"])
             sd_vals.extend([":pii_blob", ":enc_iv"])
             sd_params["pii_blob"] = ct_b64
             sd_params["enc_iv"] = nonce_b64
         except SecurityProviderError:
-            logger.warning("PII encryption failed — storing without blob (incident_id=%s)", incident_id)
+            logger.warning(
+                "PII encryption failed — storing without blob (incident_id=%s)",
+                incident_id,
+            )
 
     for field in sd_fields:
         val = getattr(body, field, None)
@@ -2768,13 +2833,24 @@ def create_incident(
 
     if len(sd_cols) > 1:
         db.execute(
-            text(f"INSERT INTO wims.incident_sensitive_details ({', '.join(sd_cols)}) VALUES ({', '.join(sd_vals)})"),
+            text(
+                f"INSERT INTO wims.incident_sensitive_details ({', '.join(sd_cols)}) VALUES ({', '.join(sd_vals)})"
+            ),
             sd_params,
         )
 
     db.commit()
-    logger.info("Created incident %s in region %s by encoder %s", incident_id, region_id, encoder_id)
-    return {"status": "created", "incident_id": incident_id, "verification_status": "DRAFT"}
+    logger.info(
+        "Created incident %s in region %s by encoder %s",
+        incident_id,
+        region_id,
+        encoder_id,
+    )
+    return {
+        "status": "created",
+        "incident_id": incident_id,
+        "verification_status": "DRAFT",
+    }
 
 
 @router.put("/incidents/{incident_id}")
@@ -2800,7 +2876,9 @@ def update_incident(
     ).fetchone()
 
     if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
+        raise HTTPException(
+            status_code=404, detail="Incident not found or not owned by you"
+        )
 
     if incident[1] not in ("DRAFT", "PENDING", "REJECTED"):
         raise HTTPException(
@@ -2837,13 +2915,30 @@ def update_incident(
 
     # Update nonsensitive details
     ns_fields = {
-        "notification_dt", "alarm_level", "general_category", "sub_category",
-        "specific_type", "occupancy_type", "city_id", "barangay_id",
-        "distance_from_station_km", "estimated_damage_php", "civilian_injured",
-        "civilian_deaths", "firefighter_injured", "firefighter_deaths",
-        "families_affected", "structures_affected", "households_affected",
-        "individuals_affected", "responder_type", "fire_origin", "extent_of_damage",
-        "stage_of_fire", "fire_station_name", "total_response_time_minutes",
+        "notification_dt",
+        "alarm_level",
+        "general_category",
+        "sub_category",
+        "specific_type",
+        "occupancy_type",
+        "city_id",
+        "barangay_id",
+        "distance_from_station_km",
+        "estimated_damage_php",
+        "civilian_injured",
+        "civilian_deaths",
+        "firefighter_injured",
+        "firefighter_deaths",
+        "families_affected",
+        "structures_affected",
+        "households_affected",
+        "individuals_affected",
+        "responder_type",
+        "fire_origin",
+        "extent_of_damage",
+        "stage_of_fire",
+        "fire_station_name",
+        "total_response_time_minutes",
         "recommendations",
     }
     ns_updates = []
@@ -2860,14 +2955,22 @@ def update_incident(
 
     if ns_updates:
         db.execute(
-            text(f"UPDATE wims.incident_nonsensitive_details SET {', '.join(ns_updates)} WHERE incident_id = :iid"),
+            text(
+                f"UPDATE wims.incident_nonsensitive_details SET {', '.join(ns_updates)} WHERE incident_id = :iid"
+            ),
             ns_params,
         )
 
     # Update sensitive details
     sd_fields = {
-        "street_address", "landmark", "narrative_report", "establishment_name",
-        "receiver_name", "prepared_by_officer", "noted_by_officer", "remarks",
+        "street_address",
+        "landmark",
+        "narrative_report",
+        "establishment_name",
+        "receiver_name",
+        "prepared_by_officer",
+        "noted_by_officer",
+        "remarks",
     }
     pii_fields = ["caller_name", "caller_number", "owner_name", "occupant_name"]
     sd_updates = []
@@ -2887,7 +2990,9 @@ def update_incident(
     if has_pii_update:
         # Fetch existing PII blob and merge
         existing = db.execute(
-            text("SELECT pii_blob_enc, encryption_iv FROM wims.incident_sensitive_details WHERE incident_id = :iid"),
+            text(
+                "SELECT pii_blob_enc, encryption_iv FROM wims.incident_sensitive_details WHERE incident_id = :iid"
+            ),
             {"iid": incident_id},
         ).fetchone()
 
@@ -2895,9 +3000,14 @@ def update_incident(
         if existing and existing[0] and existing[1]:
             try:
                 sp = _get_security_provider()
-                existing_pii = sp.decrypt_json(existing[1], existing[0], f"incident_id:{incident_id}".encode())
+                existing_pii = sp.decrypt_json(
+                    existing[1], existing[0], f"incident_id:{incident_id}".encode()
+                )
             except SecurityProviderError:
-                logger.warning("Failed to decrypt existing PII for incident %s — overwriting", incident_id)
+                logger.warning(
+                    "Failed to decrypt existing PII for incident %s — overwriting",
+                    incident_id,
+                )
 
         # Merge updates
         for field in pii_fields:
@@ -2908,7 +3018,9 @@ def update_incident(
         # Re-encrypt
         try:
             sp = _get_security_provider()
-            nonce_b64, ct_b64 = sp.encrypt_json(existing_pii, f"incident_id:{incident_id}".encode())
+            nonce_b64, ct_b64 = sp.encrypt_json(
+                existing_pii, f"incident_id:{incident_id}".encode()
+            )
             sd_updates.extend(["pii_blob_enc = :pii_blob", "encryption_iv = :enc_iv"])
             sd_params["pii_blob"] = ct_b64
             sd_params["enc_iv"] = nonce_b64
@@ -2917,7 +3029,9 @@ def update_incident(
 
     if sd_updates:
         db.execute(
-            text(f"UPDATE wims.incident_sensitive_details SET {', '.join(sd_updates)} WHERE incident_id = :iid"),
+            text(
+                f"UPDATE wims.incident_sensitive_details SET {', '.join(sd_updates)} WHERE incident_id = :iid"
+            ),
             sd_params,
         )
 
@@ -2935,7 +3049,9 @@ def update_incident(
             jsonb_ns_params[field] = json.dumps(val)
     if jsonb_ns_updates:
         db.execute(
-            text(f"UPDATE wims.incident_nonsensitive_details SET {', '.join(jsonb_ns_updates)} WHERE incident_id = :iid"),
+            text(
+                f"UPDATE wims.incident_nonsensitive_details SET {', '.join(jsonb_ns_updates)} WHERE incident_id = :iid"
+            ),
             jsonb_ns_params,
         )
 
@@ -2957,7 +3073,9 @@ def update_incident(
             jsonb_sd_params[field] = json.dumps(val) if field != "disposition" else val
     if jsonb_sd_updates:
         db.execute(
-            text(f"UPDATE wims.incident_sensitive_details SET {', '.join(jsonb_sd_updates)} WHERE incident_id = :iid"),
+            text(
+                f"UPDATE wims.incident_sensitive_details SET {', '.join(jsonb_sd_updates)} WHERE incident_id = :iid"
+            ),
             jsonb_sd_params,
         )
 
@@ -2974,7 +3092,9 @@ def update_incident(
         )
     else:
         db.execute(
-            text("UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"),
+            text(
+                "UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"
+            ),
             {"iid": incident_id},
         )
 
@@ -2983,7 +3103,9 @@ def update_incident(
     except Exception:
         db.rollback()
         logger.exception("Failed to update incident_id=%s", incident_id)
-        raise HTTPException(status_code=500, detail="Failed to save incident draft update")
+        raise HTTPException(
+            status_code=500, detail="Failed to save incident draft update"
+        )
     logger.info("Updated incident %s by encoder %s", incident_id, encoder_id)
     return {"status": "updated", "incident_id": incident_id}
 
@@ -3009,13 +3131,19 @@ def unpend_incident(
     ).fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
+        raise HTTPException(
+            status_code=404, detail="Incident not found or not owned by you"
+        )
 
     if row[1] != "PENDING":
-        raise HTTPException(status_code=400, detail=f"Incident is {row[1]}, not PENDING")
+        raise HTTPException(
+            status_code=400, detail=f"Incident is {row[1]}, not PENDING"
+        )
 
     db.execute(
-        text("UPDATE wims.fire_incidents SET verification_status = 'DRAFT', updated_at = now() WHERE incident_id = :iid"),
+        text(
+            "UPDATE wims.fire_incidents SET verification_status = 'DRAFT', updated_at = now() WHERE incident_id = :iid"
+        ),
         {"iid": incident_id},
     )
     db.commit()
@@ -3044,7 +3172,9 @@ def delete_incident(
     ).fetchone()
 
     if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
+        raise HTTPException(
+            status_code=404, detail="Incident not found or not owned by you"
+        )
 
     if incident[1] != "DRAFT":
         raise HTTPException(
@@ -3053,7 +3183,9 @@ def delete_incident(
         )
 
     db.execute(
-        text("UPDATE wims.fire_incidents SET is_archived = TRUE, updated_at = now() WHERE incident_id = :iid"),
+        text(
+            "UPDATE wims.fire_incidents SET is_archived = TRUE, updated_at = now() WHERE incident_id = :iid"
+        ),
         {"iid": incident_id},
     )
     db.commit()
@@ -3107,9 +3239,17 @@ def submit_incident_for_review(
     ).fetchone()
 
     if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
+        raise HTTPException(
+            status_code=404, detail="Incident not found or not owned by you"
+        )
 
-    current_status = str(incident[1])
+    current_status = incident[1]
+    inc_encoder_id = str(incident[2]) if incident[2] else None
+
+    if inc_encoder_id != str(encoder_id):
+        raise HTTPException(
+            status_code=403, detail="You can only submit your own incidents"
+        )
 
     if current_status not in ("DRAFT", "REJECTED"):
         raise HTTPException(
@@ -3311,7 +3451,9 @@ def submit_incident_for_review(
     is_resubmit = current_status == "REJECTED"
     try:
         update_result = db.execute(
-            text("UPDATE wims.fire_incidents SET verification_status = 'PENDING', updated_at = now() WHERE incident_id = :iid"),
+            text(
+                "UPDATE wims.fire_incidents SET verification_status = 'PENDING', updated_at = now() WHERE incident_id = :iid"
+            ),
             {"iid": incident_id},
         )
         if update_result.rowcount != 1:
@@ -3333,7 +3475,10 @@ def submit_incident_for_review(
     except Exception:
         db.rollback()
         logger.exception("Failed to submit incident_id=%s for review", incident_id)
-        raise HTTPException(status_code=500, detail="Failed to submit incident — transaction rolled back")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to submit incident — transaction rolled back",
+        )
 
     logger.info(
         "Encoder user_id=%s submitted incident_id=%s for review (%s → PENDING, strategy=%s)",
@@ -3396,7 +3541,7 @@ def get_validator_incident_queue(
     """
     where_clauses = [
         "fi.is_archived = FALSE",
-        "fi.encoder_id IS NOT NULL",   # encoder-submitted only — never public DMZ rows
+        "fi.encoder_id IS NOT NULL",  # encoder-submitted only — never public DMZ rows
     ]
     params: dict[str, Any] = {
         "limit": limit,
@@ -3408,9 +3553,7 @@ def get_validator_incident_queue(
         params["status"] = status
     elif not show_all:
         # Default: show the two awaiting-review statuses
-        where_clauses.append(
-            "fi.verification_status = ANY(:default_statuses)"
-        )
+        where_clauses.append("fi.verification_status = ANY(:default_statuses)")
         params["default_statuses"] = list(_VALIDATOR_DEFAULT_QUEUE_STATUSES)
 
     if encoder_id:
