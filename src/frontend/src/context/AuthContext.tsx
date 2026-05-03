@@ -38,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
-  const refreshInFlightRef = useRef(false);
+  const refreshInFlightRef = useRef<Promise<boolean> | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -49,24 +49,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshAccessToken = useCallback(async (): Promise<boolean> => {
     if (refreshInFlightRef.current) {
-      return true;
+      return refreshInFlightRef.current;
     }
 
-    refreshInFlightRef.current = true;
-    try {
-      const res = await fetch('/api/auth/refresh', { method: 'POST' });
-      if (!res.ok) {
-        console.log('[AuthContext] refreshAccessToken: refresh failed', res.status);
+    const refreshPromise = (async () => {
+      try {
+        const res = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          console.log('[AuthContext] refreshAccessToken: refresh failed', res.status);
+          return false;
+        }
+        console.log('[AuthContext] refreshAccessToken: token refreshed');
+        return true;
+      } catch (err) {
+        console.error('[AuthContext] refreshAccessToken: request failed', err);
         return false;
+      } finally {
+        refreshInFlightRef.current = null;
       }
-      console.log('[AuthContext] refreshAccessToken: token refreshed');
-      return true;
-    } catch (err) {
-      console.error('[AuthContext] refreshAccessToken: request failed', err);
-      return false;
-    } finally {
-      refreshInFlightRef.current = false;
-    }
+    })();
+
+    refreshInFlightRef.current = refreshPromise;
+    return refreshPromise;
   }, []);
 
   const fetchSession = useCallback(async () => {
@@ -114,23 +121,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const refreshAndReloadSession = async () => {
+    const proactivelyRefreshJwtOnly = async () => {
       const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        await fetchSession();
-        return;
+      if (!refreshed) {
+        setUser(null);
       }
-      setUser(null);
     };
 
     const intervalId = window.setInterval(
-      () => void refreshAndReloadSession(),
+      () => void proactivelyRefreshJwtOnly(),
       PROACTIVE_REFRESH_INTERVAL_MS
     );
 
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') {
-        void refreshAndReloadSession();
+        void proactivelyRefreshJwtOnly();
       }
     };
 
@@ -142,7 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('focus', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [fetchSession, loggingOut, refreshAccessToken, user]);
+  }, [loggingOut, refreshAccessToken, user]);
 
   const login = useCallback(async () => {
     console.log('[AuthContext] login: called');
