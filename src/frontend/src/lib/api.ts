@@ -232,7 +232,7 @@ export async function fetchActiveSessions(): Promise<any[]> {
 }
 
 /** Fetch system health (admin) - GET /admin/health */
-export async function fetchSystemHealth(): Promise<any> {
+export async function fetchSystemHealth(): Promise<unknown> {
   return apiFetch('/admin/health');
 }
 

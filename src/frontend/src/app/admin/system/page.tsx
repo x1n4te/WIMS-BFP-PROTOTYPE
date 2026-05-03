@@ -97,7 +97,7 @@ export default function AdminSystemPage() {
     const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([]);
     const [auditLogs, setAuditLogs] = useState<{ items: AuditItem[]; total: number }>({ items: [], total: 0 });
     const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
-    const [health, setHealth] = useState<any>(null);
+    const [health, setHealth] = useState<{ status: string; components: Record<string, { status: string; latency_ms: number }> } | null>(null);
     const [loadingUsers, setLoadingUsers] = useState(false);
     const [loadingLogs, setLoadingLogs] = useState(false);
     const [loadingAudit, setLoadingAudit] = useState(false);
@@ -239,7 +239,7 @@ export default function AdminSystemPage() {
         try {
             const data = await fetchAuditLogs({ limit: 50, offset: 0 });
             setAuditLogs({
-                items: data.items.map((item: any): AuditItem => ({
+                items: data.items.map((item: Record<string, unknown>): AuditItem => ({
                     audit_id: item.audit_id,
                     user_id: item.user_id,
                     action_type: item.action_type,

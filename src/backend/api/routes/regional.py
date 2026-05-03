@@ -3085,6 +3085,8 @@ def get_validator_incident_queue(
     limit/offset — pagination.
 
     """
+    region_id = user.get("assigned_region_id")
+
     where_clauses = [
         "fi.is_archived = FALSE",
         "fi.encoder_id IS NOT NULL",  # encoder-submitted only — never public DMZ rows
@@ -3208,6 +3210,7 @@ def verify_incident(
     409 — incident already has the requested target status (idempotency guard)
     """
     validator_user_id = user["user_id"]
+    region_id = user.get("assigned_region_id")
 
     # --- 1. Validate action value before touching the DB ---
     action = (body.action or "").strip().lower()

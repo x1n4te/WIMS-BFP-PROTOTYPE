@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import get_system_admin
-from database import get_db_with_rls
+from database import get_db, get_db_with_rls
 from services.ai_service import analyze_threat_log
 from services.analytics_read_model import backfill_analytics_facts
 from services.keycloak_admin import (
@@ -295,8 +295,10 @@ def update_user(
     
     # Log audit for update
     actions = []
-    if body.role: actions.append(f"ROLE_CHANGE_TO_{body.role}")
-    if body.is_active is not None: actions.append("DEACTIVATE" if not body.is_active else "ACTIVATE")
+    if body.role:
+        actions.append(f"ROLE_CHANGE_TO_{body.role}")
+    if body.is_active is not None:
+        actions.append("DEACTIVATE" if not body.is_active else "ACTIVATE")
     
     for action_name in actions:
         log_system_audit(
