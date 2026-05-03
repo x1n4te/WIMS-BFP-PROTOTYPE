@@ -525,9 +525,16 @@ export default function RegionalIncidentDetailPage() {
           {/* Header */}
           <div className="flex flex-wrap items-start gap-3">
             <div>
-              <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                Incident #{detail.incident_id}
-              </h1>
+              <div className="flex items-center gap-3 flex-wrap">
+                <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                  Incident #{detail.incident_id}
+                </h1>
+                {detail.is_wildland && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-sm font-semibold text-orange-800 border border-orange-200">
+                    🌿 Wildland Fire AFOR
+                  </span>
+                )}
+              </div>
               <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
                 Region {detail.region_id}
                 {detail.created_at && <>{' · '}Created {new Date(detail.created_at).toLocaleString()}</>}
@@ -571,6 +578,21 @@ export default function RegionalIncidentDetailPage() {
             <FieldRow label={FIELD_LABELS.extent_of_damage} value={ns?.extent_of_damage} />
             <FieldRow label={FIELD_LABELS.extent_total_floor_area_sqm} value={ns?.extent_total_floor_area_sqm} />
             <FieldRow label={FIELD_LABELS.extent_total_land_area_hectares} value={ns?.extent_total_land_area_hectares} />
+            {detail.is_wildland && (
+              <>
+                <FieldRow label="Wildland Fire Type" value={detail.wildland_fire_type} />
+                {detail.wildland_area_display && (
+                  <FieldRow label="Total Area Burned" value={detail.wildland_area_display} />
+                )}
+                {detail.wildland_area_hectares != null && (
+                  <FieldRow label="Area Burned (Hectares)" value={detail.wildland_area_hectares} />
+                )}
+              </>
+            )}
+          </Section>
+
+          {/* C. Affected */}
+          <Section title="C. Affected Counts" sectionId="sec-affected">
             <FieldRow label={FIELD_LABELS.structures_affected} value={ns?.structures_affected} />
             <FieldRow label={FIELD_LABELS.households_affected} value={ns?.households_affected} />
             <FieldRow label={FIELD_LABELS.families_affected} value={ns?.families_affected} />
