@@ -28,8 +28,13 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     const role = (user as { role?: string })?.role ?? null;
     const pathname = usePathname();
 
-    const isActive = (path: string) =>
-        pathname === path || pathname?.startsWith(`${path}/`);
+    const isActive = (path: string) => {
+        // /incidents/triage has its own nav item — don't also highlight /incidents
+        if (path === '/incidents' && pathname?.startsWith('/incidents/triage')) return false;
+        // /dashboard/validator should not stay active when the user navigates to /incidents
+        if (path === '/dashboard/validator' && (pathname?.startsWith('/incidents'))) return false;
+        return pathname === path || pathname?.startsWith(`${path}/`);
+    };
 
     // Navigation items based on role
     const navSections = getNavSections(role);
@@ -202,9 +207,16 @@ function getNavSections(role: string | null): NavSection[] {
             items: [
                 { label: 'Home', href: '/home', icon: Home },
                 { label: 'Validator Dashboard', href: '/dashboard/validator', icon: LayoutDashboard },
-                { label: 'Incidents', href: '/dashboard/validator', icon: Flame },
+                { label: 'Incidents', href: '/incidents', icon: Flame },
             ],
         });
+        sections.push({
+            label: 'Workflow',
+            items: [
+                { label: 'Triage Queue', href: '/incidents/triage', icon: ClipboardList },
+            ],
+        });
+        sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });
         return sections;
     }
 

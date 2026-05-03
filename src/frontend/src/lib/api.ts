@@ -220,6 +220,27 @@ export async function fetchAdminUsers(): Promise<any[]> {
   }
 }
 
+/** Fetch all active sessions (admin) - returns [] on error */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function fetchActiveSessions(): Promise<any[]> {
+  try {
+    const data = await apiFetch<Record<string, unknown>[] | { data?: Record<string, unknown>[] }>('/admin/active-sessions');
+    return Array.isArray(data) ? data : (data?.data ?? []);
+  } catch {
+    return [];
+  }
+}
+
+/** Fetch system health (admin) - GET /admin/health */
+export async function fetchSystemHealth(): Promise<any> {
+  return apiFetch('/admin/health');
+}
+
+/** Revoke user's sessions (admin) - POST /admin/users/{userId}/logout */
+export async function revokeUserSessions(userId: string): Promise<{ status: string }> {
+  return apiFetch(`/admin/users/${userId}/logout`, { method: 'POST' });
+}
+
 /** Update user (admin) - role, assigned_region_id, is_active */
 export async function updateAdminUser(
   userId: string,
@@ -377,6 +398,14 @@ export async function promoteReport(reportId: number): Promise<{ report_id: numb
   return apiFetch(`/triage/${reportId}/promote`, { method: 'POST' });
 }
 
+/** Bulk promote multiple pending citizen reports. Returns { promoted: {report_id, incident_id}[], failed: number[] } */
+export async function bulkPromoteReports(reportIds: number[]): Promise<{ promoted: Array<{ report_id: number; incident_id: number }>; failed: number[] }> {
+  return apiFetch('/triage/bulk-promote', {
+    method: 'POST',
+    body: JSON.stringify({ report_ids: reportIds }),
+  });
+}
+
 /** Submit civilian emergency report — Zero-Trust, NO auth. POST /api/civilian/reports */
 export async function submitCivilianReport(payload: {
   latitude: number;
@@ -389,6 +418,20 @@ export async function submitCivilianReport(payload: {
     credentials: 'omit',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((json as { message?: string; detail?: string }).message ?? (json as { detail?: string }).detail ?? `Request failed: ${res.status}`);
+  }
+  return json as { report_id: number; latitude: number; longitude: number; description: string; trust_score: number; status: string; created_at: string };
+}
+
+/** Track civilian emergency report status — Zero-Trust, NO auth. GET /api/civilian/reports/{id} */
+export async function fetchReportStatus(reportId: string | number): Promise<{ report_id: number; latitude: number; longitude: number; description: string; trust_score: number; status: string; created_at: string }> {
+  const url = `${(typeof window !== 'undefined' ? (process.env.NEXT_PUBLIC_API_URL || '/api') : process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api').replace(/\/$/, '')}/civilian/reports/${reportId}`;
+  const res = await fetch(url, {
+    method: 'GET',
+    credentials: 'omit',
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {

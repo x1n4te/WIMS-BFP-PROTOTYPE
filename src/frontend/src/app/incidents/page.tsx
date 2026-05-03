@@ -18,7 +18,7 @@ export default function IncidentsPage() {
       return;
     }
 
-    if (role === 'NATIONAL_VALIDATOR' && assignedRegionId) {
+    if (role === 'NATIONAL_VALIDATOR') {
       router.replace('/dashboard/validator');
       return;
     }

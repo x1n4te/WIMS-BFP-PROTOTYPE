@@ -12,7 +12,7 @@ export default function ReportPage() {
     const [description, setDescription] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [submitted, setSubmitted] = useState(false);
+    const [submitted, setSubmitted] = useState<number | null>(null);
 
     const handleLocationSelect = (lat: number, lng: number) => {
         setLatitude(lat);
@@ -26,8 +26,8 @@ export default function ReportPage() {
         if (!description.trim()) { setError('Please enter an emergency description.'); return; }
         setSubmitting(true);
         try {
-            await submitCivilianReport({ latitude, longitude, description: description.trim() });
-            setSubmitted(true);
+            const data = await submitCivilianReport({ latitude, longitude, description: description.trim() });
+            setSubmitted(data.report_id);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to submit report.');
         } finally {
@@ -44,6 +44,15 @@ export default function ReportPage() {
                     <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                         Emergency responders have been notified. Please move to a safe distance.
                     </p>
+                    <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg mt-4 border" style={{ borderColor: 'var(--border-color)' }}>
+                        <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Your Tracking ID</p>
+                        <p className="text-3xl font-mono font-bold" style={{ color: 'white' }}>{submitted}</p>
+                    </div>
+                    <div className="pt-4">
+                        <a href="/report/track" className="text-red-600 hover:text-red-800 font-medium text-sm underline underline-offset-4">
+                            Track the status of your report &rarr;
+                        </a>
+                    </div>
                 </div>
             </div>
         );

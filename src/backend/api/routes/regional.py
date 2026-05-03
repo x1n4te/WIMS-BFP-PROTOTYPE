@@ -20,6 +20,7 @@ from auth import get_current_wims_user, get_national_validator, get_regional_enc
 from database import get_db_with_rls
 from services.analytics_read_model import sync_incidents_batch
 from utils.crypto import SecurityProvider, SecurityProviderError
+from utils.audit import log_system_audit
 
 
 # ── Lazy SecurityProvider singleton (avoids import-time env check in test mocks) ──
@@ -3093,6 +3094,10 @@ def get_validator_incident_queue(
         "offset": offset,
     }
 
+    if region_id is not None:
+        where_clauses.append("fi.region_id = :region_id")
+        params["region_id"] = region_id
+
     if status:
         where_clauses.append("fi.verification_status = :status")
         params["status"] = status
@@ -3176,6 +3181,7 @@ def get_validator_incident_queue(
 def verify_incident(
     incident_id: int,
     body: VerificationActionRequest,
+    request: Request,
     user: Annotated[dict, Depends(get_national_validator)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
@@ -3232,7 +3238,16 @@ def verify_incident(
     inc_encoder_id = incident_row[3]
     current_status = incident_row[1]
 
-    # --- 3. Encoder linkage — reject public/DMZ rows ---
+    # --- 3. Region isolation — strict, no fall-through ---
+    if region_id is not None and inc_region_id != region_id:
+        # Return 403, not 404, so the caller knows this is a permission boundary
+        # and not a missing record.  Do NOT leak the actual region in the message.
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to act on incidents outside your assigned region",
+        )
+
+    # --- 4. Encoder linkage — reject public/DMZ rows ---
     if inc_encoder_id is None:
         raise HTTPException(
             status_code=403,
@@ -3265,6 +3280,15 @@ def verify_incident(
             previous_status=current_status,
             new_status=target_status,
             notes=body.notes or "Validator action",
+        )
+
+        log_system_audit(
+            db=db,
+            user_id=validator_user_id,
+            action_type=f"VERIFY_{action.upper()}",
+            table_affected="fire_incidents",
+            record_id=incident_id,
+            request=request
         )
 
         db.commit()

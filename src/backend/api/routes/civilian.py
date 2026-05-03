@@ -60,3 +60,32 @@ def submit_civilian_report(
         status=row[2],
         created_at=row[4],
     )
+
+@router.get("/reports/{report_id}", response_model=CivilianReportResponse)
+def get_civilian_report(
+    report_id: int,
+    db: Annotated[Session, Depends(get_db)],
+) -> CivilianReportResponse:
+    """Fetch status of a public report. No auth required."""
+    row = db.execute(
+        text(
+            "SELECT report_id, ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lon, "
+            "description, trust_score, status, created_at "
+            "FROM wims.citizen_reports WHERE report_id = :rid"
+        ),
+        {"rid": report_id},
+    ).fetchone()
+
+    if not row:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    return CivilianReportResponse(
+        report_id=row[0],
+        latitude=float(row[1]),
+        longitude=float(row[2]),
+        description=row[3],
+        trust_score=row[4],
+        status=row[5],
+        created_at=row[6],
+    )

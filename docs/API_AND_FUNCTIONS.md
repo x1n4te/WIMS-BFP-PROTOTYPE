@@ -11,6 +11,7 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 | POST | `/api/auth/login` | Public | Stub login endpoint; guarded by Redis sliding-window middleware. |
 | POST | `/api/auth/callback` | Public | Exchanges PKCE code with Keycloak and upserts user in `wims.users`. |
 | GET | `/api/user/me` | JWT (`get_current_user`) | Returns merged token + user profile payload; provisions user on first access if needed. |
+| POST | `/api/auth/verify-session` | Public | Validates a pre-obtained access token and enforces concurrent session limits. Used by Next.js sync route. |
 
 ### Incident Routes (`api/routes/incidents.py`, prefix `/api`)
 
@@ -24,6 +25,7 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/api/civilian/reports` | Public | Submits citizen report with `PENDING` status and zero trust score. |
+| GET | `/api/civilian/reports/{report_id}` | Public | Securely fetches the status of a public report without authentication. |
 
 ### Triage (`api/routes/triage.py`, prefix `/api/triage`)
 
@@ -31,6 +33,7 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 |---|---|---|---|
 | GET | `/api/triage/pending` | ENCODER or VALIDATOR | Lists pending citizen reports. |
 | POST | `/api/triage/{report_id}/promote` | ENCODER or VALIDATOR | Promotes a pending citizen report into official incident records. |
+| POST | `/api/triage/bulk-promote` | ENCODER or VALIDATOR | Efficiently promotes multiple reports in a single batch transaction. |
 
 ### Admin (`api/routes/admin.py`, mounted with `/api/admin` in `main.py`)
 
@@ -42,6 +45,9 @@ Source of truth: `src/backend/main.py` and `src/backend/api/routes/*.py`
 | POST | `/api/admin/security-logs/{log_id}/analyze` | SYSTEM_ADMIN | Runs AI narrative analysis for a threat log. |
 | PATCH | `/api/admin/security-logs/{log_id}` | SYSTEM_ADMIN | Updates admin action/resolution fields. |
 | GET | `/api/admin/audit-logs` | SYSTEM_ADMIN | Returns paginated audit trail entries. |
+| GET | `/api/admin/health` | SYSTEM_ADMIN | Pings DB, Redis, and Keycloak to verify connection viability and measure latency. |
+| GET | `/api/admin/active-sessions` | SYSTEM_ADMIN | Queries Keycloak for all active sessions of active users. |
+| POST | `/api/admin/users/{user_id}/logout` | SYSTEM_ADMIN | Forcefully revokes all sessions for a specific user in Keycloak and Redis. |
 
 ### Analytics (`api/routes/analytics.py`, prefix `/api/analytics`)
 
@@ -89,6 +95,7 @@ Source: `src/frontend/src/app/`
 | `/login` | Login screen; redirects by role once authenticated. |
 | `/callback` | OIDC callback finalization and token sync to server route. |
 | `/report` | Public emergency report submission page. |
+| `/report/track` | Public status tracker for citizen reports (Zero-Trust lookup). |
 
 ### Authenticated App Routes
 

@@ -69,6 +69,7 @@ This aligns with glossary terms: civilian intake, validator-centered verificatio
 - Suricata logs are mounted into worker-accessible paths and ingested by task modules.
 - No hard-delete admin endpoint is defined in admin route modules; updates are mutation-oriented (user/log state updates and audit readout).
 - PII fields (`caller_name`, `caller_number`, `owner_name`, `street_address`) are encrypted at rest using AES-256-GCM via `utils/crypto.py`. Plaintext PII columns are always `NULL` for new writes.
+- **Session Revocation (Redis Blacklist):** Implemented in `backend/utils/session.py`. When a user is force-logged out or deactivated, their `keycloak_id` and a revocation timestamp are stored in Redis. The backend `auth.py` middleware checks every request against this blacklist to instantly reject old JWTs, solving the typical "stateless JWT invalidation" problem.
 
 ## Keycloak Configuration
 
