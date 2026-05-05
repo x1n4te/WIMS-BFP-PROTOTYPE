@@ -127,6 +127,30 @@ async def _get_redis() -> aioredis.Redis | None:
 
 
 # ---------------------------------------------------------------------------
+# Redis config key
+# ---------------------------------------------------------------------------
+RATE_LIMIT_CONFIG_KEY = "rate_limit_config:login"
+
+
+async def _get_rate_limit_config() -> tuple[int, int]:
+    """
+    Read rate limit config from Redis.
+    Returns (window_seconds, threshold).
+    Falls back to hardcoded defaults if Redis unavailable or key missing.
+    """
+    r = await _get_redis()
+    if r is None:
+        return WINDOW_SECONDS, RATE_LIMIT_THRESHOLD
+    try:
+        config = await r.hgetall(RATE_LIMIT_CONFIG_KEY)
+        window = int(config.get("window_seconds", WINDOW_SECONDS))
+        threshold = int(config.get("threshold", RATE_LIMIT_THRESHOLD))
+        return window, threshold
+    except Exception:
+        return WINDOW_SECONDS, RATE_LIMIT_THRESHOLD
+
+
+# ---------------------------------------------------------------------------
 # Lua script — fully atomic sliding-window rate limiter
 # ---------------------------------------------------------------------------
 # KEYS[1] = rate_limit:{ip}
@@ -197,13 +221,14 @@ async def rate_limit_middleware(request: Request, call_next):
     now = time.time()
 
     try:
+        window, threshold = await _get_rate_limit_config()
         result = await r.eval(
             RATE_LIMIT_LUA,
             1,
             key,
             str(now),
-            str(WINDOW_SECONDS),
-            str(RATE_LIMIT_THRESHOLD),
+            str(window),
+            str(threshold),
         )
     except Exception:
         logger.warning("Redis eval failed — allowing request through")
