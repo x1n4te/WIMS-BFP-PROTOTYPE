@@ -308,6 +308,8 @@ export default function RegionalDashboardPage() {
                 <th className="px-6 py-3">Date</th>
                 <th className="px-6 py-3">Classification</th>
                 <th className="px-6 py-3">Station</th>
+                <th className="px-6 py-3">Location</th>
+                <th className="px-6 py-3">Last Modified</th>
                 <th className="px-6 py-3">Status</th>
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
@@ -315,13 +317,13 @@ export default function RegionalDashboardPage() {
             <tbody>
               {incidentsLoading ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
                     Loading incidents…
                   </td>
                 </tr>
               ) : incidents.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
                     {incidentsError ? 'Could not load incidents.' : 'No incidents match the current filters.'}
                   </td>
                 </tr>
@@ -333,7 +335,11 @@ export default function RegionalDashboardPage() {
                         const raw = inc.notification_dt || inc.created_at;
                         if (!raw) return '—';
                         const d = new Date(raw);
-                        return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+                        return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-PH', {
+                          timeZone: 'Asia/Manila',
+                          year: 'numeric', month: '2-digit', day: '2-digit',
+                          hour: '2-digit', minute: '2-digit', hour12: false,
+                        });
                       })()}
                     </td>
                     <td className="px-6 py-4 font-medium">
@@ -347,6 +353,17 @@ export default function RegionalDashboardPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-gray-500">{inc.fire_station_name || 'N/A'}</td>
+                    <td className="px-6 py-4 text-gray-500 text-xs">{inc.location_display ?? 'Location pending'}</td>
+                    <td className="px-6 py-4 text-gray-500 text-xs">
+                      {inc.updated_at ? (() => {
+                        const d = new Date(inc.updated_at);
+                        return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-PH', {
+                          timeZone: 'Asia/Manila',
+                          year: 'numeric', month: '2-digit', day: '2-digit',
+                          hour: '2-digit', minute: '2-digit', hour12: false,
+                        });
+                      })() : '—'}
+                    </td>
                     <td className="px-6 py-4">
                       <span
                         className={`rounded-full px-2 py-1 text-xs font-medium ${

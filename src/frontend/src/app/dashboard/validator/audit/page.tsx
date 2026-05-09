@@ -15,9 +15,12 @@ interface AuditEntry {
   history_id: number;
   incident_id: number;
   region_id: number | null;
+  region_display: string | null;
   action_by_user_id: string | null;
+  actor_username: string | null;
   previous_status: string;
   new_status: string;
+  action_label: string | null;
   notes: string | null;
   action_timestamp: string | null;
 }
@@ -209,20 +212,25 @@ export default function ValidatorAuditPage() {
           <table className="w-full text-xs">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-3 py-2 font-medium">History</th>
+                <th className="text-left px-3 py-2 font-medium">Date &amp; Time</th>
                 <th className="text-left px-3 py-2 font-medium">Incident</th>
                 <th className="text-left px-3 py-2 font-medium">Region</th>
                 <th className="text-left px-3 py-2 font-medium">By</th>
-                <th className="text-left px-3 py-2 font-medium">From</th>
-                <th className="text-left px-3 py-2 font-medium">To</th>
-                <th className="text-left px-3 py-2 font-medium">Notes</th>
-                <th className="text-left px-3 py-2 font-medium">When</th>
+                <th className="text-left px-3 py-2 font-medium">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {items.map((it) => (
                 <tr key={it.history_id} className="hover:bg-gray-50">
-                  <td className="px-3 py-2 font-mono">{it.history_id}</td>
+                  <td className="px-3 py-2 text-gray-500">
+                    {it.action_timestamp
+                      ? new Date(it.action_timestamp).toLocaleString('en-PH', {
+                          timeZone: 'Asia/Manila',
+                          year: 'numeric', month: '2-digit', day: '2-digit',
+                          hour: '2-digit', minute: '2-digit', hour12: false,
+                        })
+                      : '—'}
+                  </td>
                   <td className="px-3 py-2 font-mono">
                     <Link
                       href={`/dashboard/regional/incidents/${it.incident_id}`}
@@ -231,18 +239,11 @@ export default function ValidatorAuditPage() {
                       {it.incident_id}
                     </Link>
                   </td>
-                  <td className="px-3 py-2">{it.region_id ?? '—'}</td>
-                  <td className="px-3 py-2 font-mono text-[10px]">
-                    {it.action_by_user_id?.slice(0, 8) ?? '—'}…
+                  <td className="px-3 py-2">{it.region_display ?? '—'}</td>
+                  <td className="px-3 py-2">
+                    {it.actor_username ?? (it.action_by_user_id ? `${it.action_by_user_id.slice(0, 8)}…` : '—')}
                   </td>
-                  <td className="px-3 py-2">{it.previous_status}</td>
-                  <td className="px-3 py-2 font-medium">{it.new_status}</td>
-                  <td className="px-3 py-2">{it.notes ?? '—'}</td>
-                  <td className="px-3 py-2 text-gray-500">
-                    {it.action_timestamp
-                      ? new Date(it.action_timestamp).toLocaleString()
-                      : '—'}
-                  </td>
+                  <td className="px-3 py-2 font-medium">{it.action_label ?? it.new_status ?? '—'}</td>
                 </tr>
               ))}
             </tbody>

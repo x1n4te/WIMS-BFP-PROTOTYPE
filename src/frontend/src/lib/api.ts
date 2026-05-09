@@ -453,6 +453,7 @@ export interface RegionalIncidentListItem {
   incident_id: number;
   verification_status: string;
   created_at: string | null;
+  updated_at: string | null;
   notification_dt: string | null;
   general_category: string | null;
   alarm_level: string | null;
@@ -467,6 +468,7 @@ export interface RegionalIncidentListItem {
   establishment_name: string | null;
   caller_name: string | null;
   is_wildland: boolean;
+  location_display: string | null;
 }
 
 export interface RegionalIncidentsListResponse {
@@ -536,13 +538,23 @@ export async function updateRegionalIncident(
 
 export async function submitIncidentForReview(
   incidentId: number,
-  options?: { skipAuthRedirect?: boolean; ackDuplicate?: boolean }
+  options?: { skipAuthRedirect?: boolean; ackDuplicate?: boolean; force?: boolean }
 ): Promise<{ status: string; incident_id: number; verification_status: string; matched_incident_id?: number }> {
-  const url = `/regional/incidents/${incidentId}/submit${options?.ackDuplicate ? '?ack_duplicate=true' : ''}`;
+  const params = new URLSearchParams();
+  if (options?.ackDuplicate) params.set('ack_duplicate', 'true');
+  if (options?.force) params.set('force', 'true');
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const url = `/regional/incidents/${incidentId}/submit${qs}`;
   return apiFetch(url, {
     method: 'PATCH',
     skipAuthRedirect: options?.skipAuthRedirect,
   });
+}
+
+export async function archiveIncident(
+  incidentId: number
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/validator/incidents/${incidentId}/archive`, { method: 'PATCH' });
 }
 
 export async function unpendIncident(

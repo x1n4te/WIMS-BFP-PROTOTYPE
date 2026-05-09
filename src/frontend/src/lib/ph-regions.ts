@@ -217,6 +217,11 @@ export function getCitiesForProvince(regionId: number, province: string): string
   return [];
 }
 
+/** Returns all provinces for a given regionId. */
+export function getProvincesForRegion(regionId: number): PhProvince[] {
+  return PH_PROVINCES.filter((p) => p.regionId === regionId);
+}
+
 /** Returns the region_code string for a given regionId, or '' if not found. */
 export function getRegionCode(regionId: number): string {
   return PH_REGIONS.find((r) => r.regionId === regionId)?.regionCode ?? '';

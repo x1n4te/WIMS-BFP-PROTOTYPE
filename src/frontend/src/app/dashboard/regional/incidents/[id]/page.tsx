@@ -291,11 +291,11 @@ export default function RegionalIncidentDetailPage() {
     };
   }, [detail]);
 
-  const handleSubmit = async (ackDuplicate = false) => {
+  const handleSubmit = async (options: { ackDuplicate?: boolean; force?: boolean } = {}) => {
     setActionLoading(true);
     setActionError(null);
     try {
-      const res = await submitIncidentForReview(incidentId, { ackDuplicate });
+      const res = await submitIncidentForReview(incidentId, options);
       if (res.status === 'DUPLICATE_FOUND' && res.matched_incident_id) {
         setDuplicateFound({ matchedIncidentId: res.matched_incident_id });
         return;
@@ -472,11 +472,12 @@ export default function RegionalIncidentDetailPage() {
     PENDING_VALIDATION: 'bg-blue-100 text-blue-800',
     VERIFIED: 'bg-green-100 text-green-800',
     REJECTED: 'bg-red-100 text-red-800',
+    REPLACED: 'bg-purple-100 text-purple-800',
   };
 
   return (
     <div className="space-y-6">
-      {/* Duplicate detected — 3-option modal (Phase 1.2) */}
+      {/* Duplicate detected — 4-option modal */}
       {duplicateFound && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
@@ -487,11 +488,17 @@ export default function RegionalIncidentDetailPage() {
             </p>
             <div className="flex flex-col gap-2 pt-2">
               <button
-                onClick={() => { setDuplicateFound(null); void handleSubmit(true); }}
+                onClick={() => window.open(`/dashboard/regional/incidents/${duplicateFound.matchedIncidentId}`, '_blank')}
+                className="px-4 py-2 text-sm font-semibold text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-50"
+              >
+                View Existing Incident
+              </button>
+              <button
+                onClick={() => { setDuplicateFound(null); void handleSubmit({ force: true }); }}
                 disabled={actionLoading}
                 className="px-4 py-2 text-sm font-semibold text-white bg-red-800 rounded-lg hover:bg-red-700 disabled:opacity-50"
               >
-                Confirm Submission Anyway
+                Submit Anyway
               </button>
               <button
                 onClick={() => { setDuplicateFound(null); setIsEditing(true); }}
@@ -677,7 +684,7 @@ export default function RegionalIncidentDetailPage() {
                 {/* Submit / Resubmit — only for DRAFT or REJECTED */}
                 {(detail.verification_status === 'DRAFT' || detail.verification_status === 'REJECTED') && (
                   <button
-                    onClick={() => void handleSubmit()}
+                    onClick={() => void handleSubmit({})}
                     disabled={actionLoading}
                     className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium bg-red-800 text-white hover:bg-red-700 disabled:opacity-50"
                   >

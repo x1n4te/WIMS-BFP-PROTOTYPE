@@ -242,13 +242,13 @@ export function MapPickerInner({
                                     type="button"
                                     className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
                                     onClick={() => {
-                                        setSearchText(s.display_name);
                                         setSuggestions([]);
                                         const lat = Number(s.lat);
                                         const lng = Number(s.lon);
                                         if (Number.isFinite(lat) && Number.isFinite(lng)) {
                                             handleChange(lat, lng);
                                         }
+                                        setSearchText('');
                                     }}
                                 >
                                     {s.display_name}

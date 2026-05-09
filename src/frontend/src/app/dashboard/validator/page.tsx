@@ -22,6 +22,8 @@ interface ValidatorIncident {
   encoder_id: string | null;
   region_id: number;
   created_at: string | null;
+  submitted_at: string | null;
+  updated_at: string | null;
   notification_dt: string | null;
   general_category: string | null;
   alarm_level: string | null;
@@ -56,6 +58,7 @@ const STATUS_LABELS: Record<string, string> = {
   PENDING_VALIDATION: "Awaiting Validation",
   VERIFIED: "Verified",
   REJECTED: "Rejected",
+  REPLACED: "Replaced",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -64,6 +67,7 @@ const STATUS_COLORS: Record<string, string> = {
   PENDING_VALIDATION: "bg-blue-100 text-blue-800",
   VERIFIED: "bg-green-100 text-green-800",
   REJECTED: "bg-red-100 text-red-800",
+  REPLACED: "bg-purple-100 text-purple-800",
 };
 
 // ---------------------------------------------------------------------------
@@ -82,15 +86,15 @@ function regionDisplay(regionId: number): string {
 function formatCallReceived(dt: string | null): string {
   if (!dt) return "—";
   const d = new Date(dt);
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  let hours = d.getHours();
-  const ampm = hours >= 12 ? "PM" : "AM";
-  hours = hours % 12 || 12;
-  const hh = String(hours).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}/${dd}/${yyyy} ${hh}:${min} ${ampm}`;
+  return d.toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +139,8 @@ export default function ValidatorDashboard() {
   const [bulkDupTarget, setBulkDupTarget] = useState<ValidatorIncident | null>(null);
   // Resolve function: call with "accept" | "accept_replace" | "reject" | "skip"
   const bulkDupResolve = useRef<((decision: string) => void) | null>(null);
+  const [showBulkConfirmModal, setShowBulkConfirmModal] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   const togglePending = (inc: ValidatorIncident, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -190,14 +196,19 @@ export default function ValidatorDashboard() {
     });
   }
 
+  const doArchive = async (inc: ValidatorIncident) => {
+    setArchiveError(null);
+    try {
+      await apiFetch(`/regional/validator/incidents/${inc.incident_id}/archive`, { method: "PATCH" });
+      await fetchQueue();
+    } catch (err: unknown) {
+      setArchiveError(err instanceof Error ? err.message : "Archive failed");
+    }
+  };
+
   const submitBulkApprove = async () => {
     if (selectedIds.size === 0) return;
-    if (
-      !confirm(
-        `Approve ${selectedIds.size} incident${selectedIds.size !== 1 ? "s" : ""}?`
-      )
-    )
-      return;
+    setShowBulkConfirmModal(false);
 
     setBulkLoading(true);
     setBulkError(null);
@@ -274,7 +285,9 @@ export default function ValidatorDashboard() {
       limit: String(PAGE_SIZE),
       offset: String(page * PAGE_SIZE),
     });
-    if (statusFilter === STATUS_FILTER_ALL) {
+    if (statusFilter === "__ARCHIVED__") {
+      params.set("archived", "true");
+    } else if (statusFilter === STATUS_FILTER_ALL) {
       params.set("show_all", "true");
     } else if (statusFilter && statusFilter !== STATUS_FILTER_QUEUE) {
       params.set("status", statusFilter);
@@ -435,6 +448,7 @@ export default function ValidatorDashboard() {
           <option value="REJECTED">Rejected</option>
           <option value="VERIFIED">Accepted</option>
           <option value={STATUS_FILTER_ALL}>All</option>
+          <option value="__ARCHIVED__">Archived</option>
         </select>
 
         <input
@@ -457,7 +471,7 @@ export default function ValidatorDashboard() {
 
         {selectedIds.size > 0 && (
           <button
-            onClick={submitBulkApprove}
+            onClick={() => setShowBulkConfirmModal(true)}
             disabled={bulkLoading}
             className="ml-auto bg-green-600 hover:bg-green-700 text-white rounded px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
@@ -470,6 +484,11 @@ export default function ValidatorDashboard() {
       {bulkError && (
         <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700 mb-4">
           {bulkError}
+        </div>
+      )}
+      {archiveError && (
+        <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700 mb-4">
+          Archive failed: {archiveError}
         </div>
       )}
 
@@ -502,6 +521,7 @@ export default function ValidatorDashboard() {
                     title="Select all PENDING"
                   />
                 </th>
+                <th className="text-left px-4 py-3 font-medium">Submitted</th>
                 <th className="text-left px-4 py-3 font-medium">Status</th>
                 <th className="text-left px-4 py-3 font-medium">Region</th>
                 <th className="text-left px-4 py-3 font-medium">Station</th>
@@ -523,6 +543,9 @@ export default function ValidatorDashboard() {
                       />
                     ) : null}
                   </td>
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {formatCallReceived(inc.submitted_at ?? inc.created_at)}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col gap-1">
                       <span
@@ -539,7 +562,7 @@ export default function ValidatorDashboard() {
                           UPDATE
                         </span>
                       )}
-                      {inc.is_duplicate && !inc.parent_incident_id && (
+                      {inc.is_duplicate && !inc.parent_incident_id && !["VERIFIED", "REJECTED", "REPLACED"].includes(inc.verification_status) && (
                         <span className="inline-block px-1.5 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-800 border border-orange-300">
                           DUPLICATE
                         </span>
@@ -558,27 +581,38 @@ export default function ValidatorDashboard() {
                   </td>
                   <td className="px-4 py-3">{inc.alarm_level ?? "—"}</td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 flex-wrap">
                       <Link
                         href={`/dashboard/regional/incidents/${inc.incident_id}`}
                         className="px-2 py-1 text-xs rounded border border-blue-400 text-blue-700 hover:bg-blue-50"
                       >
                         View
                       </Link>
-                      <button
-                        onClick={() => openAction(inc, "accept")}
-                        disabled={inc.verification_status === "VERIFIED"}
-                        className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Accept
-                      </button>
-                      <button
-                        onClick={() => openAction(inc, "reject")}
-                        disabled={inc.verification_status === "REJECTED"}
-                        className="px-2 py-1 text-xs rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Reject
-                      </button>
+                      {statusFilter === "__ARCHIVED__" ? null : (
+                        ["VERIFIED", "REJECTED", "REPLACED"].includes(inc.verification_status) ? (
+                          <button
+                            onClick={() => void doArchive(inc)}
+                            className="px-2 py-1 text-xs rounded bg-gray-600 text-white hover:bg-gray-700"
+                          >
+                            Archive
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => openAction(inc, "accept")}
+                              className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700"
+                            >
+                              Accept
+                            </button>
+                            <button
+                              onClick={() => openAction(inc, "reject")}
+                              className="px-2 py-1 text-xs rounded bg-red-600 text-white hover:bg-red-700"
+                            >
+                              Reject
+                            </button>
+                          </>
+                        )
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -608,6 +642,32 @@ export default function ValidatorDashboard() {
           >
             Next →
           </button>
+        </div>
+      )}
+
+      {/* ── Bulk approve confirm modal ── */}
+      {showBulkConfirmModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-lg font-semibold mb-2">Confirm Bulk Approve</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              Approve {selectedIds.size} incident{selectedIds.size !== 1 ? "s" : ""}? This will set them to VERIFIED and cannot be undone without an explicit rejection.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowBulkConfirmModal(false)}
+                className="px-4 py-2 text-sm border rounded hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void submitBulkApprove()}
+                className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700"
+              >
+                Confirm ({selectedIds.size})
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
