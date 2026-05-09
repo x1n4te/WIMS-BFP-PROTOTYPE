@@ -12,9 +12,11 @@ import {
   deleteIncident,
   forceReplaceIncident,
   apiFetch,
+  ApiRequestError,
   type RegionalIncidentDetailResponse,
 } from '@/lib/api';
 import dynamic from 'next/dynamic';
+import { UpdateRequestDiffPanel } from '@/components/UpdateRequestDiffPanel';
 import type { Incident } from '@/lib/edgeFunctions';
 
 // Read-only map zoomed in on the pinned coordinates (M4 Bug 8-B/8-C)
@@ -295,20 +297,22 @@ export default function RegionalIncidentDetailPage() {
     setActionLoading(true);
     setActionError(null);
     try {
-      const res = await submitIncidentForReview(incidentId, options);
-      if (res.status === 'DUPLICATE_FOUND' && res.matched_incident_id) {
-        setDuplicateFound({ matchedIncidentId: res.matched_incident_id });
-        return;
-      }
-      if (res.status === 'PENDING_DUPLICATE_FOUND' && res.matched_incident_id) {
-        setPendingDuplicateFound({ matchedIncidentId: res.matched_incident_id });
-        return;
-      }
-      // Clear duplicate modals on successful submission
+      await submitIncidentForReview(incidentId, options);
       setDuplicateFound(null);
       setPendingDuplicateFound(null);
       await load();
     } catch (e) {
+      if (e instanceof ApiRequestError && e.status === 409) {
+        const detail = e.detail as { code?: string; matched_incident_id?: number; matched_status?: string } | null;
+        if (detail?.code === 'DUPLICATE_DETECTED' && detail.matched_incident_id) {
+          if (detail.matched_status === 'PENDING') {
+            setPendingDuplicateFound({ matchedIncidentId: detail.matched_incident_id });
+          } else {
+            setDuplicateFound({ matchedIncidentId: detail.matched_incident_id });
+          }
+          return;
+        }
+      }
       setActionError(e instanceof Error ? e.message : 'Failed to submit incident.');
     } finally {
       setActionLoading(false);
@@ -477,34 +481,32 @@ export default function RegionalIncidentDetailPage() {
 
   return (
     <div className="space-y-6">
-      {/* Duplicate detected — 4-option modal */}
+      {/* Duplicate detected — modal with side-by-side comparison */}
       {duplicateFound && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-bold text-amber-800">Possible Duplicate Detected</h2>
             <p className="text-sm text-gray-700">
               A verified incident (#{duplicateFound.matchedIncidentId}) already exists with the same
-              region, type, and fire date. How would you like to proceed?
+              region, type, and fire date. Review the comparison below before deciding.
             </p>
+            <UpdateRequestDiffPanel
+              updateIncidentId={incidentId}
+              originalIncidentId={duplicateFound.matchedIncidentId}
+            />
             <div className="flex flex-col gap-2 pt-2">
-              <button
-                onClick={() => window.open(`/dashboard/regional/incidents/${duplicateFound.matchedIncidentId}`, '_blank')}
-                className="px-4 py-2 text-sm font-semibold text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-50"
-              >
-                View Existing Incident
-              </button>
               <button
                 onClick={() => { setDuplicateFound(null); void handleSubmit({ force: true }); }}
                 disabled={actionLoading}
                 className="px-4 py-2 text-sm font-semibold text-white bg-red-800 rounded-lg hover:bg-red-700 disabled:opacity-50"
               >
-                Submit Anyway
+                {actionLoading ? 'Submitting…' : 'Submit Anyway'}
               </button>
               <button
                 onClick={() => { setDuplicateFound(null); setIsEditing(true); }}
                 className="px-4 py-2 text-sm font-semibold text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
               >
-                Edit Incident
+                Continue Editing
               </button>
               <button
                 onClick={() => setDuplicateFound(null)}
@@ -517,57 +519,32 @@ export default function RegionalIncidentDetailPage() {
         </div>
       )}
 
-      {/* Pending duplicate detected */}
+      {/* Pending duplicate detected — with side-by-side comparison */}
       {pendingDuplicateFound && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
-            <h2 className="text-lg font-bold text-blue-800">Incident Matches a Currently Pending Record</h2>
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-blue-800">Duplicate Pending Incident Found</h2>
             <p className="text-sm text-gray-700">
-              The incident is identical to currently pending incident #{pendingDuplicateFound.matchedIncidentId}.
-              Choose whether to view the first submission, replace it with this incident data, edit this incident,
-              or cancel.
+              A similar incident (#{pendingDuplicateFound.matchedIncidentId}) is already pending review.
+              Review the comparison below before deciding.
             </p>
+            <UpdateRequestDiffPanel
+              updateIncidentId={incidentId}
+              originalIncidentId={pendingDuplicateFound.matchedIncidentId}
+            />
             <div className="flex flex-col gap-2 pt-2">
               <button
-                onClick={() => {
-                  setPendingDuplicateFound(null);
-                  router.push(`/dashboard/regional/incidents/${pendingDuplicateFound.matchedIncidentId}`);
-                }}
+                onClick={() => { setPendingDuplicateFound(null); void handleSubmit({ force: true }); }}
                 disabled={actionLoading}
-                className="px-4 py-2 text-sm font-semibold text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+                className="px-4 py-2 text-sm font-semibold text-white bg-red-800 rounded-lg hover:bg-red-700 disabled:opacity-50"
               >
-                View First Submitted Incident
-              </button>
-              <button
-                onClick={() => {
-                  if (!detail) return;
-                  void (async () => {
-                    setActionLoading(true);
-                    setActionError(null);
-                    try {
-                      await forceReplaceIncident(
-                        pendingDuplicateFound.matchedIncidentId,
-                        buildPendingReplacePayload(),
-                      );
-                      setPendingDuplicateFound(null);
-                      router.push(`/dashboard/regional/incidents/${pendingDuplicateFound.matchedIncidentId}`);
-                    } catch (e) {
-                      setActionError(e instanceof Error ? e.message : 'Failed to replace pending incident.');
-                    } finally {
-                      setActionLoading(false);
-                    }
-                  })();
-                }}
-                disabled={actionLoading}
-                className="px-4 py-2 text-sm font-semibold text-white bg-amber-700 rounded-lg hover:bg-amber-800 disabled:opacity-50"
-              >
-                Replace Pending Incident
+                {actionLoading ? 'Submitting…' : 'Submit Anyway'}
               </button>
               <button
                 onClick={() => { setPendingDuplicateFound(null); setIsEditing(true); }}
                 className="px-4 py-2 text-sm font-semibold text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
               >
-                Edit This Incident
+                Continue Editing
               </button>
               <button
                 onClick={() => setPendingDuplicateFound(null)}

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -3886,6 +3886,7 @@ def get_validator_incident_queue(
     where_clauses = [
         archive_clause,
         "fi.encoder_id IS NOT NULL",  # encoder-submitted only — never public DMZ rows
+        "fi.verification_status != 'DRAFT'",  # validators never see drafts
     ]
     params: dict[str, Any] = {
         "limit": limit,
@@ -3987,6 +3988,7 @@ def verify_incident(
     request: Request,
     user: Annotated[dict, Depends(get_national_validator)],
     db: Annotated[Session, Depends(get_db_with_rls)],
+    force: bool = Query(default=False),
 ):
     """Apply a validator decision to one encoder-submitted incident.
 
@@ -4082,8 +4084,8 @@ def verify_incident(
                 detail=f"Cannot transition incident from '{current_status}' via action '{action}'. Only Archive is available for finalized incidents.",
             )
 
-    # --- 4b. Duplicate check on plain accept ---
-    if action == "accept":
+    # --- 4b. Duplicate check on plain accept (skipped when force=True) ---
+    if action == "accept" and not force:
         geo_row = db.execute(
             text("""
                 SELECT ST_Y(fi.location::geometry), ST_X(fi.location::geometry),
@@ -4708,7 +4710,7 @@ def export_validator_audit_logs(
     validator_id: Optional[str] = None,
     action: Optional[str] = None,
 ):
-    """Stream an audit-log CSV. Honors the same filters as the list endpoint."""
+    """Return an audit-log CSV. Honors the same filters as the list endpoint."""
     where_sql, params = _build_audit_log_query(
         date_from=date_from,
         date_to=date_to,
@@ -4717,57 +4719,47 @@ def export_validator_audit_logs(
         action=action,
     )
 
-    export_date = datetime.utcnow().strftime("%Y%m%d")
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                ivh.history_id, ivh.target_id, fi.region_id,
+                ivh.action_by_user_id, ivh.previous_status, ivh.new_status,
+                ivh.notes, ivh.action_timestamp,
+                u.username AS actor_username,
+                rr.region_name AS region_display,
+                ivh.action_label
+            FROM wims.incident_verification_history ivh
+            JOIN wims.fire_incidents fi ON fi.incident_id = ivh.target_id
+            LEFT JOIN wims.users u ON u.user_id = ivh.action_by_user_id
+            LEFT JOIN wims.ref_regions rr ON rr.region_id = fi.region_id
+            WHERE {where_sql}
+            ORDER BY ivh.action_timestamp DESC
+            """
+        ),
+        params,
+    ).fetchall()
 
-    def row_iter():
-        # Stream rows from PG with yield_per to avoid loading everything in memory.
-        result = db.execute(
-            text(
-                f"""
-                SELECT
-                    ivh.history_id, ivh.target_id, fi.region_id,
-                    ivh.action_by_user_id, ivh.previous_status, ivh.new_status,
-                    ivh.notes, ivh.action_timestamp,
-                    u.username AS actor_username,
-                    rr.region_name AS region_display,
-                    ivh.action_label
-                FROM wims.incident_verification_history ivh
-                JOIN wims.fire_incidents fi ON fi.incident_id = ivh.target_id
-                LEFT JOIN wims.users u ON u.user_id = ivh.action_by_user_id
-                LEFT JOIN wims.ref_regions rr ON rr.region_id = fi.region_id
-                WHERE {where_sql}
-                ORDER BY ivh.action_timestamp DESC
-                """
-            ),
-            params,
-        ).execution_options(stream_results=True, yield_per=500)
-
-        buf = io.StringIO()
-        writer = csv.writer(buf)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "history_id", "incident_id", "region_id", "region_display",
+        "action_by_user_id", "actor_username",
+        "previous_status", "new_status", "action_label",
+        "notes", "action_timestamp",
+    ])
+    for r in rows:
         writer.writerow([
-            "history_id", "incident_id", "region_id", "region_display",
-            "action_by_user_id", "actor_username",
-            "previous_status", "new_status", "action_label",
-            "notes", "action_timestamp",
+            r[0], r[1], r[2], r[9] or "",
+            str(r[3]) if r[3] else "", r[8] or "",
+            r[4], r[5], r[10] or "",
+            (r[6] or "").replace("\n", " "),
+            r[7].isoformat() if r[7] else "",
         ])
-        yield buf.getvalue()
-        buf.seek(0)
-        buf.truncate()
 
-        for r in result:
-            writer.writerow([
-                r[0], r[1], r[2], r[9] or "",
-                str(r[3]) if r[3] else "", r[8] or "",
-                r[4], r[5], r[10] or "",
-                (r[6] or "").replace("\n", " "),
-                r[7].isoformat() if r[7] else "",
-            ])
-            yield buf.getvalue()
-            buf.seek(0)
-            buf.truncate()
-
-    return StreamingResponse(
-        row_iter(),
+    export_date = datetime.utcnow().strftime("%Y%m%d")
+    return Response(
+        content=buf.getvalue().encode("utf-8"),
         media_type="text/csv",
         headers={
             "Content-Disposition": f"attachment; filename=audit-log-{export_date}.csv",

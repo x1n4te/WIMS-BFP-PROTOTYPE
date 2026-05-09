@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { apiFetch, fetchValidatorStats } from "@/lib/api";
+import { apiFetch, ApiRequestError, fetchValidatorStats } from "@/lib/api";
 import { IncidentDiffPanel } from "@/components/IncidentDiffPanel";
 import { UpdateRequestDiffPanel } from "@/components/UpdateRequestDiffPanel";
 import { formatClassification } from "@/lib/afor-utils";
@@ -141,6 +141,9 @@ export default function ValidatorDashboard() {
   const bulkDupResolve = useRef<((decision: string) => void) | null>(null);
   const [showBulkConfirmModal, setShowBulkConfirmModal] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  // Validator duplicate resolution state
+  const [validatorDupTarget, setValidatorDupTarget] = useState<ValidatorIncident | null>(null);
+  const [validatorDupMatchedId, setValidatorDupMatchedId] = useState<number | null>(null);
 
   const togglePending = (inc: ValidatorIncident, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -323,29 +326,41 @@ export default function ValidatorDashboard() {
   // Submit validator decision
   // ---------------------------------------------------------------------------
 
-  const submitAction = async () => {
+  const submitAction = async (force = false) => {
     if (!actionTarget || !actionType) return;
     setActionLoading(true);
     setActionError(null);
 
+    const url = force
+      ? `/regional/incidents/${actionTarget.incident_id}/verification?force=true`
+      : `/regional/incidents/${actionTarget.incident_id}/verification`;
+
     try {
-      await apiFetch(
-        `/regional/incidents/${actionTarget.incident_id}/verification`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            action: actionType,
-            notes: actionNotes.trim() || null,
-          }),
-        }
-      );
+      await apiFetch(url, {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: actionType,
+          notes: actionNotes.trim() || null,
+        }),
+      });
 
       await fetchQueue();
 
       setActionTarget(null);
       setActionType(null);
       setActionNotes("");
+      setValidatorDupTarget(null);
+      setValidatorDupMatchedId(null);
     } catch (err: unknown) {
+      if (err instanceof ApiRequestError && err.status === 409) {
+        const detail = err.detail as { code?: string; matched_incident_id?: number } | null;
+        if (detail?.code === "DUPLICATE_DETECTED" && detail.matched_incident_id) {
+          setValidatorDupTarget(actionTarget);
+          setValidatorDupMatchedId(detail.matched_incident_id);
+          setActionTarget(null);
+          return;
+        }
+      }
       setActionError(err instanceof Error ? err.message : "Action failed");
     } finally {
       setActionLoading(false);
@@ -580,8 +595,8 @@ export default function ValidatorDashboard() {
                     {formatClassification(inc.general_category)}
                   </td>
                   <td className="px-4 py-3">{inc.alarm_level ?? "—"}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-1 flex-wrap">
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    <div className="flex gap-1 items-center">
                       <Link
                         href={`/dashboard/regional/incidents/${inc.incident_id}`}
                         className="px-2 py-1 text-xs rounded border border-blue-400 text-blue-700 hover:bg-blue-50"
@@ -642,6 +657,85 @@ export default function ValidatorDashboard() {
           >
             Next →
           </button>
+        </div>
+      )}
+
+      {/* ── Validator duplicate resolution modal ── */}
+      {validatorDupTarget && validatorDupMatchedId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-semibold mb-1 text-amber-800">Duplicate Incident Detected</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Incident #{validatorDupTarget.incident_id} matches a verified record (#{validatorDupMatchedId})
+              from within the past 7 days. Review the records side by side before deciding.
+            </p>
+            <div className="mb-4">
+              <UpdateRequestDiffPanel
+                updateIncidentId={validatorDupTarget.incident_id}
+                originalIncidentId={validatorDupMatchedId}
+              />
+            </div>
+            {actionError && <p className="text-sm text-red-600 mb-2">{actionError}</p>}
+            <div className="flex flex-wrap gap-2 justify-end mt-4">
+              <button
+                onClick={() => { setValidatorDupTarget(null); setValidatorDupMatchedId(null); setActionError(null); }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const inc = validatorDupTarget;
+                  setValidatorDupTarget(null);
+                  setValidatorDupMatchedId(null);
+                  openAction(inc, "reject");
+                }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => {
+                  const inc = validatorDupTarget;
+                  setValidatorDupTarget(null);
+                  setValidatorDupMatchedId(null);
+                  setActionLoading(true);
+                  setActionError(null);
+                  void apiFetch(`/regional/incidents/${inc.incident_id}/verification?force=true`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ action: "accept_replace" }),
+                  }).then(() => fetchQueue()).catch((e: unknown) => {
+                    setActionError(e instanceof Error ? e.message : "Failed to replace existing");
+                  }).finally(() => setActionLoading(false));
+                }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {actionLoading ? "Saving…" : "Replace Existing"}
+              </button>
+              <button
+                onClick={() => {
+                  const inc = validatorDupTarget;
+                  setValidatorDupTarget(null);
+                  setValidatorDupMatchedId(null);
+                  setActionLoading(true);
+                  setActionError(null);
+                  void apiFetch(`/regional/incidents/${inc.incident_id}/verification?force=true`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ action: "accept" }),
+                  }).then(() => fetchQueue()).catch((e: unknown) => {
+                    setActionError(e instanceof Error ? e.message : "Failed to accept");
+                  }).finally(() => setActionLoading(false));
+                }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                {actionLoading ? "Saving…" : "Accept Anyway"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
