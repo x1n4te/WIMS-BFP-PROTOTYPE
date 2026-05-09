@@ -36,6 +36,7 @@ interface ValidatorIncident {
   parent_incident_id: number | null;
   is_duplicate: boolean;
   duplicate_of: number | null;
+  reference_number: string | null;
 }
 
 interface QueueResponse {
@@ -141,6 +142,8 @@ export default function ValidatorDashboard() {
   const bulkDupResolve = useRef<((decision: string) => void) | null>(null);
   const [showBulkConfirmModal, setShowBulkConfirmModal] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  // Per-incident loading state for direct-accept (no confirm step)
+  const [acceptingId, setAcceptingId] = useState<number | null>(null);
   // Validator duplicate resolution state
   const [validatorDupTarget, setValidatorDupTarget] = useState<ValidatorIncident | null>(null);
   const [validatorDupMatchedId, setValidatorDupMatchedId] = useState<number | null>(null);
@@ -206,6 +209,33 @@ export default function ValidatorDashboard() {
       await fetchQueue();
     } catch (err: unknown) {
       setArchiveError(err instanceof Error ? err.message : "Archive failed");
+    }
+  };
+
+  // Accept a single incident directly — no confirm step.
+  // If the backend finds a duplicate it returns 409 DUPLICATE_DETECTED and
+  // we immediately show the side-by-side resolution modal.
+  const handleDirectAccept = async (inc: ValidatorIncident) => {
+    setAcceptingId(inc.incident_id);
+    setActionError(null);
+    try {
+      await apiFetch(`/regional/incidents/${inc.incident_id}/verification`, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "accept", notes: null }),
+      });
+      await fetchQueue();
+    } catch (err: unknown) {
+      if (err instanceof ApiRequestError && err.status === 409) {
+        const detail = err.detail as { code?: string; matched_incident_id?: number } | null;
+        if (detail?.code === "DUPLICATE_DETECTED" && detail.matched_incident_id) {
+          setValidatorDupTarget(inc);
+          setValidatorDupMatchedId(detail.matched_incident_id);
+          return;
+        }
+      }
+      setActionError(err instanceof Error ? err.message : "Accept failed.");
+    } finally {
+      setAcceptingId(null);
     }
   };
 
@@ -600,6 +630,7 @@ export default function ValidatorDashboard() {
                       <Link
                         href={`/dashboard/regional/incidents/${inc.incident_id}`}
                         className="px-2 py-1 text-xs rounded border border-blue-400 text-blue-700 hover:bg-blue-50"
+                        title={inc.reference_number ?? `Incident #${inc.incident_id}`}
                       >
                         View
                       </Link>
@@ -614,10 +645,11 @@ export default function ValidatorDashboard() {
                         ) : (
                           <>
                             <button
-                              onClick={() => openAction(inc, "accept")}
-                              className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700"
+                              onClick={() => void handleDirectAccept(inc)}
+                              disabled={acceptingId === inc.incident_id}
+                              className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
                             >
-                              Accept
+                              {acceptingId === inc.incident_id ? "…" : "Accept"}
                             </button>
                             <button
                               onClick={() => openAction(inc, "reject")}
@@ -699,13 +731,15 @@ export default function ValidatorDashboard() {
               <button
                 onClick={() => {
                   const inc = validatorDupTarget;
+                  const originalId = validatorDupMatchedId;
                   setValidatorDupTarget(null);
                   setValidatorDupMatchedId(null);
                   setActionLoading(true);
                   setActionError(null);
+                  // accept_replace: new incident inherits the old reference number; old one is archived as REPLACED
                   void apiFetch(`/regional/incidents/${inc.incident_id}/verification?force=true`, {
                     method: "PATCH",
-                    body: JSON.stringify({ action: "accept_replace" }),
+                    body: JSON.stringify({ action: "accept_replace", original_incident_id: originalId }),
                   }).then(() => fetchQueue()).catch((e: unknown) => {
                     setActionError(e instanceof Error ? e.message : "Failed to replace existing");
                   }).finally(() => setActionLoading(false));
@@ -722,17 +756,18 @@ export default function ValidatorDashboard() {
                   setValidatorDupMatchedId(null);
                   setActionLoading(true);
                   setActionError(null);
+                  // force=true: bypass dup check and generate a brand-new reference number
                   void apiFetch(`/regional/incidents/${inc.incident_id}/verification?force=true`, {
                     method: "PATCH",
                     body: JSON.stringify({ action: "accept" }),
                   }).then(() => fetchQueue()).catch((e: unknown) => {
-                    setActionError(e instanceof Error ? e.message : "Failed to accept");
+                    setActionError(e instanceof Error ? e.message : "Failed to verify as new");
                   }).finally(() => setActionLoading(false));
                 }}
                 disabled={actionLoading}
                 className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
               >
-                {actionLoading ? "Saving…" : "Accept Anyway"}
+                {actionLoading ? "Saving…" : "Verify as New"}
               </button>
             </div>
           </div>
@@ -937,7 +972,7 @@ export default function ValidatorDashboard() {
                   {actionLoading ? "Saving…" : "Replace Original"}
                 </button>
                 <button
-                  onClick={() => { setActionType("accept"); void submitAction(); }}
+                  onClick={() => { setActionType("accept"); void submitAction(true); }}
                   disabled={actionLoading}
                   className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
                 >
@@ -954,7 +989,7 @@ export default function ValidatorDashboard() {
                   Cancel
                 </button>
                 <button
-                  onClick={submitAction}
+                  onClick={() => void submitAction()}
                   disabled={
                     actionLoading ||
                     (actionType === "reject" && !actionNotes.trim())

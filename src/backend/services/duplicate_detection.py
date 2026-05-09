@@ -9,7 +9,7 @@ Usage
         incident_id=123,
         region_id=4,
         alarm_level="1st",
-        incident_date="2026-05-09",
+        incident_date="2026-05-09",   # or None to skip date filter
         lat=14.5995,
         lon=120.9842,
         general_category="STRUCTURAL",
@@ -19,8 +19,6 @@ Usage
         # duplicate found
 """
 from __future__ import annotations
-
-from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -32,7 +30,7 @@ def check_for_duplicate(
     incident_id: int,
     region_id: int,
     alarm_level: str | None,
-    incident_date: str,
+    incident_date: str | None,
     lat: float | None,
     lon: float | None,
     general_category: str | None = None,
@@ -45,15 +43,18 @@ def check_for_duplicate(
     Detection logic
     ---------------
     Primary (when lat/lon provided):
-        ST_DWithin(location, point, 1000 metres) + same fire date in Asia/Manila
-        + same region_id + not archived + status NOT IN exclude_statuses.
+        ST_DWithin(location, point, 5000 metres) + same region_id + not archived
+        + status NOT IN exclude_statuses.
+        When incident_date is provided, also checks ±1 day window on notification_dt.
+        When incident_date is None, the date filter is skipped (spatial-only match).
 
     When ``verified_window_seconds`` is set (bulk-accept consecutive check):
         Only VERIFIED incidents updated within that many seconds of NOW() are
         considered — used to catch back-to-back accepts of the same incident.
 
     Fallback (when lat/lon is None or primary finds nothing):
-        Text match on region_id + fire date + (general_category OR incident_type_code).
+        Text match on region_id + (general_category OR incident_type_code).
+        Date filter applied only when incident_date is provided.
 
     Parameters
     ----------
@@ -64,7 +65,8 @@ def check_for_duplicate(
     alarm_level:
         Alarm level string (unused in query; reserved for future tightening).
     incident_date:
-        YYYY-MM-DD date string in Asia/Manila (PHT) representing the fire date.
+        YYYY-MM-DD date string in Asia/Manila (PHT) representing the fire date,
+        or None to skip the date constraint entirely (spatial/category match only).
     lat, lon:
         Coordinates of the incident. Pass None to skip spatial check.
     general_category:
@@ -77,11 +79,10 @@ def check_for_duplicate(
         When set, only VERIFIED rows updated within this many seconds are checked.
         Intended for consecutive bulk-accept duplicate guard.
     """
-    # Build the list of statuses to skip
     skip_statuses: list[str] = list(exclude_statuses) if exclude_statuses else []
 
     # -----------------------------------------------------------------------
-    # Primary: spatial + date match
+    # Primary: spatial match (5 km radius) + optional date window
     # -----------------------------------------------------------------------
     if lat is not None and lon is not None:
         extra_clauses = ""
@@ -90,8 +91,18 @@ def check_for_duplicate(
             "lat": float(lat),
             "rid": region_id,
             "cur_id": incident_id,
-            "fire_date": incident_date,
         }
+
+        # Date filter — only when a fire date is known
+        if incident_date is not None:
+            params["fire_date"] = incident_date
+            extra_clauses += """
+                  AND  (
+                         nd.notification_dt IS NULL
+                         OR DATE(nd.notification_dt AT TIME ZONE 'Asia/Manila')
+                              BETWEEN DATE(CAST(:fire_date AS date)) - INTERVAL '1 day'
+                                  AND DATE(CAST(:fire_date AS date)) + INTERVAL '1 day'
+                       )"""
 
         if skip_statuses:
             params["skip_statuses"] = skip_statuses
@@ -117,10 +128,8 @@ def check_for_duplicate(
                   AND  ST_DWithin(
                            fi.location::geography,
                            ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
-                           1000
+                           5000
                        )
-                  AND  DATE(nd.notification_dt AT TIME ZONE 'Asia/Manila')
-                           = DATE(CAST(:fire_date AS date))
                 {extra_clauses}
                 ORDER BY fi.updated_at DESC
                 LIMIT 1
@@ -133,7 +142,7 @@ def check_for_duplicate(
             return int(row[0])
 
     # -----------------------------------------------------------------------
-    # Fallback: text match (region + date + category / type_code)
+    # Fallback: region + category match + optional date window
     # -----------------------------------------------------------------------
     if not general_category and not incident_type_code:
         return None
@@ -142,7 +151,6 @@ def check_for_duplicate(
     fallback_params: dict = {
         "rid": region_id,
         "cur_id": incident_id,
-        "fire_date": incident_date,
     }
 
     if incident_type_code:
@@ -158,11 +166,21 @@ def check_for_duplicate(
 
     cat_sql = " OR ".join(cat_conditions)
 
+    date_clause = ""
+    if incident_date is not None:
+        fallback_params["fire_date"] = incident_date
+        date_clause = """
+              AND  (
+                     nd.notification_dt IS NULL
+                     OR DATE(nd.notification_dt AT TIME ZONE 'Asia/Manila')
+                          BETWEEN DATE(CAST(:fire_date AS date)) - INTERVAL '1 day'
+                              AND DATE(CAST(:fire_date AS date)) + INTERVAL '1 day'
+                   )"""
+
+    status_clause = ""
     if skip_statuses:
         fallback_params["skip_statuses"] = skip_statuses
         status_clause = " AND fi.verification_status != ALL(:skip_statuses)"
-    else:
-        status_clause = ""
 
     if verified_window_seconds is not None:
         fallback_params["window_seconds"] = verified_window_seconds
@@ -181,9 +199,8 @@ def check_for_duplicate(
             WHERE  fi.region_id  = :rid
               AND  fi.incident_id != :cur_id
               AND  fi.is_archived = FALSE
-              AND  DATE(nd.notification_dt AT TIME ZONE 'Asia/Manila')
-                       = DATE(CAST(:fire_date AS date))
               AND  ({cat_sql})
+            {date_clause}
             {status_clause}
             ORDER BY fi.updated_at DESC
             LIMIT 1

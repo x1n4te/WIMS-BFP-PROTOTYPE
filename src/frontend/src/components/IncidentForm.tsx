@@ -471,6 +471,9 @@ export function IncidentForm({
         // Try code match (e.g. "INF" → "Informal Settlement")
         const byCode = opts.find((o) => o.code.toLowerCase() === rawType.toLowerCase());
         if (byCode) return byCode.name;
+        // Try partial name match for legacy stored values (e.g. "Apartment" → "Apartment Building")
+        const partial = opts.find((o) => o.name.toLowerCase().startsWith(rawType.toLowerCase()) || rawType.toLowerCase().startsWith(o.name.toLowerCase()));
+        if (partial) return partial.name;
         return rawType; // fall back to raw value; user can correct
       })(),
       station_code: (ns as Record<string, unknown>).station_code as string || 'TBA',

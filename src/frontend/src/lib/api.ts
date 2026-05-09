@@ -483,12 +483,15 @@ export interface RegionalIncidentDetailResponse {
   incident_id: number;
   verification_status: string;
   created_at: string | null;
+  updated_at: string | null;
   region_id: number;
   latitude: number | null;
   longitude: number | null;
   reference_number: string | null;
   incident_type_code: string | null;
   parent_incident_id: number | null;
+  is_duplicate: boolean;
+  duplicate_of: number | null;
   is_wildland: boolean;
   wildland_fire_type: string | null;
   wildland_area_hectares: number | null;

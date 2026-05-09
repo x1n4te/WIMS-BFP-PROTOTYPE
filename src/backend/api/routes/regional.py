@@ -2485,7 +2485,8 @@ def get_regional_incident_detail(
                        ST_Y(fi.location::geometry) AS latitude,
                        ST_X(fi.location::geometry) AS longitude,
                        fi.reference_number, fi.incident_type_code,
-                       fi.parent_incident_id
+                       fi.parent_incident_id,
+                       fi.is_duplicate, fi.duplicate_of, fi.updated_at
                 FROM wims.fire_incidents fi
                 WHERE fi.incident_id = :iid
                   AND fi.is_archived = FALSE
@@ -2501,7 +2502,8 @@ def get_regional_incident_detail(
                        ST_Y(fi.location::geometry) AS latitude,
                        ST_X(fi.location::geometry) AS longitude,
                        fi.reference_number, fi.incident_type_code,
-                       fi.parent_incident_id
+                       fi.parent_incident_id,
+                       fi.is_duplicate, fi.duplicate_of, fi.updated_at
                 FROM wims.fire_incidents fi
                 WHERE fi.incident_id = :iid
                   AND fi.encoder_id = CAST(:encoder_id AS uuid)
@@ -2658,6 +2660,9 @@ def get_regional_incident_detail(
         "reference_number": row[7],
         "incident_type_code": row[8],
         "parent_incident_id": row[9],
+        "is_duplicate": bool(row[10]) if row[10] is not None else False,
+        "duplicate_of": row[11],
+        "updated_at": row[12].isoformat() if row[12] else None,
         "is_wildland": is_wildland,
         "wildland_fire_type": wildland_fire_type,
         "wildland_area_hectares": wildland_area_hectares,
@@ -3690,9 +3695,12 @@ def submit_incident_for_review(
             {"iid": incident_id},
         ).fetchone()
 
-        if geo_meta and geo_meta[0]:
-            notif_dt = geo_meta[0]
-            fire_date_str = str(notif_dt.date()) if hasattr(notif_dt, "date") else str(notif_dt)[:10]
+        if geo_meta:
+            # Use the incident's fire date when available; None skips date filter (spatial-only).
+            fire_date_str: str | None = None
+            if geo_meta[0]:
+                notif_dt = geo_meta[0]
+                fire_date_str = str(notif_dt.date()) if hasattr(notif_dt, "date") else str(notif_dt)[:10]
 
             # Check against VERIFIED incidents
             verified_dup = check_for_duplicate(
@@ -3737,14 +3745,16 @@ def submit_incident_for_review(
                 """),
                 {"iid": incident_id},
             ).fetchone()
-            if geo_meta and geo_meta[0]:
-                fire_date_str = str(geo_meta[0].date()) if hasattr(geo_meta[0], "date") else str(geo_meta[0])[:10]
+            if geo_meta:
+                ack_date_str: str | None = None
+                if geo_meta[0]:
+                    ack_date_str = str(geo_meta[0].date()) if hasattr(geo_meta[0], "date") else str(geo_meta[0])[:10]
                 matched_duplicate_id = check_for_duplicate(
                     db,
                     incident_id=incident_id,
                     region_id=geo_meta[3],
                     alarm_level=geo_meta[4],
-                    incident_date=fire_date_str,
+                    incident_date=ack_date_str,
                     lat=geo_meta[5],
                     lon=geo_meta[6],
                     general_category=geo_meta[1],
@@ -3846,8 +3856,11 @@ _VALIDATOR_DEFAULT_QUEUE_STATUSES = ("PENDING", "PENDING_VALIDATION")
 class VerificationActionRequest(BaseModel):
     """Body for PATCH /api/regional/incidents/{incident_id}/verification."""
 
-    action: str  # "accept" | "pending" | "reject"
+    action: str  # "accept" | "accept_replace" | "pending" | "reject"
     notes: str | None = None  # Optional reason / validator notes
+    # When the validator chooses "Replace Existing" from the duplicate modal, pass the ID
+    # of the incident to supersede. Takes priority over the stored duplicate_of value.
+    original_incident_id: int | None = None
 
 
 @router.get("/validator/incidents")
@@ -3927,7 +3940,8 @@ def get_validator_incident_queue(
                 fi.parent_incident_id,
                 fi.is_duplicate,
                 fi.duplicate_of,
-                fi.updated_at
+                fi.updated_at,
+                fi.reference_number
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd
                    ON nd.incident_id = fi.incident_id
@@ -3972,6 +3986,7 @@ def get_validator_incident_queue(
                 "is_duplicate": bool(r[15]) if r[15] is not None else False,
                 "duplicate_of": r[16],
                 "updated_at": r[17].isoformat() if r[17] else None,
+                "reference_number": r[18],
             }
             for r in rows
         ],
@@ -4090,21 +4105,25 @@ def verify_incident(
             text("""
                 SELECT ST_Y(fi.location::geometry), ST_X(fi.location::geometry),
                        nd.notification_dt, nd.general_category, fi.incident_type_code,
-                       fi.region_id, nd.alarm_level
+                       fi.region_id, nd.alarm_level, fi.parent_incident_id
                 FROM wims.fire_incidents fi
                 LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
                 WHERE fi.incident_id = :iid
             """),
             {"iid": incident_id},
         ).fetchone()
-        if geo_row and geo_row[2]:
-            fire_date_str = str(geo_row[2].date()) if hasattr(geo_row[2], "date") else str(geo_row[2])[:10]
+        # Skip duplicate check for update requests — the parent is intentionally
+        # at the same location and would always be flagged as a spatial match.
+        if geo_row and geo_row[7] is None:
+            verify_date_str: str | None = None
+            if geo_row[2]:
+                verify_date_str = str(geo_row[2].date()) if hasattr(geo_row[2], "date") else str(geo_row[2])[:10]
             dup_id = check_for_duplicate(
                 db,
                 incident_id=incident_id,
                 region_id=geo_row[5],
                 alarm_level=geo_row[6],
-                incident_date=fire_date_str,
+                incident_date=verify_date_str,
                 lat=geo_row[0],
                 lon=geo_row[1],
                 general_category=geo_row[3],
@@ -4136,14 +4155,17 @@ def verify_incident(
         parent_incident_id_val = meta_row[1] if meta_row else None
         duplicate_of_val = meta_row[2] if meta_row else None
 
-        # accept_replace: validator chooses to replace the matched duplicate original
-        if action == "accept_replace" and duplicate_of_val:
+        # accept_replace: validator chooses to replace the matched duplicate original.
+        # body.original_incident_id takes priority (set when the 409 modal's "Replace Existing"
+        # is used and the incident's duplicate_of column may not yet be populated).
+        effective_original_id = body.original_incident_id or duplicate_of_val
+        if action == "accept_replace" and effective_original_id:
             orig_ref_row = db.execute(
                 text("SELECT reference_number FROM wims.fire_incidents WHERE incident_id = :pid"),
-                {"pid": duplicate_of_val},
+                {"pid": effective_original_id},
             ).fetchone()
             ref_num = orig_ref_row[0] if orig_ref_row else None
-            parent_to_archive = duplicate_of_val
+            parent_to_archive = effective_original_id
         elif parent_incident_id_val:
             # Replacement approval (update request): inherit the original's reference number
             orig_ref_row = db.execute(
@@ -4205,7 +4227,7 @@ def verify_incident(
                 action_label="REPLACED_EXISTING",
             )
 
-        if action == "accept_replace" and duplicate_of_val:
+        if action == "accept_replace" and effective_original_id:
             db.execute(
                 text("""
                     UPDATE wims.fire_incidents
@@ -4365,26 +4387,26 @@ def bulk_approve_incidents(
             iid, prev_status, _, created_at, notif_dt, gen_cat, type_code, region_id, alarm, lat, lon = row
 
             # Check for duplicates including recently-VERIFIED in the last 60 seconds.
+            # fire_date_str may be None — check_for_duplicate handles that with spatial-only match.
             fire_date_str = (
                 str(notif_dt.date()) if notif_dt and hasattr(notif_dt, "date") else None
             )
-            if fire_date_str:
-                dup_id = check_for_duplicate(
-                    db,
-                    incident_id=iid,
-                    region_id=region_id,
-                    alarm_level=alarm,
-                    incident_date=fire_date_str,
-                    lat=lat,
-                    lon=lon,
-                    general_category=gen_cat,
-                    incident_type_code=type_code,
-                    exclude_statuses=("DRAFT", "REJECTED", "REPLACED"),
-                    verified_window_seconds=60,
-                )
-                if dup_id:
-                    held_for_review.append({"id": iid, "matching_incident_id": dup_id})
-                    continue
+            dup_id = check_for_duplicate(
+                db,
+                incident_id=iid,
+                region_id=region_id,
+                alarm_level=alarm,
+                incident_date=fire_date_str,
+                lat=lat,
+                lon=lon,
+                general_category=gen_cat,
+                incident_type_code=type_code,
+                exclude_statuses=("DRAFT", "REJECTED", "REPLACED"),
+                verified_window_seconds=60,
+            )
+            if dup_id:
+                held_for_review.append({"id": iid, "matching_incident_id": dup_id})
+                continue
 
             db.execute(
                 text(

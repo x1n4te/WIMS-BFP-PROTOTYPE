@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Pencil, Send, Trash2 } from 'lucide-react';
@@ -239,6 +239,7 @@ export default function RegionalIncidentDetailPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [duplicateFound, setDuplicateFound] = useState<{ matchedIncidentId: number } | null>(null);
   const [pendingDuplicateFound, setPendingDuplicateFound] = useState<{ matchedIncidentId: number } | null>(null);
+  const [staleAlert, setStaleAlert] = useState(false);
 
   const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
   const isValidator = role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR';
@@ -248,6 +249,8 @@ export default function RegionalIncidentDetailPage() {
   const [validatorNotes, setValidatorNotes] = useState('');
   const [validatorLoading, setValidatorLoading] = useState(false);
   const [validatorError, setValidatorError] = useState<string | null>(null);
+  const [validatorDupMatchedId, setValidatorDupMatchedId] = useState<number | null>(null);
+  const dupAutoShownRef = useRef(false);
 
   useEffect(() => {
     if (!authLoading && !canAccessRegional) {
@@ -279,6 +282,33 @@ export default function RegionalIncidentDetailPage() {
     if (authLoading || !canAccessRegional) return;
     load();
   }, [authLoading, canAccessRegional, load]);
+
+  // Poll every 30 s while the incident is PENDING — alert the encoder if the validator acts.
+  useEffect(() => {
+    if (!isEncoder || !detail || detail.verification_status !== 'PENDING') return;
+    const trackedUpdatedAt = detail.updated_at;
+    const interval = setInterval(async () => {
+      try {
+        const fresh = await fetchRegionalIncident(incidentId);
+        if (fresh.verification_status !== 'PENDING' || fresh.updated_at !== trackedUpdatedAt) {
+          setStaleAlert(true);
+          clearInterval(interval);
+        }
+      } catch {
+        // non-critical — silently skip failed polls
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [isEncoder, detail, incidentId]);
+
+  // Auto-show the duplicate comparison once when a validator opens a duplicate-flagged incident.
+  useEffect(() => {
+    if (!isValidator || !detail || dupAutoShownRef.current) return;
+    if (detail.is_duplicate && detail.duplicate_of) {
+      dupAutoShownRef.current = true;
+      setValidatorDupMatchedId(detail.duplicate_of);
+    }
+  }, [isValidator, detail]);
 
   // Memoized: only recompute when detail changes so IncidentForm's hydration runs once
   const incidentFormData = useMemo<Incident | undefined>(() => {
@@ -373,19 +403,36 @@ export default function RegionalIncidentDetailPage() {
     }
   };
 
-  const submitValidatorAction = async () => {
-    if (!validatorAction) return;
+  const submitValidatorAction = async (opts?: { force?: boolean; action?: string; originalIncidentId?: number }) => {
+    const action = opts?.action ?? validatorAction;
+    if (!action) return;
     setValidatorLoading(true);
     setValidatorError(null);
+    const url = opts?.force
+      ? `/regional/incidents/${incidentId}/verification?force=true`
+      : `/regional/incidents/${incidentId}/verification`;
     try {
-      await apiFetch(`/regional/incidents/${incidentId}/verification`, {
+      await apiFetch(url, {
         method: 'PATCH',
-        body: JSON.stringify({ action: validatorAction, notes: validatorNotes.trim() || null }),
+        body: JSON.stringify({
+          action,
+          notes: validatorNotes.trim() || null,
+          ...(opts?.originalIncidentId ? { original_incident_id: opts.originalIncidentId } : {}),
+        }),
       });
       await load();
       setValidatorAction(null);
       setValidatorNotes('');
+      setValidatorDupMatchedId(null);
     } catch (e) {
+      if (e instanceof ApiRequestError && e.status === 409) {
+        const d = e.detail as { code?: string; matched_incident_id?: number } | null;
+        if (d?.code === 'DUPLICATE_DETECTED' && d.matched_incident_id) {
+          setValidatorAction(null);
+          setValidatorDupMatchedId(d.matched_incident_id);
+          return;
+        }
+      }
       setValidatorError(e instanceof Error ? e.message : 'Action failed.');
     } finally {
       setValidatorLoading(false);
@@ -551,6 +598,66 @@ export default function RegionalIncidentDetailPage() {
                 className="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Validator duplicate resolution modal — shown on Accept 409 or auto-show on view */}
+      {validatorDupMatchedId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-amber-800">Duplicate Incident Detected</h2>
+            <p className="text-sm text-gray-700">
+              Incident #{incidentId} matches an existing record (#{validatorDupMatchedId}).
+              Review the side-by-side comparison before deciding.
+            </p>
+            <UpdateRequestDiffPanel
+              updateIncidentId={incidentId}
+              originalIncidentId={validatorDupMatchedId}
+            />
+            {validatorError && (
+              <p className="text-sm text-red-600">{validatorError}</p>
+            )}
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+              <button
+                onClick={() => setValidatorDupMatchedId(null)}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setValidatorDupMatchedId(null);
+                  setValidatorAction('reject');
+                }}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => {
+                  const mid = validatorDupMatchedId;
+                  setValidatorDupMatchedId(null);
+                  void submitValidatorAction({ force: true, action: 'accept_replace', originalIncidentId: mid });
+                }}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {validatorLoading ? 'Saving…' : 'Replace Existing'}
+              </button>
+              <button
+                onClick={() => {
+                  setValidatorDupMatchedId(null);
+                  void submitValidatorAction({ force: true, action: 'accept' });
+                }}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                {validatorLoading ? 'Saving…' : 'Verify as New'}
               </button>
             </div>
           </div>
@@ -742,12 +849,29 @@ export default function RegionalIncidentDetailPage() {
 
       {!loading && !error && detail && !isEditing && (
         <>
+          {/* Stale data alert — shown when a validator has acted while encoder is viewing */}
+          {staleAlert && (
+            <div className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-3 flex items-center justify-between gap-3" role="alert">
+              <span className="text-sm text-blue-900 font-medium">
+                This incident was updated by a validator. Refresh to see the latest status.
+              </span>
+              <button
+                onClick={() => { setStaleAlert(false); void load(); }}
+                className="shrink-0 rounded px-3 py-1.5 text-sm font-semibold bg-blue-700 text-white hover:bg-blue-800"
+              >
+                Refresh
+              </button>
+            </div>
+          )}
+
           {/* Header */}
           <div className="flex flex-wrap items-start gap-3">
             <div>
               <div className="flex items-center gap-3 flex-wrap">
-                <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                  Incident #{detail.incident_id}
+                <h1 className="text-2xl font-bold font-mono" style={{ color: 'var(--text-primary)' }}>
+                  {detail.verification_status === 'VERIFIED' && detail.reference_number
+                    ? detail.reference_number
+                    : `Incident #${detail.incident_id}`}
                 </h1>
                 {detail.is_wildland && (
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-sm font-semibold text-orange-800 border border-orange-200">
@@ -756,6 +880,9 @@ export default function RegionalIncidentDetailPage() {
                 )}
               </div>
               <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                {detail.verification_status !== 'VERIFIED' || !detail.reference_number
+                  ? `Incident #${detail.incident_id} · `
+                  : ''}
                 Region {detail.region_id}
                 {detail.created_at && <>{' · '}Created {new Date(detail.created_at).toLocaleString()}</>}
               </p>
@@ -764,17 +891,6 @@ export default function RegionalIncidentDetailPage() {
               {detail.verification_status.replace('_', ' ')}
             </span>
           </div>
-
-          {/* Reference Number — shown prominently when verified */}
-          {detail.verification_status === 'VERIFIED' && detail.reference_number && (
-            <div className="rounded-lg border-2 border-green-500 bg-green-50 px-5 py-3 flex items-center gap-3">
-              <span className="text-green-700 text-lg">✅</span>
-              <div>
-                <p className="text-xs font-semibold uppercase text-green-700 tracking-wide">Reference Number</p>
-                <p className="text-base font-bold font-mono text-green-900">{detail.reference_number}</p>
-              </div>
-            </div>
-          )}
 
           {/* A. Response Details */}
           <Section title="A. Response Details" sectionId="sec-response">
@@ -1037,11 +1153,11 @@ export default function RegionalIncidentDetailPage() {
                 )}
                 <div className="flex flex-wrap gap-2 items-center">
                   <button
-                    onClick={() => setValidatorAction('accept')}
+                    onClick={() => void submitValidatorAction({ action: 'accept' })}
                     disabled={validatorLoading || detail?.verification_status === 'VERIFIED' || detail?.verification_status === 'REJECTED'}
                     className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    Accept
+                    {validatorLoading && validatorAction === null ? 'Checking…' : 'Accept'}
                   </button>
                   <button
                     onClick={() => setValidatorAction('reject')}
@@ -1057,27 +1173,17 @@ export default function RegionalIncidentDetailPage() {
                     Back to Dashboard
                   </Link>
                 </div>
-                {validatorAction && (
+                {validatorAction === 'reject' && (
                   <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
                     <span className="text-sm text-gray-600">
-                      Confirm:{' '}
-                      <strong>
-                        {validatorAction === 'accept' ? 'Accept' : validatorAction === 'reject' ? 'Reject' : 'Return to Pending'}
-                      </strong>
-                      {' '}this incident?
+                      Confirm: <strong>Reject</strong> this incident?
                     </span>
                     <button
-                      onClick={submitValidatorAction}
-                      disabled={validatorLoading || (validatorAction === 'reject' && !validatorNotes.trim())}
-                      className={`px-4 py-1.5 text-sm rounded text-white disabled:opacity-50 ${
-                        validatorAction === 'accept'
-                          ? 'bg-green-600 hover:bg-green-700'
-                          : validatorAction === 'reject'
-                          ? 'bg-red-600 hover:bg-red-700'
-                          : 'bg-yellow-500 hover:bg-yellow-600'
-                      }`}
+                      onClick={() => void submitValidatorAction()}
+                      disabled={validatorLoading || !validatorNotes.trim()}
+                      className="px-4 py-1.5 text-sm rounded text-white disabled:opacity-50 bg-red-600 hover:bg-red-700"
                     >
-                      {validatorLoading ? 'Saving…' : 'Confirm'}
+                      {validatorLoading ? 'Saving…' : 'Confirm Reject'}
                     </button>
                     <button
                       onClick={() => { setValidatorAction(null); setValidatorError(null); }}

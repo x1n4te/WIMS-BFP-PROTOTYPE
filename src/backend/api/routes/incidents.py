@@ -171,7 +171,8 @@ def upload_incident_bundle(
                     resources_deployed, alarm_timeline, problems_encountered,
                     recommendations, fire_station_name, stage_of_fire,
                     extent_total_floor_area_sqm, extent_total_land_area_hectares,
-                    distance_from_station_km, station_code
+                    distance_from_station_km, station_code,
+                    city_municipality, province_district
                 ) VALUES (
                     :incident_id, :city_id,
                     CAST(:notification_dt AS timestamptz), :alarm_level, :general_category, :sub_category,
@@ -182,7 +183,8 @@ def upload_incident_bundle(
                     CAST(:resources_deployed AS jsonb), CAST(:alarm_timeline AS jsonb), CAST(:problems_encountered AS jsonb),
                     :recommendations, :fire_station_name, :stage_of_fire,
                     :floor_area, :land_area,
-                    :distance_from_station_km, :station_code
+                    :distance_from_station_km, :station_code,
+                    :city_municipality, :province_district
                 )
                 """
             ),
@@ -222,6 +224,8 @@ def upload_incident_bundle(
                     or ns.get("distance_from_station_km")
                 ),
                 "station_code": station_code_val,
+                "city_municipality": ns.get("city_municipality") or "",
+                "province_district": ns.get("province_district") or "",
             },
         )
 
