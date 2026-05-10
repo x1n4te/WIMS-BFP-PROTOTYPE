@@ -52,24 +52,27 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: secret
-      KEYCLOAK_ADMIN: admin # <--- ADDED Bootstrap Admin
-      KEYCLOAK_ADMIN_PASSWORD: admin # <--- ADDED Bootstrap Password
-      KC_HTTP_RELATIVE_PATH: /auth # <--- ADDED to align with Nginx
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_RELATIVE_PATH: /auth
       KC_PROXY: edge
+      KC_PROXY_HEADERS: xforwarded
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME: localhost
       KC_HTTP_ENABLED: "true"
+      KC_LOG_LEVEL: INFO
+      QUARKUS_TRANSACTION_MANAGER_ENABLE_RECOVERY: "true"
     networks:
       - wims_internal
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL","exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /auth/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && cat <&3 | grep -qE '200 OK|302'"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      test: ["CMD-SHELL","exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /auth/ HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && timeout 8 cat <&3 | head -1 | grep -qE '^HTTP'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
     restart: always
     ports:
       - "8080:8080"
@@ -118,7 +121,7 @@ services:
       redis:
         condition: service_healthy
       keycloak:
-        condition: service_healthy
+        condition: service_started
       ollama:
         condition: service_started
 
