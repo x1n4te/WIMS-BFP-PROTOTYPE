@@ -59,11 +59,17 @@ def _apply_backup_retention() -> None:
             # Be defensive with mocked or transient fs states.
             return 0.0
 
-    backups = sorted(
-        BACKUP_DIR.glob("wims_*.sql.enc"),
-        key=_mtime,
-        reverse=True,
-    )
+    backups: list[Path] = []
+    try:
+        # Use os.scandir to avoid pathlib's internal is_dir/stat checks.
+        with os.scandir(BACKUP_DIR) as entries:
+            for entry in entries:
+                if entry.is_file() and re.match(r"^wims_\d{8}_\d{6}\.sql\.enc$", entry.name):
+                    backups.append(BACKUP_DIR / entry.name)
+    except FileNotFoundError:
+        return
+
+    backups.sort(key=_mtime, reverse=True)
     stale = backups[BACKUP_MAX_FILES:]
     for backup_path in stale:
         try:
