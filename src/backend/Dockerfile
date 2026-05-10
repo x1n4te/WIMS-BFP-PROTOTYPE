@@ -22,4 +22,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "/app/wait-for-db.sh postgres 5432 postgres password wims && uvicorn main:app --host 0.0.0.0 --port 8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
