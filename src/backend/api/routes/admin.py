@@ -51,9 +51,17 @@ def _apply_backup_retention() -> None:
     """Delete oldest backups when count exceeds BACKUP_MAX_FILES."""
     if BACKUP_MAX_FILES <= 0:
         return
+
+    def _mtime(path: Path) -> float:
+        try:
+            return float(path.stat().st_mtime)
+        except Exception:
+            # Be defensive with mocked or transient fs states.
+            return 0.0
+
     backups = sorted(
         BACKUP_DIR.glob("wims_*.sql.enc"),
-        key=lambda path: path.stat().st_mtime,
+        key=_mtime,
         reverse=True,
     )
     stale = backups[BACKUP_MAX_FILES:]
@@ -850,7 +858,11 @@ async def trigger_backup(
         )
 
     size_bytes = encrypted_path.stat().st_size
-    created_at = datetime.utcfromtimestamp(encrypted_path.stat().st_mtime).isoformat()
+    try:
+        created_ts = float(encrypted_path.stat().st_mtime)
+        created_at = datetime.utcfromtimestamp(created_ts).isoformat()
+    except Exception:
+        created_at = datetime.utcnow().isoformat()
     _apply_backup_retention()
 
     log_system_audit(
