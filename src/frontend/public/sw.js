@@ -116,7 +116,7 @@ async function syncPendingFromSW() {
  * Minimal IndexedDB open for SW context.
  */
 function openDB() {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, _reject) => {
     const request = indexedDB.open(DB_NAME, 1);
     request.onerror = () => resolve(null);
     request.onsuccess = () => resolve(request.result);

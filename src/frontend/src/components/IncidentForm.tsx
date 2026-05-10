@@ -95,7 +95,7 @@ export function IncidentForm({
   onSaved?: () => void;
 }) {
   const router = useRouter();
-  const { assignedRegionId } = useUserProfile();
+  const { assignedRegionId: _assignedRegionId } = useUserProfile();
   const [loading, setLoading] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [regions, setRegions] = useState<Region[]>([]);

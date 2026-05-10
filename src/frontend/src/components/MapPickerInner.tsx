@@ -99,6 +99,7 @@ export function MapPickerInner({
     const [suggestions, setSuggestions] = useState<GeoSuggestion[]>([]);
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    // (setPosition/setMapCenter are stable setters, not state mutations)
     useEffect(() => {
         setPosition(value ?? null);
         if (value) {
