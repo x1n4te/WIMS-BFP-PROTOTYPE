@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# WIMS-BFP Frontend
 
-## Getting Started
+Next.js App Router application for the WIMS-BFP incident management platform.
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Framework:** Next.js 14+ with TypeScript
+- **Auth:** Keycloak OIDC via `next-auth` — all pages behind authentication
+- **Styling:** Tailwind CSS + shadcn/ui components
+- **Maps:** Leaflet / React-Leaflet for geospatial incident display
+- **State:** React Context + hooks; no Redux
+- **Testing:** Vitest + React Testing Library
+
+## Environment Variables
+
+Required in `src/.env`:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost/api
+NEXT_PUBLIC_AUTH_API_URL=http://localhost:8080/auth
+NEXT_PUBLIC_BASE_URL=http://localhost
+NEXT_PUBLIC_OIDC_AUTHORITY=http://localhost:8080/auth/realms/bfp
+NEXT_PUBLIC_OIDC_REDIRECT_URI=http://localhost/callback
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+These are pre-configured in `docker-compose.yml` for local Docker runs. For local non-Docker development, copy `.env.example` from the repo root into `src/.env`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Running
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cd src/frontend
+npm install
+npm run dev      # development server at http://localhost
+npm run build    # production build
+npm run lint     # ESLint
+npx vitest run   # tests
+```
 
-## Learn More
+## Routing Conventions
 
-To learn more about Next.js, take a look at the following resources:
+- `app/` — App Router pages and layouts. No `pages/` directory.
+- Route groups with `(auth)` prefix are unauthenticated layouts (login, callback).
+- All other routes require a valid Keycloak session — middleware redirects unauthenticated requests to `/auth/signin`.
+- API proxy at `/api/*` rewrites to FastAPI backend (`/api/regional/incidents`, `/api/admin/...`, etc.).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Key Directories
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Path | Purpose |
+|------|---------|
+| `app/` | Next.js App Router pages and layouts |
+| `components/` | Reusable React components (UI, map, forms) |
+| `context/` | React Context providers (Auth, Map) |
+| `lib/` | Client-side utilities (auth, API client) |
+| `hooks/` | Custom React hooks |
+| `public/` | Static assets, AFOR templates |
 
-## Deploy on Vercel
+## Auth Flow
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. User visits any protected route
+2. Middleware checks for `next-auth.session-token` cookie
+3. If missing, redirects to Keycloak login (`/auth/signin`)
+4. After login, Keycloak redirects to `/callback` with OIDC code
+5. `next-auth` exchanges code for session token
+6. User lands on original requested route
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Testing
+
+```bash
+npx vitest run          # run all tests once
+npx vitest run --watch  # watch mode
+```
+
+Tests live alongside components: `components/MapPicker.test.tsx`, `hooks/useIncidents.test.ts`, etc.

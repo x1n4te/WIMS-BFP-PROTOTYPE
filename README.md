@@ -6,7 +6,7 @@ A full-stack incident management platform for the Philippine Bureau of Fire Prot
 
 - [Architecture Overview](docs/ARCHITECTURE.md) — system stack, data flow, Docker services, auth flow
 - [API & Function Reference](docs/API_AND_FUNCTIONS.md) — backend endpoints, edge functions, frontend pages
-- [Changelog](CHANGELOG.md) — version history and notable changes
+- [Changelog](docs/CHANGELOG.md) — version history and notable changes
 
 ## Project Layout
 

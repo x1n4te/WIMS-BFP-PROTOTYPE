@@ -198,7 +198,7 @@ class TestBackupAPI:
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
         with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as mock_mkdir, \
+             patch("pathlib.Path.mkdir") as _mock_mkdir, \
              patch("pathlib.Path.stat") as mock_stat, \
              patch("api.routes.admin.log_system_audit") as mock_audit, \
              patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
