@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from keycloak.exceptions import KeycloakError
 from sqlalchemy import text
@@ -34,6 +34,35 @@ logger = logging.getLogger("wims.admin")
 router = APIRouter(tags=["admin"])
 
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/app/storage/backups"))
+BACKUP_MAX_FILES = int(os.environ.get("BACKUP_MAX_FILES", "100"))
+_BACKUP_DIR_READY = False
+
+
+def _ensure_backup_dir() -> None:
+    """Create backup directory lazily once per process."""
+    global _BACKUP_DIR_READY
+    if _BACKUP_DIR_READY:
+        return
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    _BACKUP_DIR_READY = True
+
+
+def _apply_backup_retention() -> None:
+    """Delete oldest backups when count exceeds BACKUP_MAX_FILES."""
+    if BACKUP_MAX_FILES <= 0:
+        return
+    backups = sorted(
+        BACKUP_DIR.glob("wims_*.sql.enc"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    stale = backups[BACKUP_MAX_FILES:]
+    for backup_path in stale:
+        try:
+            backup_path.unlink()
+        except FileNotFoundError:
+            # Another worker/process may have already removed it.
+            continue
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +781,7 @@ async def trigger_backup(
     db: Session = Depends(get_db_with_rls),
 ):
     """Trigger a pg_dump backup of the wims database."""
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_backup_dir()
 
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"wims_{timestamp}.sql"
@@ -822,6 +851,7 @@ async def trigger_backup(
 
     size_bytes = encrypted_path.stat().st_size
     created_at = datetime.utcfromtimestamp(encrypted_path.stat().st_mtime).isoformat()
+    _apply_backup_retention()
 
     log_system_audit(
         db=db,
@@ -845,7 +875,7 @@ async def list_backups(
     current_user: dict = Depends(get_system_admin),
 ):
     """List all available backup files sorted newest first."""
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_backup_dir()
 
     files = []
     for f in BACKUP_DIR.glob("wims_*.sql.enc"):
@@ -866,6 +896,8 @@ async def download_backup(
     current_user: dict = Depends(get_system_admin),
 ):
     """Download a specific backup file."""
+    _ensure_backup_dir()
+
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
@@ -873,11 +905,15 @@ async def download_backup(
         raise HTTPException(status_code=400, detail="Invalid backup filename format")
 
     file_path = BACKUP_DIR / filename
-    if not file_path.exists():
+    try:
+        file_handle = open(file_path, "rb")
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Backup file not found")
+    except OSError:
+        raise HTTPException(status_code=500, detail="Failed to open backup file")
 
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
+    return StreamingResponse(
+        file_handle,
         media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
