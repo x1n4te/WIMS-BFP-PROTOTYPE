@@ -26,17 +26,15 @@ KEYCLOAK_URL = os.environ.get("NEXT_PUBLIC_AUTH_API_URL", KEYCLOAK_REALM_URL)
 CLIENT_ID = os.environ.get("KEYCLOAK_CLIENT_ID", "bfp-client")
 # audience is what Keycloak puts in the token's "aud" claim — must match CLIENT_ID.
 # If KEYCLOAK_AUDIENCE is unset, default to the CLIENT_ID so they stay in sync.
-AUDIENCE = os.environ.get(
-    "KEYCLOAK_AUDIENCE", os.environ.get("KEYCLOAK_CLIENT_ID", "bfp-client")
+AUDIENCE = os.environ.get("KEYCLOAK_AUDIENCE", os.environ.get("KEYCLOAK_CLIENT_ID", "bfp-client"))
+JWKS_CACHE_TTL_SECONDS = (
+    60  # 60 seconds — Keycloak key rotation typically hourly/daily; balance freshness vs latency
 )
-JWKS_CACHE_TTL_SECONDS = 60  # 60 seconds — Keycloak key rotation typically hourly/daily; balance freshness vs latency
 # Issuer URL as it appears in JWT `iss` claim — differs from KEYCLOAK_REALM_URL
 # when Keycloak is accessed externally (browser → localhost:8080) vs internally
 # (container network → keycloak:8080). Set KEYCLOAK_ISSUER so jwt.decode()
 # validates the token's iss claim against the browser-visible issuer.
-KEYCLOAK_ISSUER = os.environ.get(
-    "KEYCLOAK_ISSUER", KEYCLOAK_REALM_URL.rstrip("/") + "/"
-)
+KEYCLOAK_ISSUER = os.environ.get("KEYCLOAK_ISSUER", KEYCLOAK_REALM_URL.rstrip("/") + "/")
 
 
 class KeycloakAuthenticator:
@@ -73,9 +71,7 @@ class KeycloakAuthenticator:
             return
 
         if not self.oidc_config:
-            raise HTTPException(
-                status_code=503, detail="Identity Provider configuration missing"
-            )
+            raise HTTPException(status_code=503, detail="Identity Provider configuration missing")
 
         jwks_uri = self.oidc_config.get("jwks_uri")
         if not jwks_uri:
@@ -101,9 +97,7 @@ class KeycloakAuthenticator:
                 self.jwks_fetched_at = now
         except Exception as e:
             logger.error(f"Failed to fetch JWKS from {jwks_uri}: {e}")
-            raise HTTPException(
-                status_code=503, detail="Identity Provider public keys unreachable"
-            )
+            raise HTTPException(status_code=503, detail="Identity Provider public keys unreachable")
 
     def _get_key_for_kid(self, kid: str) -> Optional[Dict[str, Any]]:
         """Return the JWKS key dict matching kid, or None if not found."""
@@ -180,9 +174,7 @@ class KeycloakAuthenticator:
                     )
                     azp = payload.get("azp")
                     if azp != CLIENT_ID:
-                        logger.warning(
-                            f"Token issued for client {azp} but expected {CLIENT_ID}"
-                        )
+                        logger.warning(f"Token issued for client {azp} but expected {CLIENT_ID}")
                         raise HTTPException(
                             status_code=401, detail="Invalid token: client mismatch"
                         )
@@ -246,17 +238,13 @@ class KeycloakAuthenticator:
                 except JWTError:
                     continue
 
-            raise HTTPException(
-                status_code=401, detail="Invalid token: JWT validation failed"
-            )
+            raise HTTPException(status_code=401, detail="Invalid token: JWT validation failed")
 
         except HTTPException:
             raise
         except JWTError as e:
             logger.warning(f"JWT Validation failed: {e}")
-            raise HTTPException(
-                status_code=401, detail="Invalid token: JWT validation failed"
-            )
+            raise HTTPException(status_code=401, detail="Invalid token: JWT validation failed")
         except Exception as e:
             logger.error(f"Unexpected error during token validation: {e}")
             raise HTTPException(
@@ -276,9 +264,7 @@ async def get_current_user(request: Request):
     """
     token = request.cookies.get("access_token")
     if not token:
-        raise HTTPException(
-            status_code=401, detail="Authentication credentials missing"
-        )
+        raise HTTPException(status_code=401, detail="Authentication credentials missing")
 
     return await authenticator.validate_token(token)
 
@@ -345,10 +331,7 @@ async def get_current_wims_user(
             raise HTTPException(status_code=403, detail="User not found in WIMS")
 
         existing_keycloak_id = row_by_username[2]
-        if (
-            existing_keycloak_id is not None
-            and str(existing_keycloak_id) != keycloak_sub
-        ):
+        if existing_keycloak_id is not None and str(existing_keycloak_id) != keycloak_sub:
             raise HTTPException(status_code=403, detail="User identity mismatch")
 
         row = (row_by_username[0], row_by_username[1], row_by_username[3])
@@ -387,9 +370,7 @@ async def get_regional_encoder(
     Returns user dict and includes assigned_region_id when present.
     """
     if current_user.get("role") not in ("REGIONAL_ENCODER", "ENCODER"):
-        raise HTTPException(
-            status_code=403, detail="REGIONAL_ENCODER privileges required"
-        )
+        raise HTTPException(status_code=403, detail="REGIONAL_ENCODER privileges required")
 
     try:
         row = db.execute(
@@ -401,9 +382,7 @@ async def get_regional_encoder(
         current_user["assigned_region_id"] = row[0]
         return current_user
     except DataError as e:
-        logger.error(
-            f"DB error fetching region for user {current_user['user_id']}: {e}"
-        )
+        logger.error(f"DB error fetching region for user {current_user['user_id']}: {e}")
         raise HTTPException(status_code=500, detail="Authentication system error")
 
 
@@ -422,9 +401,7 @@ async def get_national_validator(
         500  — unexpected DB error
     """
     if current_user.get("role") != "NATIONAL_VALIDATOR":
-        raise HTTPException(
-            status_code=403, detail="NATIONAL_VALIDATOR privileges required"
-        )
+        raise HTTPException(status_code=403, detail="NATIONAL_VALIDATOR privileges required")
 
     try:
         row = db.execute(
@@ -461,9 +438,7 @@ async def get_incident_viewer(
         "REGIONAL_ENCODER",
     }
     if current_user.get("role") not in allowed_roles:
-        raise HTTPException(
-            status_code=403, detail="Incident viewing privileges required"
-        )
+        raise HTTPException(status_code=403, detail="Incident viewing privileges required")
 
     try:
         row = db.execute(
@@ -512,13 +487,9 @@ async def get_regional_user(
             )
         region_id = row[0]
         if region_id is None:
-            raise HTTPException(
-                status_code=403, detail="No region assigned to this user"
-            )
+            raise HTTPException(status_code=403, detail="No region assigned to this user")
         current_user["assigned_region_id"] = region_id
         return current_user
     except DataError as e:
-        logger.error(
-            f"DB error fetching region for user {current_user['user_id']}: {e}"
-        )
+        logger.error(f"DB error fetching region for user {current_user['user_id']}: {e}")
         raise HTTPException(status_code=500, detail="Authentication system error")

@@ -46,9 +46,7 @@ def encoder_user(db_session: Session):
     username = f"encoder_crud_{keycloak_id.hex[:8]}"
 
     # Get or create a region
-    region = db_session.execute(
-        text("SELECT region_id FROM wims.ref_regions LIMIT 1")
-    ).fetchone()
+    region = db_session.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
     if not region:
         region = db_session.execute(
             text(
@@ -241,9 +239,7 @@ class TestUpdateIncident:
         )
         assert resp.status_code == 404
 
-    def test_update_verified_blocked(
-        self, client_with_encoder, test_incident, db_session
-    ):
+    def test_update_verified_blocked(self, client_with_encoder, test_incident, db_session):
         """Cannot update a VERIFIED incident."""
         # Force status to VERIFIED
         db_session.execute(
@@ -278,9 +274,7 @@ class TestDeleteIncident:
         resp = client_with_encoder.delete("/api/regional/incidents/999999")
         assert resp.status_code == 404
 
-    def test_delete_pending_blocked(
-        self, client_with_encoder, test_incident, db_session
-    ):
+    def test_delete_pending_blocked(self, client_with_encoder, test_incident, db_session):
         """Cannot delete a PENDING incident."""
         db_session.execute(
             text(
@@ -293,9 +287,7 @@ class TestDeleteIncident:
         resp = client_with_encoder.delete(f"/api/regional/incidents/{test_incident}")
         assert resp.status_code == 403
 
-    def test_delete_verified_blocked(
-        self, client_with_encoder, test_incident, db_session
-    ):
+    def test_delete_verified_blocked(self, client_with_encoder, test_incident, db_session):
         """Cannot delete a VERIFIED incident."""
         db_session.execute(
             text(

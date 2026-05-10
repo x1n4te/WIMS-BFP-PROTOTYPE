@@ -127,9 +127,7 @@ class TestRateLimiting:
 
         allowed = [r for r in responses if r.status_code != 429]
 
-        assert len(allowed) > 0, (
-            "Zero non-429 responses — cannot verify auth rejection behaviour."
-        )
+        assert len(allowed) > 0, "Zero non-429 responses — cannot verify auth rejection behaviour."
 
         for i, resp in enumerate(allowed):
             assert resp.status_code == 401, (

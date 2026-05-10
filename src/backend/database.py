@@ -22,9 +22,7 @@ SQLALCHEMY_DATABASE_URL = os.environ.get(
 )
 
 _engine: Engine = create_engine(SQLALCHEMY_DATABASE_URL)
-_SessionLocal: sessionmaker = sessionmaker(
-    autocommit=False, autoflush=False, bind=_engine
-)
+_SessionLocal: sessionmaker = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
 
 def get_engine() -> Engine:

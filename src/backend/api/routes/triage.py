@@ -101,9 +101,7 @@ def promote_report(
     user_id = user["user_id"]
 
     # Resolve default region (required by fire_incidents schema)
-    region_row = db.execute(
-        text("SELECT region_id FROM wims.ref_regions LIMIT 1")
-    ).fetchone()
+    region_row = db.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
     if region_row is None:
         raise HTTPException(status_code=500, detail="No ref_regions seed data")
 
@@ -171,9 +169,7 @@ def bulk_promote_reports(
     """
     user_id = user["user_id"]
 
-    region_row = db.execute(
-        text("SELECT region_id FROM wims.ref_regions LIMIT 1")
-    ).fetchone()
+    region_row = db.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
     if not region_row:
         raise HTTPException(status_code=500, detail="No ref_regions seed data")
     region_id = region_row[0]

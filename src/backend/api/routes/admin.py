@@ -157,9 +157,7 @@ def create_user(
     # session has no Keycloak JWT — wims.current_user_id would be NULL and RLS would block
     # the insert with 'ANONYMOUS' role.  We explicitly set it here using a SECURITY DEFINER
     # helper so the INSERT policy (wims.current_user_role() IN ('SYSTEM_ADMIN')) passes.
-    db.execute(
-        text("SELECT wims.exec_as_system_admin(:uid)"), {"uid": _admin["user_id"]}
-    )
+    db.execute(text("SELECT wims.exec_as_system_admin(:uid)"), {"uid": _admin["user_id"]})
 
     # --- Insert into wims.users ---
     try:
@@ -297,9 +295,7 @@ def update_user(
 
     # Fetch keycloak_id and current role BEFORE the update so we can synchronise Keycloak
     kc_row = db.execute(
-        text(
-            "SELECT keycloak_id, role FROM wims.users WHERE user_id = CAST(:uid AS uuid)"
-        ),
+        text("SELECT keycloak_id, role FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
         {"uid": user_id},
     ).fetchone()
     if kc_row is None:
@@ -369,9 +365,7 @@ def get_active_sessions(
 ):
     """Fetch all active sessions for all users."""
     users = db.execute(
-        text(
-            "SELECT user_id, keycloak_id, username, role FROM wims.users WHERE is_active = TRUE"
-        )
+        text("SELECT user_id, keycloak_id, username, role FROM wims.users WHERE is_active = TRUE")
     ).fetchall()
 
     from services.keycloak_admin import _get_admin_client
@@ -785,11 +779,16 @@ async def trigger_backup(
         result = subprocess.run(
             [
                 "pg_dump",
-                "-h", db_host,
-                "-p", db_port,
-                "-U", db_user,
-                "-d", db_name,
-                "-f", str(output_path),
+                "-h",
+                db_host,
+                "-p",
+                db_port,
+                "-U",
+                db_user,
+                "-d",
+                db_name,
+                "-f",
+                str(output_path),
                 "--no-password",
             ],
             env=env,
@@ -811,6 +810,7 @@ async def trigger_backup(
     # Encrypt the backup file at rest using AES-256-GCM
     try:
         from utils.backup_crypto import encrypt_backup
+
         encrypted_path = encrypt_backup(output_path)
         filename = encrypted_path.name
     except Exception as e:
@@ -850,11 +850,13 @@ async def list_backups(
     files = []
     for f in BACKUP_DIR.glob("wims_*.sql.enc"):
         stat = f.stat()
-        files.append({
-            "filename": f.name,
-            "size_bytes": stat.st_size,
-            "created_at": datetime.utcfromtimestamp(stat.st_mtime).isoformat(),
-        })
+        files.append(
+            {
+                "filename": f.name,
+                "size_bytes": stat.st_size,
+                "created_at": datetime.utcfromtimestamp(stat.st_mtime).isoformat(),
+            }
+        )
 
     files.sort(key=lambda x: x["created_at"], reverse=True)
     return files

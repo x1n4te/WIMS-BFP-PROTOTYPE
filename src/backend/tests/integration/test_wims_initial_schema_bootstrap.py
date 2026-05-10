@@ -40,9 +40,7 @@ def _postgres_init_dir() -> Path:
             candidate = parent / rel
             if (candidate / "01_wims_initial.sql").is_file():
                 return candidate
-    pytest.fail(
-        "Cannot find postgres-init/01_wims_initial.sql (set WIMS_POSTGRES_INIT_DIR)."
-    )
+    pytest.fail("Cannot find postgres-init/01_wims_initial.sql (set WIMS_POSTGRES_INIT_DIR).")
 
 
 def _parse_admin_urls() -> tuple[str, str]:
@@ -131,9 +129,7 @@ def bootstrap_engine():
         )
     except subprocess.CalledProcessError as e:
         pytest.fail(
-            "psql bootstrap failed:\n"
-            f"stdout={e.stdout!r}\nstderr={e.stderr!r}\n"
-            f"args={e.cmd!r}"
+            f"psql bootstrap failed:\nstdout={e.stdout!r}\nstderr={e.stderr!r}\nargs={e.cmd!r}"
         )
 
     eng = create_engine(test_url)
@@ -271,8 +267,6 @@ def test_bootstrap_creates_v2_and_afor_objects(bootstrap_engine):
 
         # NCR seed
         ncr = conn.execute(
-            text(
-                "SELECT region_id FROM wims.ref_regions WHERE region_code = 'NCR' LIMIT 1"
-            )
+            text("SELECT region_id FROM wims.ref_regions WHERE region_code = 'NCR' LIMIT 1")
         ).fetchone()
         assert ncr is not None

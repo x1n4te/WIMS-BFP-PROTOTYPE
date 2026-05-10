@@ -17,12 +17,20 @@ if not os.environ.get("WIMS_MASTER_KEY"):
 # Register custom markers so pytest -m <marker> works reliably.
 # CI uses these to select fast test subsets vs. integration-heavy suites.
 
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "unit: Unit tests that do not require Docker services")
-    config.addinivalue_line("markers", "integration: Integration tests requiring Docker services (postgres, redis)")
-    config.addinivalue_line("markers", "requires_keycloak: Tests that require Keycloak to be running")
-    config.addinivalue_line("markers", "requires_docker: Tests that require Docker containers to be running")
+    config.addinivalue_line(
+        "markers", "integration: Integration tests requiring Docker services (postgres, redis)"
+    )
+    config.addinivalue_line(
+        "markers", "requires_keycloak: Tests that require Keycloak to be running"
+    )
+    config.addinivalue_line(
+        "markers", "requires_docker: Tests that require Docker containers to be running"
+    )
     config.addinivalue_line("markers", "slow: Tests that take >5s to run")
+
 
 # =============================================================================
 # Rate-limit flushing
@@ -51,6 +59,7 @@ try:
             pass  # CI environments without Redis skip silently
 
 except ImportError:
+
     @pytest.fixture(autouse=True)
     def flush_rate_limits():
         """No-op when pytest_asyncio/redis not installed."""

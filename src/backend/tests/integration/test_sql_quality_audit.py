@@ -83,17 +83,13 @@ class TestWimsAppRoleHardening:
         assert login_enabled is False
 
     def test_wims_app_grants_are_minimal_in_init_scripts(self):
-        sql = _sql_text(
-            "10_rls_policies.sql", "11_analytics_facts.sql", "13_export_reports.sql"
-        )
+        sql = _sql_text("10_rls_policies.sql", "11_analytics_facts.sql", "13_export_reports.sql")
         assert (
             "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA wims TO wims_app"
             not in sql
         )
         assert "GRANT ALL" not in sql.upper()
-        assert (
-            "GRANT INSERT, UPDATE ON wims.analytics_incident_facts TO wims_app" in sql
-        )
+        assert "GRANT INSERT, UPDATE ON wims.analytics_incident_facts TO wims_app" in sql
 
     def test_wims_app_grants_are_minimal(self, live_conn):
         rows = live_conn.execute(
@@ -152,12 +148,8 @@ class TestPolicyIdempotency:
             r"^DROP\s+POLICY\s+IF\s+EXISTS\s+(?P<name>\w+)\s+ON\s+(?P<table>[\w.]+)",
             re.IGNORECASE | re.MULTILINE,
         )
-        creates = [
-            (m.group("name"), m.group("table")) for m in create_pattern.finditer(sql)
-        ]
-        drops = {
-            (m.group("name"), m.group("table")) for m in drop_pattern.finditer(sql)
-        }
+        creates = [(m.group("name"), m.group("table")) for m in create_pattern.finditer(sql)]
+        drops = {(m.group("name"), m.group("table")) for m in drop_pattern.finditer(sql)}
         missing = [policy for policy in creates if policy not in drops]
         assert creates, "Expected CREATE POLICY statements in 10_rls_policies.sql"
         assert missing == []
@@ -215,9 +207,7 @@ class TestPostgresInitOrdering:
         assert sql_files.index("01_extensions_roles.sql") < sql_files.index(
             "15_validator_workflow.sql"
         )
-        assert sql_files.index("14_seed_ncr.sql") < sql_files.index(
-            "15_validator_workflow.sql"
-        )
+        assert sql_files.index("14_seed_ncr.sql") < sql_files.index("15_validator_workflow.sql")
         assert sql_files.index("15_validator_workflow.sql") < sql_files.index(
             "16_fix_ivh_legacy.sql"
         )

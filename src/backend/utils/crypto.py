@@ -93,9 +93,7 @@ class SecurityProvider:
                 separators=(",", ":"),
             ).encode("utf-8")
         except Exception as e:
-            raise SecurityProviderError(
-                f"Failed to serialise PII dict to JSON: {e}"
-            ) from e
+            raise SecurityProviderError(f"Failed to serialise PII dict to JSON: {e}") from e
 
         nonce = os.urandom(self.NONCE_BYTES)
 
@@ -109,9 +107,7 @@ class SecurityProvider:
             nonce_b64 = base64.b64encode(nonce).decode("ascii")
             ct_b64 = base64.b64encode(ciphertext).decode("ascii")
         except Exception as e:
-            raise SecurityProviderError(
-                f"Failed to base64-encode ciphertext: {e}"
-            ) from e
+            raise SecurityProviderError(f"Failed to base64-encode ciphertext: {e}") from e
 
         return nonce_b64, ct_b64
 
@@ -141,16 +137,12 @@ class SecurityProvider:
             raise SecurityProviderError(f"Failed to base64-decode nonce: {e}") from e
 
         if len(nonce) != self.NONCE_BYTES:
-            raise SecurityProviderError(
-                f"nonce must be {self.NONCE_BYTES} bytes, got {len(nonce)}"
-            )
+            raise SecurityProviderError(f"nonce must be {self.NONCE_BYTES} bytes, got {len(nonce)}")
 
         try:
             ciphertext = base64.b64decode(ct_b64)
         except Exception as e:
-            raise SecurityProviderError(
-                f"Failed to base64-decode ciphertext: {e}"
-            ) from e
+            raise SecurityProviderError(f"Failed to base64-decode ciphertext: {e}") from e
 
         try:
             plaintext = self._aesgcm.decrypt(nonce, ciphertext, aad)
@@ -164,6 +156,4 @@ class SecurityProvider:
         try:
             return json.loads(plaintext.decode("utf-8"))
         except Exception as e:
-            raise SecurityProviderError(
-                f"Decrypted payload is not valid UTF-8 JSON: {e}"
-            ) from e
+            raise SecurityProviderError(f"Decrypted payload is not valid UTF-8 JSON: {e}") from e

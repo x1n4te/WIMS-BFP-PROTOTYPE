@@ -295,19 +295,14 @@ def test_analytics_comparative_counts_differ_when_incident_type_filter_changes(
     assert r1.status_code == 200
     assert r1.json()["range_a"]["count"] == 10
 
-    with patch(
-        "api.routes.analytics.count_in_range", side_effect=[4, 5]
-    ) as mock_count_other:
+    with patch("api.routes.analytics.count_in_range", side_effect=[4, 5]) as mock_count_other:
         r2 = client.get(
             "/api/analytics/comparative",
             params={**params_base, "incident_type": "VEHICULAR"},
         )
     assert r2.status_code == 200
     assert r2.json()["range_a"]["count"] == 4
-    assert (
-        mock_count_structural.call_args_list[0].kwargs.get("incident_type")
-        == "STRUCTURAL"
-    )
+    assert mock_count_structural.call_args_list[0].kwargs.get("incident_type") == "STRUCTURAL"
     assert mock_count_other.call_args_list[0].kwargs.get("incident_type") == "VEHICULAR"
 
 
@@ -336,16 +331,12 @@ def test_analytics_comparative_counts_differ_when_alarm_level_filter_changes(
     }
 
     with patch("api.routes.analytics.count_in_range", side_effect=[8, 9]) as mock_a:
-        r1 = client.get(
-            "/api/analytics/comparative", params={**params_base, "alarm_level": "1"}
-        )
+        r1 = client.get("/api/analytics/comparative", params={**params_base, "alarm_level": "1"})
     assert r1.status_code == 200
     assert r1.json()["range_a"]["count"] == 8
 
     with patch("api.routes.analytics.count_in_range", side_effect=[1, 2]) as mock_b:
-        r2 = client.get(
-            "/api/analytics/comparative", params={**params_base, "alarm_level": "3"}
-        )
+        r2 = client.get("/api/analytics/comparative", params={**params_base, "alarm_level": "3"})
     assert r2.status_code == 200
     assert r2.json()["range_a"]["count"] == 1
     assert mock_a.call_args_list[0].kwargs.get("alarm_level") == "1"

@@ -64,9 +64,7 @@ def _resolve_role_from_token(payload: dict) -> str:
             roles.extend(ra)
     if isinstance(payload.get("resource_access"), dict):
         for cid, client_data in payload["resource_access"].items():
-            if isinstance(client_data, dict) and isinstance(
-                client_data.get("roles"), list
-            ):
+            if isinstance(client_data, dict) and isinstance(client_data.get("roles"), list):
                 roles.extend(client_data["roles"])
     for wims_role in WIMS_ROLES_FROM_KEYCLOAK:
         if wims_role in roles:
@@ -81,16 +79,12 @@ app = FastAPI(title="WIMS-BFP Backend")
 app.include_router(incidents.router)
 app.include_router(admin.router, prefix="/api/admin")
 app.include_router(sessions.router, prefix="/api/admin")
-app.include_router(
-    user_profile_router
-)  # PATCH /api/user/me, PATCH /api/user/me/password
+app.include_router(user_profile_router)  # PATCH /api/user/me, PATCH /api/user/me/password
 app.include_router(civilian.router)
 app.include_router(triage.router)
 app.include_router(regional.router)
 app.include_router(analytics.router)
-app.include_router(
-    ref.router
-)  # GET /api/ref/regions, /api/ref/provinces, /api/ref/cities
+app.include_router(ref.router)  # GET /api/ref/regions, /api/ref/provinces, /api/ref/cities
 app.include_router(public_dmz_router)  # POST /api/v1/public/report (no-auth DMZ)
 
 logger = logging.getLogger("wims.rate_limit")
@@ -119,9 +113,7 @@ async def _get_redis() -> aioredis.Redis | None:
             _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
             await _redis.ping()
         except Exception:
-            logger.warning(
-                "Redis unavailable at %s — rate limiting disabled", REDIS_URL
-            )
+            logger.warning("Redis unavailable at %s — rate limiting disabled", REDIS_URL)
             _redis = None
     return _redis
 
@@ -247,9 +239,7 @@ KEYCLOAK_REALM_URL = os.environ.get(
     os.environ.get("KEYCLOAK_URL", "http://keycloak:8080/auth/realms/bfp"),
 )
 TOKEN_ENDPOINT = f"{KEYCLOAK_REALM_URL}/protocol/openid-connect/token"
-AUTH_REDIRECT_URI = os.environ.get(
-    "AUTH_REDIRECT_URI", "http://localhost:3000/auth/callback"
-)
+AUTH_REDIRECT_URI = os.environ.get("AUTH_REDIRECT_URI", "http://localhost:3000/auth/callback")
 
 
 @app.post("/api/auth/callback")
@@ -342,9 +332,7 @@ async def get_me(
     if not keycloak_sub:
         raise HTTPException(status_code=401, detail="Invalid token: missing sub")
 
-    preferred_username = (
-        token_payload.get("preferred_username") or keycloak_sub or "unknown"
-    )
+    preferred_username = token_payload.get("preferred_username") or keycloak_sub or "unknown"
     username = preferred_username[:50]
 
     row = db.execute(
@@ -432,9 +420,7 @@ async def get_analytics_summary(
         where_clauses.append("fi.created_at >= CAST(:from_date AS timestamptz)")
         params["from_date"] = body.from_date
     if body.to_date:
-        where_clauses.append(
-            "fi.created_at <= CAST(:to_date AS timestamptz) + interval '1 day'"
-        )
+        where_clauses.append("fi.created_at <= CAST(:to_date AS timestamptz) + interval '1 day'")
         params["to_date"] = body.to_date
     if body.region_id is not None:
         where_clauses.append("fi.region_id = :region_id")
@@ -452,9 +438,7 @@ async def get_analytics_summary(
     # Total
     total = (
         db.execute(
-            _text(
-                f"SELECT COUNT(*) FROM wims.fire_incidents fi {join_sql} WHERE {where_sql}"
-            ),
+            _text(f"SELECT COUNT(*) FROM wims.fire_incidents fi {join_sql} WHERE {where_sql}"),
             params,
         ).scalar()
         or 0
@@ -500,9 +484,7 @@ async def get_analytics_summary(
     return {
         "status": "ok",
         "total_incidents": total,
-        "by_region": [
-            {"region_name": r[0] or "Unknown", "count": r[1]} for r in by_region_rows
-        ],
+        "by_region": [{"region_name": r[0] or "Unknown", "count": r[1]} for r in by_region_rows],
         "by_alarm_level": [{"alarm_level": r[0], "count": r[1]} for r in by_alarm_rows],
         "by_general_category": [
             {"general_category": r[0], "count": r[1]} for r in by_category_rows

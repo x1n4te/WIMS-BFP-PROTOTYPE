@@ -106,9 +106,7 @@ class TestGeospatialConstraint:
         """Insert fire_incident using a string for location must fail."""
         # Ensure we have a region for FK
         with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT region_id FROM wims.ref_regions LIMIT 1")
-            ).fetchone()
+            row = conn.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
             if row is None:
                 pytest.skip("No ref_regions seed data; cannot test fire_incidents FK")
             region_id = row[0]
