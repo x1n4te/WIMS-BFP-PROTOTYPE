@@ -88,4 +88,5 @@ status:
 # All commands run from the project root unless noted.
 # Backend tests require Docker services (postgres, redis) running.
 # Frontend tests run standalone without Docker.
-# WIMS_MASTER_KEY must be set in src/.env for backup encryption tests to pass.
+# Backend pytest uses the deterministic .env.example WIMS_MASTER_KEY if unset.
+# Set a real WIMS_MASTER_KEY in src/.env for manual backup encryption testing.

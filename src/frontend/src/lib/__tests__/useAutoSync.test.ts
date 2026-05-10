@@ -73,7 +73,7 @@ describe('useAutoSync', () => {
     mockNetworkStatus.isOnline = false;
     mockNetworkStatus.isReconnecting = false;
 
-    const { result, rerender } = renderHook(() => useAutoSync());
+    const { rerender } = renderHook(() => useAutoSync());
 
     // Simulate reconnect
     mockNetworkStatus.isOnline = true;

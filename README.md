@@ -122,6 +122,7 @@ npm run lint
 
 - **AES-256-GCM (active):** PII fields in `wims.incident_sensitive_details` — specifically `caller_name`, `caller_number`, `owner_name`, and `occupant_name` — are encrypted at rest via AES-256-GCM blob (`pii_blob_enc`) with a 12-byte nonce (`encryption_iv`), bound to each record via Additional Authenticated Data (AAD = `incident_id`). Plaintext columns are always `NULL` for new writes. Key is loaded from the `WIMS_MASTER_KEY` environment variable at backend startup.
 - **Fail-closed read path:** If decryption fails for a row that claims to have a blob, the system logs a `CRITICAL` event with `incident_id` only (never nonce, ciphertext, or plaintext) and falls back to legacy plaintext columns.
+- **Local/test key:** `.env.example` includes a deterministic `WIMS_MASTER_KEY` for repeatable local tests only. Backend pytest also falls back to that key when the variable is unset.
 - **Key generation:** `python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"`
 
 ### Authentication & Authorization

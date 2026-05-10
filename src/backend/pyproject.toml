@@ -14,4 +14,4 @@ ignore = ["E501", "B008", "N802", "N803"]
 
 [tool.ruff.format]
 quote-style = "double"
-indent-style = "spaces"
+indent-style = "space"

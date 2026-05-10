@@ -1,9 +1,15 @@
 import os
-import pytest
 
+import pytest
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env for local test runs against Docker containers
+
+# Deterministic local/test AES-256 key. Production and deployed CI should still
+# inject WIMS_MASTER_KEY explicitly; this fallback keeps local pytest runs stable.
+TEST_WIMS_MASTER_KEY = "76/kA0LVDzvX/mQWIxx3UJZl0SrTSIO/k0KdRMdRxCU="
+if not os.environ.get("WIMS_MASTER_KEY"):
+    os.environ["WIMS_MASTER_KEY"] = TEST_WIMS_MASTER_KEY
 
 # =============================================================================
 # Pytest markers
@@ -29,9 +35,16 @@ try:
     @pytest_asyncio.fixture(autouse=True)
     async def flush_rate_limits():
         """Ensure each test starts with a clean Redis bucket."""
+        if os.environ.get("PYTEST_FLUSH_REDIS") != "1":
+            return
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
         try:
-            client = await aioredis.from_url(redis_url, decode_responses=True)
+            client = await aioredis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=0.2,
+                socket_timeout=0.2,
+            )
             await client.flushdb()
             await client.aclose()
         except Exception:

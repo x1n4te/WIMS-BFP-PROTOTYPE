@@ -46,7 +46,7 @@ vi.mock('idb', () => ({
 }));
 
 // Must import AFTER mock
-const { queueIncident, getPendingIncidents, markSynced, clearSynced } = await import('../offlineStore');
+const { queueIncident, getPendingIncidents, markSynced } = await import('../offlineStore');
 
 beforeEach(() => {
   store.clear();
