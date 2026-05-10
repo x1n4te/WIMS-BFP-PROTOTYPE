@@ -254,7 +254,10 @@ jobs:
 
       - name: Validate docker compose config
         working-directory: src
-        run: docker compose config --quiet 2>/dev/null < /dev/null || docker compose -f docker-compose.yml config --quiet 2>/dev/null < /dev/null || echo "Config check skipped (no .env)"
+        run: |
+          set -e
+          docker compose config --quiet || docker compose -f docker-compose.yml config --quiet
+          echo "Config validated successfully"
 
       - name: Build images (no push)
         working-directory: src

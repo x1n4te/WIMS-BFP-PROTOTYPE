@@ -98,7 +98,6 @@ export function MapPickerInner({
     const [searchError, setSearchError] = useState<string | null>(null);
     const [suggestions, setSuggestions] = useState<GeoSuggestion[]>([]);
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => {
         setPosition(value ?? null);
         if (value) {

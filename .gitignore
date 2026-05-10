@@ -43,6 +43,7 @@ CLAUDE.md
 # Cursor / agent tooling (local only)
 .cursor/
 .ai-context/
+.claude/
 
 # Office temp/lock files
 **/.~lock.*
@@ -50,5 +51,6 @@ CLAUDE.md
 # Local AFOR filled workbook (if not meant for version control)
 AFORs/afor_filled.xlsx
 
-# nathan local wiki
+# nathan local wiki AI tools
 wiki/
+.codex/

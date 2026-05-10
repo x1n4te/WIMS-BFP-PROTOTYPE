@@ -679,6 +679,8 @@ export default function RegionalIncidentDetailPage() {
               .filter((a) => a.file_name === 'afor_sketch.png' && !!a.url)
               .map((a) => (
                 <Section key={a.url} title="H. Fire Scene Sketch" sectionId="sec-sketch">
+                  {/* Dynamic uploaded sketch URL; next/image cannot optimize this reliably. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={a.url} alt="Fire Scene Sketch" className="max-w-full rounded border border-gray-200" />
                 </Section>
               ))}
