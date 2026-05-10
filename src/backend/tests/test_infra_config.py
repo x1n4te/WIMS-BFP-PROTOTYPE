@@ -19,9 +19,7 @@ def _load_compose() -> dict[str, Any]:
         try:
             data = yaml.safe_load(handle)
         except yaml.YAMLError as exc:
-            raise AssertionError(
-                f"docker-compose.yml is not valid YAML: {exc}"
-            ) from exc
+            raise AssertionError(f"docker-compose.yml is not valid YAML: {exc}") from exc
     if not isinstance(data, dict):
         raise AssertionError("docker-compose.yml did not parse to a dictionary")
     return data
@@ -64,8 +62,7 @@ def test_keycloak_admin_lockout_guard() -> None:
     compose = _load_compose()
     keycloak_env = _service_env(compose, "keycloak")
     assert "KEYCLOAK_ADMIN" in keycloak_env, (
-        "Keycloak bootstrap admin is missing. "
-        "Set KEYCLOAK_ADMIN explicitly in docker-compose.yml."
+        "Keycloak bootstrap admin is missing. Set KEYCLOAK_ADMIN explicitly in docker-compose.yml."
     )
 
 

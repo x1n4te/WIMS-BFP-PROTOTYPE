@@ -135,9 +135,9 @@ class TestEveToThreatLogRow:
             == "HIGH"
         )
         assert (
-            eve_to_threat_log_row(
-                {**base, "alert": {"signature_id": 1}}, raw_payload=""
-            )["severity_level"]
+            eve_to_threat_log_row({**base, "alert": {"signature_id": 1}}, raw_payload="")[
+                "severity_level"
+            ]
             == "MEDIUM"
         )
 

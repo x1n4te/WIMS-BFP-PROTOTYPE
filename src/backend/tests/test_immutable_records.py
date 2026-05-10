@@ -31,9 +31,7 @@ from main import app
 _ENCODER_UID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 _VALIDATOR_UID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 
-_DB_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://postgres:password@postgres:5432/wims"
-)
+_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:password@postgres:5432/wims")
 _MIGRATION_PATH = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
@@ -168,10 +166,7 @@ def test_84_verified_incident_appears_in_analytics(verified_incident):
     engine = _autocommit_engine()
     with engine.connect() as conn:
         row = conn.execute(
-            text(
-                "SELECT incident_id FROM wims.analytics_incident_facts "
-                "WHERE incident_id = :iid"
-            ),
+            text("SELECT incident_id FROM wims.analytics_incident_facts WHERE incident_id = :iid"),
             {"iid": verified_incident},
         ).fetchone()
 
@@ -271,17 +266,13 @@ def test_66_db_blocks_delete_on_ivh(verified_incident, db):
     engine = _autocommit_engine()
     with engine.connect() as conn:
         conn.execute(
-            text(
-                "DELETE FROM wims.incident_verification_history WHERE history_id = :hid"
-            ),
+            text("DELETE FROM wims.incident_verification_history WHERE history_id = :hid"),
             {"hid": history_id},
         )
 
     # Row must still exist (DO INSTEAD NOTHING)
     remaining = db.execute(
-        text(
-            "SELECT 1 FROM wims.incident_verification_history WHERE history_id = :hid"
-        ),
+        text("SELECT 1 FROM wims.incident_verification_history WHERE history_id = :hid"),
         {"hid": history_id},
     ).fetchone()
     assert remaining is not None, (

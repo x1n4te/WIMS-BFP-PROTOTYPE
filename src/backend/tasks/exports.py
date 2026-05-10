@@ -55,9 +55,7 @@ def _serialize_value(v: Any) -> str:
 
 
 @celery_app.task(name="tasks.exports.export_incidents_csv")
-def export_incidents_csv_task(
-    user_id: str, filters: dict[str, Any], columns: list[str]
-) -> str:
+def export_incidents_csv_task(user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
     """
     Export verified, non-archived incidents to CSV from analytics_incident_facts.
     Returns storage path.
@@ -100,9 +98,7 @@ def export_incidents_csv_task(
 
 
 @celery_app.task(name="tasks.exports.export_incidents_pdf")
-def export_incidents_pdf_task(
-    user_id: str, filters: dict[str, Any], columns: list[str]
-) -> str:
+def export_incidents_pdf_task(user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
     """Export verified incidents to PDF. Returns storage path."""
     valid_cols = [c for c in columns if c in ALLOWED_EXPORT_COLUMNS]
     if not valid_cols:
@@ -147,9 +143,7 @@ def export_incidents_pdf_task(
 
 
 @celery_app.task(name="tasks.exports.export_incidents_excel")
-def export_incidents_excel_task(
-    user_id: str, filters: dict[str, Any], columns: list[str]
-) -> str:
+def export_incidents_excel_task(user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
     """Export verified incidents to Excel (.xlsx). Returns storage path."""
     valid_cols = [c for c in columns if c in ALLOWED_EXPORT_COLUMNS]
     if not valid_cols:

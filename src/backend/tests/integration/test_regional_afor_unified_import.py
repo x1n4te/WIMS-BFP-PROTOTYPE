@@ -136,9 +136,7 @@ def require_wildland_schema(db_session: Session):
 @pytest.fixture
 def client_regional_encoder(client: TestClient, regional_user_id, db_session: Session):
     rid = db_session.execute(
-        text(
-            "SELECT assigned_region_id FROM wims.users WHERE user_id = CAST(:u AS uuid)"
-        ),
+        text("SELECT assigned_region_id FROM wims.users WHERE user_id = CAST(:u AS uuid)"),
         {"u": regional_user_id},
     ).scalar()
 

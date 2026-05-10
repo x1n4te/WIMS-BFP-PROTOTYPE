@@ -208,14 +208,10 @@ def change_my_password(
         token_kwargs = {}
         if body.otp_code:
             token_kwargs["totp"] = body.otp_code
-        kc_openid.token(
-            username=target_username, password=body.current_password, **token_kwargs
-        )
+        kc_openid.token(username=target_username, password=body.current_password, **token_kwargs)
     except KeycloakError as e:
         logger.warning(f"Change PW verification failed for {keycloak_id}: {e}")
-        raise HTTPException(
-            status_code=401, detail="Incorrect current password or OTP code"
-        )
+        raise HTTPException(status_code=401, detail="Incorrect current password or OTP code")
 
     try:
         change_user_password(keycloak_id, body.new_password)

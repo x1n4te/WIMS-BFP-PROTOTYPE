@@ -119,17 +119,13 @@ def test_analyze_threat_log_success(mock_system_admin, threat_log_row, db_sessio
     # Mock Ollama API
     respx.post("http://wims-ollama:11434/api/generate").respond(
         status_code=200,
-        json={
-            "response": '{"narrative": "Simulated attack detected.", "confidence": 0.95}'
-        },
+        json={"response": '{"narrative": "Simulated attack detected.", "confidence": 0.95}'},
     )
 
     with TestClient(app) as client:
         resp = client.post(f"/api/admin/security-logs/{log_id}/analyze")
 
-    assert resp.status_code == 200, (
-        f"Expected 200 OK, got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code == 200, f"Expected 200 OK, got {resp.status_code}: {resp.text}"
 
     # Query DB and assert updated values
     row = db_session.execute(
@@ -140,7 +136,5 @@ def test_analyze_threat_log_success(mock_system_admin, threat_log_row, db_sessio
     ).fetchone()
 
     assert row is not None, "Log row not found after analyze"
-    assert row[0] == "Simulated attack detected.", (
-        f"Expected xai_narrative, got {row[0]!r}"
-    )
+    assert row[0] == "Simulated attack detected.", f"Expected xai_narrative, got {row[0]!r}"
     assert row[1] == 0.95, f"Expected xai_confidence 0.95, got {row[1]!r}"

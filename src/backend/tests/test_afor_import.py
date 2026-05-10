@@ -194,10 +194,7 @@ def test_parse_csv_content_supports_official_form_layout():
     assert len(rows) == 1
     assert rows[0].status == "VALID"
     assert rows[0].data["_city_text"] == "Manila"
-    assert (
-        rows[0].data["incident_nonsensitive_details"]["fire_station_name"]
-        == "Station A"
-    )
+    assert rows[0].data["incident_nonsensitive_details"]["fire_station_name"] == "Station A"
 
 
 @patch("openpyxl.load_workbook")
@@ -228,10 +225,7 @@ def test_parse_xlsx_content_flow(mock_load):
     assert len(results) == 1
     assert results[0].status == "VALID"
     assert results[0].data["_city_text"] == "Manila"
-    assert (
-        results[0].data["incident_nonsensitive_details"]["extent_total_floor_area_sqm"]
-        == 500
-    )
+    assert results[0].data["incident_nonsensitive_details"]["extent_total_floor_area_sqm"] == 500
 
 
 def test_detect_structural_workbook():
@@ -274,9 +268,7 @@ def test_bfp_xlsx_parser_shifted_rows_reads_required_fields():
 
     assert result.status == "VALID"
     assert result.data["_city_text"] == "Manila"
-    assert (
-        result.data["incident_nonsensitive_details"]["fire_station_name"] == "Station A"
-    )
+    assert result.data["incident_nonsensitive_details"]["fire_station_name"] == "Station A"
 
 
 def test_detect_wildland_workbook():

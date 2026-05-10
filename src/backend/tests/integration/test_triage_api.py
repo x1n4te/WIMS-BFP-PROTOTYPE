@@ -136,9 +136,7 @@ def test_get_triage_pending_returns_pending_reports(
     assert abs(ours["longitude"] - lon) < 1e-6
 
 
-def test_get_triage_pending_excludes_non_pending(
-    client_with_encoder, db_session, encoder_user
-):
+def test_get_triage_pending_excludes_non_pending(client_with_encoder, db_session, encoder_user):
     """PENDING reports only; VERIFIED/FALSE_ALARM/DUPLICATE excluded."""
     wkt = "SRID=4326;POINT(121.10 14.65)"
     db_session.execute(
@@ -217,9 +215,7 @@ def test_promote_nonexistent_report_returns_404(client_with_encoder):
     assert response.status_code == 404
 
 
-def test_promote_already_verified_report_returns_4xx(
-    client_with_encoder, db_session, encoder_user
-):
+def test_promote_already_verified_report_returns_4xx(client_with_encoder, db_session, encoder_user):
     """Promoting an already VERIFIED report should fail (409 or 400)."""
     wkt = "SRID=4326;POINT(121.20 14.70)"
     result = db_session.execute(

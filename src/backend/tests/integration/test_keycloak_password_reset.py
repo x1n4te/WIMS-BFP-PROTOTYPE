@@ -293,8 +293,7 @@ class TestForgotPasswordConfiguration:
         # All must be REQUIRED
         for exe in executions:
             assert exe.get("requirement") == "REQUIRED", (
-                f"{exe.get('authenticator')} should be REQUIRED, "
-                f"got {exe.get('requirement')}"
+                f"{exe.get('authenticator')} should be REQUIRED, got {exe.get('requirement')}"
             )
 
     def test_realm_smtp_configured(self):
@@ -386,9 +385,7 @@ class TestForgotPasswordFlow:
             },
             timeout=10,
         )
-        assert r.status_code == 200, (
-            f"Login with new password failed: {r.status_code} {r.text}"
-        )
+        assert r.status_code == 200, f"Login with new password failed: {r.status_code} {r.text}"
         assert "access_token" in r.json()
 
     def test_forgot_password_sends_reset_email(self, test_user_id):
@@ -404,19 +401,14 @@ class TestForgotPasswordFlow:
 
         # Step 1: Hit the reset-credentials entry point
         # This simulates: user clicks "Forgot Password?", enters username
-        reset_url = (
-            f"{REALM_URL}/login-actions/reset-credentials"
-            f"?client_id={KEYCLOAK_CLIENT_ID}"
-        )
+        reset_url = f"{REALM_URL}/login-actions/reset-credentials?client_id={KEYCLOAK_CLIENT_ID}"
 
         client = httpx.Client(follow_redirects=True, timeout=15)
 
         try:
             # GET the reset-credentials page
             r = client.get(reset_url)
-            assert r.status_code == 200, (
-                f"Failed to load reset-credentials page: {r.status_code}"
-            )
+            assert r.status_code == 200, f"Failed to load reset-credentials page: {r.status_code}"
 
             # Extract the form action URL
             html = r.text
@@ -424,9 +416,7 @@ class TestForgotPasswordFlow:
             if not action_match:
                 # Keycloak 26 may use different form structure
                 # Try to find the login action URL from the page
-                action_match = re.search(
-                    r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE
-                )
+                action_match = re.search(r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE)
 
             assert action_match, (
                 "Could not find form action on reset-credentials page. "
@@ -455,8 +445,7 @@ class TestForgotPasswordFlow:
             time.sleep(2)
             messages = _get_mailhog_messages()
             assert len(messages) > 0, (
-                "No emails received in MailHog. "
-                "Check SMTP configuration on Keycloak realm."
+                "No emails received in MailHog. Check SMTP configuration on Keycloak realm."
             )
 
             # Find the email addressed to our test user
@@ -464,9 +453,7 @@ class TestForgotPasswordFlow:
             for msg in messages:
                 to_addresses = msg.get("To", [])
                 for addr in to_addresses:
-                    if TEST_USER_EMAIL in addr.get("Mailbox", "") + "@" + addr.get(
-                        "Domain", ""
-                    ):
+                    if TEST_USER_EMAIL in addr.get("Mailbox", "") + "@" + addr.get("Domain", ""):
                         reset_email = msg
                         break
                 if reset_email:
@@ -487,9 +474,7 @@ class TestForgotPasswordFlow:
 
             # Step 5: Follow the reset link (simulates user clicking link)
             r = client.get(reset_link)
-            assert r.status_code == 200, (
-                f"Reset link returned {r.status_code}: {r.text[:500]}"
-            )
+            assert r.status_code == 200, f"Reset link returned {r.status_code}: {r.text[:500]}"
             # Should show a password reset form
             assert "password" in r.text.lower(), (
                 "Reset link page does not contain a password field."
@@ -516,17 +501,14 @@ class TestForgotPasswordFlow:
         try:
             # --- Step 1: Submit username on forgot-password page ---
             reset_url = (
-                f"{REALM_URL}/login-actions/reset-credentials"
-                f"?client_id={KEYCLOAK_CLIENT_ID}"
+                f"{REALM_URL}/login-actions/reset-credentials?client_id={KEYCLOAK_CLIENT_ID}"
             )
 
             r = client.get(reset_url)
             assert r.status_code == 200
 
             html = r.text
-            action_match = re.search(
-                r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE
-            )
+            action_match = re.search(r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE)
             assert action_match, "Could not find form action"
 
             form_action = action_match.group(1).replace("&amp;", "&")
@@ -609,9 +591,7 @@ class TestForgotPasswordFlow:
                 },
                 timeout=10,
             )
-            assert r.status_code == 401, (
-                "Old password still works after reset — security failure!"
-            )
+            assert r.status_code == 401, "Old password still works after reset — security failure!"
 
         finally:
             client.close()
@@ -630,16 +610,13 @@ class TestForgotPasswordFlow:
         try:
             # Trigger reset email
             reset_url = (
-                f"{REALM_URL}/login-actions/reset-credentials"
-                f"?client_id={KEYCLOAK_CLIENT_ID}"
+                f"{REALM_URL}/login-actions/reset-credentials?client_id={KEYCLOAK_CLIENT_ID}"
             )
             r = client.get(reset_url)
             assert r.status_code == 200
 
             html = r.text
-            action_match = re.search(
-                r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE
-            )
+            action_match = re.search(r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE)
             assert action_match
             form_action = action_match.group(1).replace("&amp;", "&")
             if form_action.startswith("/"):
@@ -709,16 +686,13 @@ class TestForgotPasswordFlow:
 
         try:
             reset_url = (
-                f"{REALM_URL}/login-actions/reset-credentials"
-                f"?client_id={KEYCLOAK_CLIENT_ID}"
+                f"{REALM_URL}/login-actions/reset-credentials?client_id={KEYCLOAK_CLIENT_ID}"
             )
             r = client.get(reset_url)
             assert r.status_code == 200
 
             html = r.text
-            action_match = re.search(
-                r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE
-            )
+            action_match = re.search(r'action="([^"]*login-actions[^"]*)"', html, re.IGNORECASE)
             assert action_match
             form_action = action_match.group(1).replace("&amp;", "&")
             if form_action.startswith("/"):

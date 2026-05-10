@@ -19,9 +19,7 @@ logger = logging.getLogger("wims.keycloak_admin")
 # ---------------------------------------------------------------------------
 # Configuration (populated from environment / compose env_file)
 # ---------------------------------------------------------------------------
-_KC_SERVER_URL = os.environ.get(
-    "KEYCLOAK_REALM_URL", "http://keycloak:8080/auth/realms/bfp"
-)
+_KC_SERVER_URL = os.environ.get("KEYCLOAK_REALM_URL", "http://keycloak:8080/auth/realms/bfp")
 # Derive base server URL from realm URL: strip "/realms/bfp" suffix
 _KC_BASE_URL = _KC_SERVER_URL.split("/realms/")[0] + "/"
 _KC_REALM = "bfp"
@@ -33,9 +31,7 @@ _KC_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "admin")
 # Password alphabet: upper + lower + digits + safe special chars.
 # Avoids confusable chars (0/O, l/1) and shell-sensitive chars.
 _PWD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*"
-_PWD_LENGTH = (
-    14  # 14-char temporary password; sufficient entropy for a one-time credential
-)
+_PWD_LENGTH = 14  # 14-char temporary password; sufficient entropy for a one-time credential
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +220,7 @@ def update_user_profile(
 
     try:
         adm.update_user(user_id=keycloak_id, payload=payload)
-        logger.info(
-            f"Keycloak user {keycloak_id} profile updated: {list(payload.keys())}"
-        )
+        logger.info(f"Keycloak user {keycloak_id} profile updated: {list(payload.keys())}")
     except KeycloakError as e:
         logger.error(f"Keycloak update_user_profile failed for {keycloak_id}: {e}")
         raise
@@ -242,9 +236,7 @@ def change_user_password(keycloak_id: str, new_password: str) -> None:
     """
     adm = _get_admin_client()
     try:
-        adm.set_user_password(
-            user_id=keycloak_id, password=new_password, temporary=False
-        )
+        adm.set_user_password(user_id=keycloak_id, password=new_password, temporary=False)
         logger.info(f"Password changed for Keycloak user {keycloak_id}")
     except KeycloakError as e:
         logger.error(f"Keycloak change_user_password failed for {keycloak_id}: {e}")

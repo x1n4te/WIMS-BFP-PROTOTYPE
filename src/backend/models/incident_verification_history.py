@@ -27,9 +27,7 @@ class IncidentVerificationHistory(Base):
     __tablename__ = "incident_verification_history"
     __table_args__ = {"schema": "wims"}
 
-    history_id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True
-    )
+    history_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     # Which record was acted upon
     target_type: Mapped[TargetType] = mapped_column(String(16), nullable=False)

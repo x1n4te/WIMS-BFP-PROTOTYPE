@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
 import { fetchRegions, fetchProvinces, fetchCities, fetchCitiesByProvinces, updateRegionalIncident } from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
-import { useUserProfile } from '@/lib/auth';
 import { Loader2, Save, Shuffle } from 'lucide-react';
 import type { Region, Province, City } from '@/types/api';
 import dynamic from 'next/dynamic';
@@ -95,7 +94,6 @@ export function IncidentForm({
   onSaved?: () => void;
 }) {
   const router = useRouter();
-  const { assignedRegionId } = useUserProfile();
   const [loading, setLoading] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [regions, setRegions] = useState<Region[]>([]);
@@ -239,7 +237,7 @@ export function IncidentForm({
 
   // ── Utility helpers ────────────────────────────────────────────────────────
 
-  const toDateTimeLocalValue = (raw: unknown): string => {
+  const toDateTimeLocalValue = useCallback((raw: unknown): string => {
     if (!raw) return '';
     const value = String(raw).trim();
     const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
@@ -252,9 +250,9 @@ export function IncidentForm({
     const hh = String(date.getHours()).padStart(2, '0');
     const min = String(date.getMinutes()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
-  };
+  }, []);
 
-  const alarmEntryToDateTimeLocal = (entry: unknown): string => {
+  const alarmEntryToDateTimeLocal = useCallback((entry: unknown): string => {
     if (!entry) return '';
     if (typeof entry === 'string' || typeof entry === 'number') return toDateTimeLocalValue(entry);
     if (typeof entry === 'object') {
@@ -262,7 +260,7 @@ export function IncidentForm({
       return toDateTimeLocalValue(obj.time ?? obj.value ?? obj.datetime ?? '');
     }
     return '';
-  };
+  }, [toDateTimeLocalValue]);
 
   const alarmEntryToCommander = (entry: unknown): string => {
     if (!entry || typeof entry !== 'object') return '';
@@ -288,14 +286,6 @@ export function IncidentForm({
     const match = regions.find((r) => normalizeRegionLabel(r.region_name) === norm);
     return match?.region_id ?? null;
   };
-
-  const fileToBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (error) => reject(error);
-    });
 
   const base64ToBlob = (base64: string): Blob => {
     const byteString = atob(base64.split(',')[1]);
@@ -515,7 +505,7 @@ export function IncidentForm({
         }))
       );
     }
-  }, [initialData]);
+  }, [alarmEntryToDateTimeLocal, initialData]);
 
   useEffect(() => {
     if (!initialData || locationHydratedRef.current) return;

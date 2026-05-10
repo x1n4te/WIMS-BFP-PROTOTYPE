@@ -75,9 +75,7 @@ def get_heatmap(
     parsed_region_ids: Optional[list[int]] = None
     if region_ids:
         try:
-            parsed_region_ids = [
-                int(x.strip()) for x in region_ids.split(",") if x.strip()
-            ]
+            parsed_region_ids = [int(x.strip()) for x in region_ids.split(",") if x.strip()]
         except ValueError:
             from fastapi import HTTPException
 
@@ -133,9 +131,7 @@ def get_trends_route(
     parsed_region_ids: Optional[list[int]] = None
     if region_ids:
         try:
-            parsed_region_ids = [
-                int(x.strip()) for x in region_ids.split(",") if x.strip()
-            ]
+            parsed_region_ids = [int(x.strip()) for x in region_ids.split(",") if x.strip()]
         except ValueError:
             from fastapi import HTTPException
 
@@ -334,13 +330,9 @@ def compare_regions_route(
     try:
         parsed = [int(x.strip()) for x in region_ids.split(",") if x.strip()]
     except ValueError:
-        raise HTTPException(
-            status_code=422, detail="region_ids must be comma-separated integers"
-        )
+        raise HTTPException(status_code=422, detail="region_ids must be comma-separated integers")
     if len(parsed) < 2:
-        raise HTTPException(
-            status_code=422, detail="At least 2 region_ids required for comparison"
-        )
+        raise HTTPException(status_code=422, detail="At least 2 region_ids required for comparison")
     data = get_compare_regions(
         db,
         region_ids=parsed,

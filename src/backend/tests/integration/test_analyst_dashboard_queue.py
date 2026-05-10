@@ -84,9 +84,7 @@ def _mock_analyst_db():
 def _set_analyst(client: TestClient):
     """Wire NATIONAL_ANALYST + mock DB for a test."""
     mock_db, mock_get_db, mock_get_db_with_rls = _mock_analyst_db()
-    app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-        "NATIONAL_ANALYST"
-    )
+    app.dependency_overrides[auth.get_current_wims_user] = _mock_user("NATIONAL_ANALYST")
     app.dependency_overrides[get_db] = mock_get_db
     app.dependency_overrides[get_db_with_rls] = mock_get_db_with_rls
     return mock_db
@@ -106,9 +104,7 @@ class TestPhase1Foundation:
         """mv_incident_counts_daily materialized view must exist in DB schema."""
         mock_db = _set_analyst(client)
         # Query pg_matviews to check view exists
-        mock_db.execute.return_value.fetchone.return_value = (
-            "mv_incident_counts_daily",
-        )
+        mock_db.execute.return_value.fetchone.return_value = ("mv_incident_counts_daily",)
 
         response = client.get("/api/analytics/heatmap")
         assert response.status_code == 200
@@ -164,15 +160,10 @@ class TestPhase1Foundation:
 
         schedule = celery_config.celery_app.conf.beat_schedule
         assert "refresh-analytics-mvs" in schedule
-        assert (
-            schedule["refresh-analytics-mvs"]["task"]
-            == "analytics.refresh_materialized_views"
-        )
+        assert schedule["refresh-analytics-mvs"]["task"] == "analytics.refresh_materialized_views"
         assert schedule["refresh-analytics-mvs"]["schedule"] == 3600 * 6
 
-    def test_manual_materialized_view_refresh_endpoint_queues_task(
-        self, client: TestClient
-    ):
+    def test_manual_materialized_view_refresh_endpoint_queues_task(self, client: TestClient):
         """POST /api/analytics/refresh-views queues concurrent MV refresh for analysts."""
         _set_analyst(client)
         with patch("api.routes.analytics.refresh_materialized_views") as task:
@@ -190,9 +181,7 @@ class TestPhase1Foundation:
         self, client: TestClient
     ):
         """Manual refresh endpoint must remain analyst/admin only."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         with patch("api.routes.analytics.refresh_materialized_views") as task:
             response = client.post("/api/analytics/refresh-views")
 
@@ -247,9 +236,7 @@ class TestPhase1Foundation:
         source = inspect.getsource(sync_incident_to_analytics)
         assert "civilian_injured" in source, "sync must populate civilian_injured"
         assert "civilian_deaths" in source, "sync must populate civilian_deaths"
-        assert "total_response_time_minutes" in source, (
-            "sync must populate response time"
-        )
+        assert "total_response_time_minutes" in source, "sync must populate response time"
 
     def test_sync_incident_populates_barangay_and_station(self):
         """sync_incident_to_analytics must populate barangay and fire_station_name."""
@@ -274,9 +261,7 @@ class TestPhase2FiltersAndCharts:
     def test_heatmap_accepts_casualty_severity_filter(self, client: TestClient):
         """GET /api/analytics/heatmap must accept casualty_severity query param."""
         mock_db = _set_analyst(client)
-        response = client.get(
-            "/api/analytics/heatmap", params={"casualty_severity": "high"}
-        )
+        response = client.get("/api/analytics/heatmap", params={"casualty_severity": "high"})
         assert response.status_code == 200
         # Verify severity was passed to DB query
         call_args = mock_db.execute.call_args
@@ -289,17 +274,13 @@ class TestPhase2FiltersAndCharts:
     def test_trends_accepts_casualty_severity_filter(self, client: TestClient):
         """GET /api/analytics/trends must accept casualty_severity query param."""
         _set_analyst(client)
-        response = client.get(
-            "/api/analytics/trends", params={"casualty_severity": "medium"}
-        )
+        response = client.get("/api/analytics/trends", params={"casualty_severity": "medium"})
         assert response.status_code == 200
 
     def test_casualty_severity_invalid_value_rejected(self, client: TestClient):
         """casualty_severity must be high/medium/low only."""
         _set_analyst(client)
-        response = client.get(
-            "/api/analytics/heatmap", params={"casualty_severity": "invalid"}
-        )
+        response = client.get("/api/analytics/heatmap", params={"casualty_severity": "invalid"})
         assert response.status_code == 422
 
     # -- AQ-05: Property damage range filter -----------------------------
@@ -372,16 +353,12 @@ class TestPhase2FiltersAndCharts:
         """Type distribution must accept region_id filter."""
         mock_db = _set_analyst(client)
         mock_db.execute.return_value.fetchall.return_value = []
-        response = client.get(
-            "/api/analytics/type-distribution", params={"region_id": 1}
-        )
+        response = client.get("/api/analytics/type-distribution", params={"region_id": 1})
         assert response.status_code == 200
 
     def test_type_distribution_rejects_regional_encoder(self, client: TestClient):
         """REGIONAL_ENCODER must receive 403 on type-distribution."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.get("/api/analytics/type-distribution")
         assert response.status_code == 403
 
@@ -422,9 +399,7 @@ class TestPhase2FiltersAndCharts:
 
     def test_top_barangays_rejects_regional_encoder(self, client: TestClient):
         """REGIONAL_ENCODER must receive 403 on top-barangays."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.get("/api/analytics/top-barangays")
         assert response.status_code == 403
 
@@ -466,9 +441,7 @@ class TestPhase2FiltersAndCharts:
 
     def test_response_time_rejects_regional_encoder(self, client: TestClient):
         """REGIONAL_ENCODER must receive 403 on response-time endpoint."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.get("/api/analytics/response-time-by-region")
         assert response.status_code == 403
 
@@ -517,9 +490,7 @@ class TestPhase3Export:
 
     def test_export_pdf_rejects_regional_encoder(self, client: TestClient):
         """REGIONAL_ENCODER must receive 403 on PDF export."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.post(
             "/api/analytics/export/pdf",
             json={
@@ -573,9 +544,7 @@ class TestPhase3Export:
 
     def test_export_excel_rejects_regional_encoder(self, client: TestClient):
         """REGIONAL_ENCODER must receive 403 on Excel export."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.post(
             "/api/analytics/export/excel",
             json={
@@ -613,15 +582,9 @@ class TestPhase3Export:
         # Check that the migration file exists
         import os
 
-        migrations_dir = os.path.join(
-            os.path.dirname(__file__), "..", "..", "..", "postgres-init"
-        )
-        migration_files = (
-            os.listdir(migrations_dir) if os.path.isdir(migrations_dir) else []
-        )
-        has_export_log_migration = any(
-            "export_log" in f.lower() for f in migration_files
-        )
+        migrations_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "postgres-init")
+        migration_files = os.listdir(migrations_dir) if os.path.isdir(migrations_dir) else []
+        has_export_log_migration = any("export_log" in f.lower() for f in migration_files)
         # Alternative: check if the model/table is defined
         try:
             from services.analytics_read_model import EXPORT_LOG_TABLE
@@ -722,9 +685,7 @@ class TestPhase4Extensions:
 
     def test_compare_regions_rejects_regional_encoder(self, client: TestClient):
         """REGIONAL_ENCODER must receive 403 on compare-regions."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.get(
             "/api/analytics/compare-regions",
             params={
@@ -809,9 +770,7 @@ class TestPhase4Extensions:
 
     def test_top_n_rejects_regional_encoder(self, client: TestClient):
         """REGIONAL_ENCODER must receive 403 on top-n."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user(
-            "REGIONAL_ENCODER"
-        )
+        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.get(
             "/api/analytics/top-n",
             params={
@@ -856,9 +815,7 @@ class TestPhase4Extensions:
         ):
             app.dependency_overrides[auth.get_current_wims_user] = _mock_user(role)
             response = client.get("/api/admin/scheduled-reports")
-            assert response.status_code == 403, (
-                f"role={role} must not access scheduled reports"
-            )
+            assert response.status_code == 403, f"role={role} must not access scheduled reports"
             app.dependency_overrides.clear()
 
     def test_scheduled_report_invalid_cron_rejected(self, client: TestClient):
