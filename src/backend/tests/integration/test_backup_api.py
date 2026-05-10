@@ -47,7 +47,6 @@ def mock_encoder_user():
 
 
 class TestBackupAPI:
-
     def test_backup_trigger_returns_403_for_non_admin(self, client):
         app.dependency_overrides[auth.get_current_wims_user] = mock_encoder_user
         response = client.post("/api/admin/backup")
@@ -59,11 +58,12 @@ class TestBackupAPI:
         mock_db = MagicMock()
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
-        with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as _mock_mkdir, \
-             patch("pathlib.Path.stat") as mock_stat, \
-             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
-
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("pathlib.Path.mkdir") as _mock_mkdir,
+            patch("pathlib.Path.stat") as mock_stat,
+            patch("utils.backup_crypto.encrypt_backup") as mock_encrypt,
+        ):
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
 
@@ -86,11 +86,12 @@ class TestBackupAPI:
         mock_db = MagicMock()
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
-        with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as _mock_mkdir, \
-             patch("pathlib.Path.stat") as mock_stat, \
-             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
-
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("pathlib.Path.mkdir") as _mock_mkdir,
+            patch("pathlib.Path.stat") as mock_stat,
+            patch("utils.backup_crypto.encrypt_backup") as mock_encrypt,
+        ):
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
 
@@ -111,11 +112,12 @@ class TestBackupAPI:
         mock_db = MagicMock()
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
-        with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as _mock_mkdir, \
-             patch("pathlib.Path.stat") as mock_stat, \
-             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
-
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("pathlib.Path.mkdir") as _mock_mkdir,
+            patch("pathlib.Path.stat") as mock_stat,
+            patch("utils.backup_crypto.encrypt_backup") as mock_encrypt,
+        ):
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
 
@@ -132,8 +134,7 @@ class TestBackupAPI:
     def test_list_backups_returns_empty_initially(self, client):
         app.dependency_overrides[auth.get_current_wims_user] = mock_admin_user
 
-        with patch("pathlib.Path.mkdir"), \
-             patch("pathlib.Path.glob") as mock_glob:
+        with patch("pathlib.Path.mkdir"), patch("pathlib.Path.glob") as mock_glob:
             mock_glob.return_value = []
             response = client.get("/api/admin/backups")
             assert response.status_code == 200
@@ -147,8 +148,7 @@ class TestBackupAPI:
         fake_file.stat.return_value.st_size = 5432
         fake_file.stat.return_value.st_mtime = 1746432000.0
 
-        with patch("pathlib.Path.mkdir"), \
-             patch("pathlib.Path.glob") as mock_glob:
+        with patch("pathlib.Path.mkdir"), patch("pathlib.Path.glob") as mock_glob:
             mock_glob.return_value = [fake_file]
             response = client.get("/api/admin/backups")
             assert response.status_code == 200
@@ -164,9 +164,14 @@ class TestBackupAPI:
 
         fake_stat_result = os.stat_result((0o100644, 1, 0, 0, 0, 0, 12345, 0, 0, 0))
 
-        with patch("pathlib.Path.exists", return_value=True), \
-             patch("starlette.responses.os.stat", return_value=fake_stat_result), \
-             patch("builtins.open", MagicMock(return_value=MagicMock(read=MagicMock(return_value=b"fake sql content")))):
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("starlette.responses.os.stat", return_value=fake_stat_result),
+            patch(
+                "builtins.open",
+                MagicMock(return_value=MagicMock(read=MagicMock(return_value=b"fake sql content"))),
+            ),
+        ):
             response = client.get("/api/admin/backup/wims_20250505_120000.sql.enc")
             assert response.status_code == 200
             assert "wims_20250505_120000.sql.enc" in response.headers.get("Content-Disposition", "")
@@ -197,12 +202,13 @@ class TestBackupAPI:
         mock_db = MagicMock()
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
-        with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as mock_mkdir, \
-             patch("pathlib.Path.stat") as mock_stat, \
-             patch("api.routes.admin.log_system_audit") as mock_audit, \
-             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
-
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("pathlib.Path.mkdir") as _mock_mkdir,
+            patch("pathlib.Path.stat") as mock_stat,
+            patch("api.routes.admin.log_system_audit") as mock_audit,
+            patch("utils.backup_crypto.encrypt_backup") as mock_encrypt,
+        ):
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
 

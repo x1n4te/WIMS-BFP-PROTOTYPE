@@ -28,9 +28,7 @@ def _get_backup_key() -> bytes:
     except Exception as e:
         raise RuntimeError(f"{BACKUP_KEY_ENV!r} is not valid base64: {e}")
     if len(key_bytes) != 32:
-        raise RuntimeError(
-            f"{BACKUP_KEY_ENV!r} must be 32 bytes for AES-256"
-        )
+        raise RuntimeError(f"{BACKUP_KEY_ENV!r} must be 32 bytes for AES-256")
     return key_bytes
 
 

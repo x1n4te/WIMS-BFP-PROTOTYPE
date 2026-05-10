@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from keycloak.exceptions import KeycloakError
 from sqlalchemy import text
@@ -905,15 +905,11 @@ async def download_backup(
         raise HTTPException(status_code=400, detail="Invalid backup filename format")
 
     file_path = BACKUP_DIR / filename
-    try:
-        file_handle = open(file_path, "rb")
-    except FileNotFoundError:
+    if not file_path.exists():
         raise HTTPException(status_code=404, detail="Backup file not found")
-    except OSError:
-        raise HTTPException(status_code=500, detail="Failed to open backup file")
 
-    return StreamingResponse(
-        file_handle,
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
