@@ -9,9 +9,7 @@ Green State: POST /api/admin/backup returns 202 with filename/size,
 import os
 import re
 import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, ANY
-from datetime import datetime
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 import auth
@@ -62,11 +60,18 @@ class TestBackupAPI:
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
         with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as mock_mkdir, \
-             patch("pathlib.Path.stat") as mock_stat:
+             patch("pathlib.Path.mkdir") as _mock_mkdir, \
+             patch("pathlib.Path.stat") as mock_stat, \
+             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
 
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+            mock_encrypted_path = MagicMock()
+            mock_encrypted_path.name = "wims_20250510_120000.sql.enc"
+            mock_encrypted_path.stat.return_value.st_size = 12345
+            mock_encrypted_path.stat.return_value.st_mtime = 1746432000.0
+            mock_encrypt.return_value = mock_encrypted_path
 
             response = client.post("/api/admin/backup")
             assert response.status_code == 202
@@ -82,16 +87,23 @@ class TestBackupAPI:
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
         with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as mock_mkdir, \
-             patch("pathlib.Path.stat") as mock_stat:
+             patch("pathlib.Path.mkdir") as _mock_mkdir, \
+             patch("pathlib.Path.stat") as mock_stat, \
+             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
 
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
 
+            mock_encrypted_path = MagicMock()
+            mock_encrypted_path.name = "wims_20250510_120000.sql.enc"
+            mock_encrypted_path.stat.return_value.st_size = 12345
+            mock_encrypted_path.stat.return_value.st_mtime = 1746432000.0
+            mock_encrypt.return_value = mock_encrypted_path
+
             response = client.post("/api/admin/backup")
             assert response.status_code == 202
             filename = response.json()["filename"]
-            assert re.match(r"^wims_\d{8}_\d{6}\.sql$", filename)
+            assert re.match(r"^wims_\d{8}_\d{6}\.sql\.enc$", filename)
 
     def test_backup_file_is_valid_sql(self, client):
         app.dependency_overrides[auth.get_current_wims_user] = mock_admin_user
@@ -100,11 +112,18 @@ class TestBackupAPI:
         app.dependency_overrides[get_db_with_rls] = lambda: mock_db
 
         with patch("subprocess.run") as mock_run, \
-             patch("pathlib.Path.mkdir") as mock_mkdir, \
-             patch("pathlib.Path.stat") as mock_stat:
+             patch("pathlib.Path.mkdir") as _mock_mkdir, \
+             patch("pathlib.Path.stat") as mock_stat, \
+             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
 
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+            mock_encrypted_path = MagicMock()
+            mock_encrypted_path.name = "wims_20250510_120000.sql.enc"
+            mock_encrypted_path.stat.return_value.st_size = 12345
+            mock_encrypted_path.stat.return_value.st_mtime = 1746432000.0
+            mock_encrypt.return_value = mock_encrypted_path
 
             response = client.post("/api/admin/backup")
             assert response.status_code == 202
@@ -124,7 +143,7 @@ class TestBackupAPI:
         app.dependency_overrides[auth.get_current_wims_user] = mock_admin_user
 
         fake_file = MagicMock()
-        fake_file.name = "wims_20250505_120000.sql"
+        fake_file.name = "wims_20250505_120000.sql.enc"
         fake_file.stat.return_value.st_size = 5432
         fake_file.stat.return_value.st_mtime = 1746432000.0
 
@@ -134,7 +153,7 @@ class TestBackupAPI:
             response = client.get("/api/admin/backups")
             assert response.status_code == 200
             items = response.json()
-            assert any(item["filename"] == "wims_20250505_120000.sql" for item in items)
+            assert any(item["filename"] == "wims_20250505_120000.sql.enc" for item in items)
             for item in items:
                 assert "filename" in item
                 assert "size_bytes" in item
@@ -148,16 +167,16 @@ class TestBackupAPI:
         with patch("pathlib.Path.exists", return_value=True), \
              patch("starlette.responses.os.stat", return_value=fake_stat_result), \
              patch("builtins.open", MagicMock(return_value=MagicMock(read=MagicMock(return_value=b"fake sql content")))):
-            response = client.get("/api/admin/backup/wims_20250505_120000.sql")
+            response = client.get("/api/admin/backup/wims_20250505_120000.sql.enc")
             assert response.status_code == 200
-            assert "wims_20250505_120000.sql" in response.headers.get("Content-Disposition", "")
+            assert "wims_20250505_120000.sql.enc" in response.headers.get("Content-Disposition", "")
 
     def test_download_backup_returns_404_for_missing(self, client):
         app.dependency_overrides[auth.get_current_wims_user] = mock_admin_user
 
         with patch("pathlib.Path.exists") as mock_exists:
             mock_exists.return_value = False
-            response = client.get("/api/admin/backup/wims_20250505_120000.sql")
+            response = client.get("/api/admin/backup/wims_20250505_120000.sql.enc")
             assert response.status_code == 404
 
     def test_download_backup_blocks_path_traversal(self, client):
@@ -165,6 +184,12 @@ class TestBackupAPI:
 
         response = client.get("/api/admin/backup/../../../etc/passwd")
         assert response.status_code in (400, 404)
+
+    def test_download_backup_blocks_non_encrypted_extension(self, client):
+        """Requests for .sql (unencrypted) backups must be rejected."""
+        app.dependency_overrides[auth.get_current_wims_user] = mock_admin_user
+        response = client.get("/api/admin/backup/wims_20250505_120000.sql")
+        assert response.status_code == 400
 
     def test_backup_writes_audit_log(self, client):
         app.dependency_overrides[auth.get_current_wims_user] = mock_admin_user
@@ -175,10 +200,17 @@ class TestBackupAPI:
         with patch("subprocess.run") as mock_run, \
              patch("pathlib.Path.mkdir") as mock_mkdir, \
              patch("pathlib.Path.stat") as mock_stat, \
-             patch("api.routes.admin.log_system_audit") as mock_audit:
+             patch("api.routes.admin.log_system_audit") as mock_audit, \
+             patch("utils.backup_crypto.encrypt_backup") as mock_encrypt:
 
             mock_stat.return_value.st_size = 12345
             mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+            mock_encrypted_path = MagicMock()
+            mock_encrypted_path.name = "wims_20250510_120000.sql.enc"
+            mock_encrypted_path.stat.return_value.st_size = 12345
+            mock_encrypted_path.stat.return_value.st_mtime = 1746432000.0
+            mock_encrypt.return_value = mock_encrypted_path
 
             response = client.post("/api/admin/backup")
             assert response.status_code == 202

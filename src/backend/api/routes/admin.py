@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, Optional, Any
@@ -758,13 +759,24 @@ async def trigger_backup(
     output_path = BACKUP_DIR / filename
 
     db_url = os.environ.get("DATABASE_URL", "")
-    match = re.match(
-        r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)", db_url
-    )
-    if not match:
-        raise HTTPException(status_code=500, detail="Invalid DATABASE_URL format")
+    # Parse DATABASE_URL without regex — use urllib to handle special chars
+    # in password (e.g. @, :, /) that break a naive regex split.
+    try:
+        parsed = urllib.parse.urlparse(db_url)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Invalid DATABASE_URL: {e}")
 
-    db_user, db_pass, db_host, db_port, db_name = match.groups()
+    if parsed.scheme != "postgresql":
+        raise HTTPException(status_code=500, detail="DATABASE_URL must use postgresql:// scheme")
+
+    db_user = parsed.username or ""
+    db_pass = parsed.password or ""
+    db_host = parsed.hostname or ""
+    db_port = str(parsed.port) if parsed.port else "5432"
+    db_name = parsed.path.lstrip("/") or ""
+
+    if not db_host or not db_user:
+        raise HTTPException(status_code=500, detail="Invalid DATABASE_URL format")
 
     env = os.environ.copy()
     env["PGPASSWORD"] = db_pass
@@ -796,8 +808,20 @@ async def trigger_backup(
             detail=f"pg_dump failed: {result.stderr[:500]}",
         )
 
-    size_bytes = output_path.stat().st_size
-    created_at = datetime.utcnow().isoformat()
+    # Encrypt the backup file at rest using AES-256-GCM
+    try:
+        from utils.backup_crypto import encrypt_backup
+        encrypted_path = encrypt_backup(output_path)
+        filename = encrypted_path.name
+    except Exception as e:
+        logger.error(f"Backup encryption failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Backup created but encryption failed: {e}",
+        )
+
+    size_bytes = encrypted_path.stat().st_size
+    created_at = datetime.utcfromtimestamp(encrypted_path.stat().st_mtime).isoformat()
 
     log_system_audit(
         db=db,
@@ -824,7 +848,7 @@ async def list_backups(
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
     files = []
-    for f in BACKUP_DIR.glob("wims_*.sql"):
+    for f in BACKUP_DIR.glob("wims_*.sql.enc"):
         stat = f.stat()
         files.append({
             "filename": f.name,
@@ -845,7 +869,7 @@ async def download_backup(
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    if not re.match(r"^wims_\d{8}_\d{6}\.sql$", filename):
+    if not re.match(r"^wims_\d{8}_\d{6}\.sql\.enc$", filename):
         raise HTTPException(status_code=400, detail="Invalid backup filename format")
 
     file_path = BACKUP_DIR / filename
