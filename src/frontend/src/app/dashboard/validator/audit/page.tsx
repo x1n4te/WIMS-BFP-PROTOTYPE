@@ -32,7 +32,15 @@ interface AuditResponse {
   offset: number;
 }
 
-const ACTION_OPTIONS = ['', 'VERIFIED', 'REJECTED', 'PENDING', 'DRAFT'];
+const ACTION_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Any' },
+  { value: 'APPROVED', label: 'Approved' },
+  { value: 'REJECTED', label: 'Rejected' },
+  { value: 'BULK_APPROVED', label: 'Bulk Approved' },
+  { value: 'REPLACED_EXISTING', label: 'Replaced Existing' },
+  { value: 'ACCEPTED_AS_NEW', label: 'Accepted as New' },
+  { value: 'ARCHIVED', label: 'Archived' },
+];
 const PAGE_SIZE = 50;
 
 export default function ValidatorAuditPage() {
@@ -157,7 +165,7 @@ export default function ValidatorAuditPage() {
           />
         </label>
         <label className="flex flex-col">
-          <span className="text-xs text-gray-600">Action (new status)</span>
+          <span className="text-xs text-gray-600">Action</span>
           <select
             className="border rounded px-2 py-1.5"
             value={action}
@@ -167,8 +175,8 @@ export default function ValidatorAuditPage() {
             }}
           >
             {ACTION_OPTIONS.map((opt) => (
-              <option key={opt || 'any'} value={opt}>
-                {opt || 'Any'}
+              <option key={opt.value || 'any'} value={opt.value}>
+                {opt.label}
               </option>
             ))}
           </select>

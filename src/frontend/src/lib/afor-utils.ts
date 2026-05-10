@@ -66,10 +66,11 @@ export const TRANSPORTATION_TYPE_OPTIONS: IncidentTypeOption[] = [
 ];
 
 const CLASSIFICATION_LABELS: Record<string, string> = {
-  STRUCTURAL: 'Structural Fire',
-  NON_STRUCTURAL: 'Non-Structural Fire',
-  VEHICULAR: 'Transportation / Vehicular Fire',
-  WILDLAND: 'Wildland Fire',
+  STRUCTURAL: 'Structural',
+  NON_STRUCTURAL: 'Non-Structural',
+  VEHICULAR: 'Transportation',
+  TRANSPORTATION: 'Transportation',
+  WILDLAND: 'Wildland',
 };
 
 /**
@@ -88,7 +89,8 @@ export function getTypeOptionsForClassification(classification: string): Inciden
     case 'STRUCTURAL': return STRUCTURAL_TYPE_OPTIONS;
     case 'NON_STRUCTURAL': return NON_STRUCTURAL_TYPE_OPTIONS;
     case 'WILDLAND': return WILDLAND_TYPE_OPTIONS;
-    case 'VEHICULAR': return TRANSPORTATION_TYPE_OPTIONS;
+    case 'VEHICULAR':
+    case 'TRANSPORTATION': return TRANSPORTATION_TYPE_OPTIONS;
     default: return [];
   }
 }

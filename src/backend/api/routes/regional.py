@@ -2808,6 +2808,28 @@ _AFOR_MONTH_CODES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                      "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 
 
+_REGION_CODE_TO_AFOR: dict[str, str] = {
+    "NCR": "RGN-NCR",
+    "CAR": "RGN-CAR",
+    "NIR": "RGN-NIR",
+    "BARMM": "RGN-BARMM",
+    "I": "RGN-1",
+    "II": "RGN-2",
+    "III": "RGN-3",
+    "IV-A": "RGN-4A",
+    "IV-B": "RGN-4B",
+    "V": "RGN-5",
+    "VI": "RGN-6",
+    "VII": "RGN-7",
+    "VIII": "RGN-8",
+    "IX": "RGN-9",
+    "X": "RGN-10",
+    "XI": "RGN-11",
+    "XII": "RGN-12",
+    "XIII": "RGN-13",
+}
+
+
 def _generate_reference_number(
     db: Session,
     region_id: int,
@@ -2815,12 +2837,17 @@ def _generate_reference_number(
     station_code: str,
     notification_dt: str | None,
 ) -> str:
-    """Generate AFOR-RGN-{code}-{station}-{type}-{MMM}-{YYYY}-{NNNN}."""
+    """Generate AFOR-{RGN-CODE}-{station}-{type}-{MMM}-{YYYY}-{NNNN}.
+
+    The sequence number is globally unique across all incidents — not per-region
+    or per-type — so no two incidents share the same trailing number.
+    """
     region_row = db.execute(
         text("SELECT region_code FROM wims.ref_regions WHERE region_id = :rid"),
         {"rid": region_id},
     ).fetchone()
-    region_code = region_row[0] if region_row else "UNK"
+    raw_code = region_row[0] if region_row else "UNK"
+    rgn_code = _REGION_CODE_TO_AFOR.get(raw_code, f"RGN-{raw_code}")
 
     try:
         dt = datetime.fromisoformat(str(notification_dt).replace("Z", "+00:00")) if notification_dt else datetime.now()
@@ -2831,23 +2858,18 @@ def _generate_reference_number(
     year = dt.year
     station = (station_code or "TBA").strip() or "TBA"
 
-    # Count only VERIFIED incidents — reference numbers are assigned at approval time
+    # Global sequence — count ALL non-archived incidents with a reference number
+    # so every approved incident gets a unique trailing number regardless of region/type/month.
     count = db.execute(
         text("""
-            SELECT COUNT(*) FROM wims.fire_incidents fi
-            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
-            WHERE fi.region_id = :rid
-              AND fi.incident_type_code = :type_code
-              AND EXTRACT(MONTH FROM nd.notification_dt) = :month_num
-              AND EXTRACT(YEAR FROM nd.notification_dt) = :year
-              AND fi.is_archived = FALSE
-              AND fi.verification_status = 'VERIFIED'
+            SELECT COUNT(*) FROM wims.fire_incidents
+            WHERE reference_number IS NOT NULL
+              AND is_archived = FALSE
         """),
-        {"rid": region_id, "type_code": incident_type_code, "month_num": dt.month, "year": year},
     ).scalar() or 0
 
     seq = int(count) + 1
-    return f"AFOR-RGN-{region_code}-{station}-{incident_type_code}-{month}-{year}-{seq:04d}"
+    return f"AFOR-{rgn_code}-{station}-{incident_type_code}-{month}-{year}-{seq:04d}"
 
 
 class IncidentCreateRequest(BaseModel):
@@ -2978,6 +3000,15 @@ def create_incident(
             status_code=400,
             detail="region_id is required when no assigned region is set",
         )
+    assigned_region_id = user.get("assigned_region_id")
+    if assigned_region_id and region_id != assigned_region_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "REGION_MISMATCH",
+                "message": "You can only create incidents in your assigned region.",
+            },
+        )
     encoder_id = user["user_id"]
 
     # Reference number is assigned only at validator approval — not at create time
@@ -3106,6 +3137,15 @@ def create_incident(
             sd_params,
         )
 
+    _insert_incident_verification_history(
+        db,
+        incident_id=incident_id,
+        actor_user_id=str(encoder_id),
+        previous_status="DRAFT",
+        new_status="DRAFT",
+        notes="Encoder created new draft",
+        action_label="CREATED_DRAFT",
+    )
     db.commit()
     logger.info(
         "Created incident %s in region %s by encoder %s",
@@ -3478,6 +3518,15 @@ def update_draft(
         )
     _apply_incident_field_updates(db, incident_id, body)
     try:
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(encoder_id),
+            previous_status="DRAFT",
+            new_status="DRAFT",
+            notes="Encoder updated draft fields",
+            action_label="EDITED",
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -3519,6 +3568,15 @@ def delete_draft(
             "UPDATE wims.fire_incidents SET is_archived = TRUE, updated_at = now() WHERE incident_id = :iid"
         ),
         {"iid": incident_id},
+    )
+    _insert_incident_verification_history(
+        db,
+        incident_id=incident_id,
+        actor_user_id=str(encoder_id),
+        previous_status="DRAFT",
+        new_status="DRAFT",
+        notes="Encoder deleted draft",
+        action_label="DELETED_DRAFT",
     )
     db.commit()
     logger.info("Draft deleted (archived) incident %s by encoder %s", incident_id, encoder_id)
@@ -3617,6 +3675,15 @@ def delete_incident(
         ),
         {"iid": incident_id},
     )
+    _insert_incident_verification_history(
+        db,
+        incident_id=incident_id,
+        actor_user_id=str(encoder_id),
+        previous_status=incident[1],
+        new_status=incident[1],
+        notes="Encoder deleted incident",
+        action_label="DELETED_DRAFT",
+    )
     db.commit()
     logger.info("Soft-deleted incident %s by encoder %s", incident_id, encoder_id)
     return {"status": "deleted", "incident_id": incident_id}
@@ -3672,6 +3739,33 @@ def submit_incident_for_review(
         raise HTTPException(
             status_code=409,
             detail=f"Cannot submit incident with status '{current_status}'. Only DRAFT or REJECTED incidents can be submitted.",
+        )
+
+    # Required-field gate — province/district and city/municipality must be set before PENDING
+    required_check = db.execute(
+        text("""
+            SELECT notification_dt, general_category, province_district, city_municipality
+            FROM wims.incident_nonsensitive_details
+            WHERE incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    missing_fields = []
+    if required_check:
+        if not required_check[0]:
+            missing_fields.append("notification_dt (Date of Notification)")
+        if not required_check[1]:
+            missing_fields.append("general_category (Classification)")
+        if not required_check[2]:
+            missing_fields.append("province_district (Province / District)")
+        if not required_check[3]:
+            missing_fields.append("city_municipality (City / Municipality)")
+
+    if missing_fields:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot submit: required fields are missing — {', '.join(missing_fields)}",
         )
 
     # Duplicate detection — skip when force=True or already acknowledged.
@@ -4611,6 +4705,72 @@ def get_incident_diff(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/audit-log")
+def get_encoder_audit_log(
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """Return the current encoder's own action history from incident_verification_history."""
+    encoder_id = str(user["user_id"])
+    where_clauses = [
+        "ivh.target_type = 'OFFICIAL'",
+        "ivh.action_by_user_id = CAST(:encoder_id AS uuid)",
+    ]
+    params: dict[str, Any] = {"encoder_id": encoder_id}
+    if date_from:
+        where_clauses.append("ivh.action_timestamp >= CAST(:date_from AS timestamptz)")
+        params["date_from"] = date_from
+    if date_to:
+        where_clauses.append("ivh.action_timestamp <= CAST(:date_to AS timestamptz)")
+        params["date_to"] = date_to
+    where_sql = " AND ".join(where_clauses)
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                ivh.history_id, ivh.target_id,
+                ivh.action_label, ivh.previous_status, ivh.new_status,
+                ivh.notes, ivh.action_timestamp
+            FROM wims.incident_verification_history ivh
+            WHERE {where_sql}
+            ORDER BY ivh.action_timestamp DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {**params, "limit": limit, "offset": offset},
+    ).fetchall()
+
+    total = db.execute(
+        text(
+            f"SELECT COUNT(*) FROM wims.incident_verification_history ivh WHERE {where_sql}"
+        ),
+        params,
+    ).scalar() or 0
+
+    return {
+        "items": [
+            {
+                "history_id": r[0],
+                "incident_id": r[1],
+                "action_label": r[2],
+                "previous_status": r[3],
+                "new_status": r[4],
+                "notes": r[5],
+                "action_timestamp": r[6].isoformat() if r[6] else None,
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 def _build_audit_log_query(
     *,
     date_from: str | None,
@@ -4638,7 +4798,7 @@ def _build_audit_log_query(
         where_clauses.append("ivh.action_by_user_id = CAST(:validator_id AS uuid)")
         params["validator_id"] = validator_id
     if action:
-        where_clauses.append("ivh.new_status = :action")
+        where_clauses.append("ivh.action_label = :action")
         params["action"] = action
     return " AND ".join(where_clauses), params
 
@@ -4651,7 +4811,7 @@ def get_validator_audit_logs(
     date_to: Optional[str] = None,
     region_id: Optional[int] = None,
     validator_id: Optional[str] = None,
-    action: Optional[str] = None,  # filter by new_status (VERIFIED/REJECTED/PENDING/DRAFT)
+    action: Optional[str] = None,  # filter by action_label (APPROVED/REJECTED/BULK_APPROVED/etc.)
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):

@@ -5,18 +5,18 @@ import { useRouter } from 'next/navigation';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
 import {
   updateRegionalIncident, forceReplaceIncident, createRegionalIncident,
-  checkIncidentDuplicate, submitIncidentForReview,
   type RefDuplicateIncident,
+  ApiRequestError,
 } from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
 import { useUserProfile } from '@/lib/auth';
-import { PH_REGIONS, getProvincesForRegion, getCitiesForProvince, getRegionCode } from '@/lib/ph-regions';
+import { PH_REGIONS, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier } from '@/lib/ph-regions';
 import { Loader2, Save, Shuffle } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import {
   ALL_PROBLEM_OPTIONS, normalizeProblemLabel,
   getTypeOptionsForClassification, getTypeCode,
-  generateReferenceNumberPreview, formatAforRegionCode, formatClassification,
+  generateReferenceNumberPreview, formatClassification,
 } from '@/lib/afor-utils';
 import { DuplicateIncidentModal } from './DuplicateIncidentModal';
 
@@ -251,12 +251,6 @@ export function IncidentForm({
     proceedCallback: () => Promise<void>;
   } | null>(null);
 
-  // Region mismatch modal state
-  const [regionMismatchData, setRegionMismatchData] = useState<{
-    selectedRegionId: number;
-    assignedRegionId: number;
-    continueCallback: () => Promise<void>;
-  } | null>(null);
 
   // ── Derived reference number values ───────────────────────────────────────
 
@@ -266,7 +260,7 @@ export function IncidentForm({
   );
 
   const referenceNumberPreview = useMemo(() => {
-    const regionCode = selectedRegionId ? getRegionCode(selectedRegionId) : '';
+    const regionCode = selectedRegionId ? getAforRegionIdentifier(selectedRegionId) : '';
     return generateReferenceNumberPreview({
       regionCode,
       stationCode: formState.station_code || 'TBA',
@@ -324,6 +318,8 @@ export function IncidentForm({
       .trim();
 
   const resolveRegionId = (): number | null => {
+    // For encoders, their assigned region always wins — prevents submitting to wrong region
+    if (isEncoder && assignedRegionId) return assignedRegionId;
     if (selectedRegionId) return selectedRegionId;
     if (assignedRegionId) return assignedRegionId;
     if (typeof initialData?.region_id === 'number' && initialData.region_id > 0) return initialData.region_id;
@@ -443,7 +439,7 @@ export function IncidentForm({
         const raw = ns.classification_of_involved || ns.general_category || '';
         const legacyMap: Record<string, string> = {
           'Structural': 'STRUCTURAL', 'Non-Structural': 'NON_STRUCTURAL',
-          'Transportation': 'VEHICULAR', 'Vehicular': 'VEHICULAR',
+          'Transportation': 'TRANSPORTATION', 'Vehicular': 'TRANSPORTATION',
           'Wildland': 'WILDLAND',
         };
         return legacyMap[raw] ?? raw;
@@ -460,7 +456,7 @@ export function IncidentForm({
         const rawClass = ns.classification_of_involved || ns.general_category || '';
         const legacyCM: Record<string, string> = {
           'Structural': 'STRUCTURAL', 'Non-Structural': 'NON_STRUCTURAL',
-          'Transportation': 'VEHICULAR', 'Vehicular': 'VEHICULAR', 'Wildland': 'WILDLAND',
+          'Transportation': 'TRANSPORTATION', 'Vehicular': 'TRANSPORTATION', 'Wildland': 'WILDLAND',
         };
         const classification = legacyCM[rawClass] ?? rawClass;
         const opts = getTypeOptionsForClassification(classification);
@@ -721,6 +717,10 @@ export function IncidentForm({
     if (!formState.alarm_level) errors.add('alarm_level');
     if (!formState.classification_of_involved) errors.add('classification_of_involved');
     if (!formState.extent_of_damage) errors.add('extent_of_damage');
+    if (!formState.province_district) errors.add('province_district');
+    if (!formState.city_municipality) errors.add('city_municipality');
+    if (!formState.disposition_prepared_by) errors.add('disposition_prepared_by');
+    if (!formState.disposition_noted_by) errors.add('disposition_noted_by');
     if (!resolveRegionId()) errors.add('region');
     if (!existingIncidentId && (latitude === null || longitude === null)) errors.add('map_location');
     // Reference number dependency: type is required when classification is selected
@@ -740,6 +740,10 @@ export function IncidentForm({
         extent_of_damage: 'Extent of Damage',
         type_of_involved_general_category: 'Type of Involved (required for reference number)',
         region: 'Region',
+        province_district: 'Province / District',
+        city_municipality: 'City / Municipality',
+        disposition_prepared_by: 'Prepared by (Officer)',
+        disposition_noted_by: 'Noted by (Officer)',
         map_location: 'Fire Scene Location on Map',
       };
       const firstKey = [...errors][0];
@@ -753,19 +757,6 @@ export function IncidentForm({
     setFieldErrors(new Set());
 
     const effectiveRegionId = resolveRegionId()!;
-
-    // Check region mismatch for encoders
-    if (isEncoder && assignedRegionId && effectiveRegionId !== assignedRegionId) {
-      setRegionMismatchData({
-        selectedRegionId: effectiveRegionId,
-        assignedRegionId,
-        continueCallback: async () => {
-          setRegionMismatchData(null);
-          await doCreateIncident(effectiveRegionId);
-        },
-      });
-      return;
-    }
 
     await doCreateIncident(effectiveRegionId);
   };
@@ -998,7 +989,19 @@ export function IncidentForm({
       }
     } catch (err: unknown) {
       console.error('Submission failed', err);
-      showToast(`Submission failed: ${(err as Error).message}`);
+      const isRegionMismatch =
+        (err instanceof ApiRequestError && err.status === 403) ||
+        (err instanceof Error && err.message.includes('REGION_MISMATCH'));
+      if (isRegionMismatch) {
+        setFieldErrors((prev) => new Set([...prev, 'region']));
+        showToast('Region mismatch — this incident\'s region doesn\'t match your assigned region. Contact your administrator if you believe this is an error.');
+        setTimeout(() => {
+          const regionEl = document.querySelector('[data-field-error="true"]');
+          regionEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      } else {
+        showToast(`Submission failed: ${(err as Error).message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -1056,7 +1059,7 @@ export function IncidentForm({
       alarm_level: pick(['First Alarm', 'Second Alarm', 'Third Alarm', 'General Alarm']),
       time_returned_to_base: rtime(),
       total_gas_consumed_liters: String((Math.random() * 200 + 50).toFixed(1)),
-      classification_of_involved: pick(['STRUCTURAL', 'NON_STRUCTURAL', 'VEHICULAR']),
+      classification_of_involved: pick(['STRUCTURAL', 'NON_STRUCTURAL', 'TRANSPORTATION']),
       type_of_involved_general_category: pick(['Single-Family Residential', 'Multi-Storey Residential', 'Commercial Building', 'Warehouse', 'Factory']),
       owner_name: pick(['Juan Dela Cruz', 'Maria Santos', 'ABC Corporation', 'N/A']),
       establishment_name: pick(['Dela Cruz Residence', 'Santos Apartment', 'ABC Bodega', 'N/A']),
@@ -1255,10 +1258,10 @@ export function IncidentForm({
               )}
             </div>
 
-            <div>
-              <label className={labelCls}>Province / District</label>
+            <div data-field-error={fieldErrors.has('province_district') ? 'true' : undefined}>
+              <label className={labelCls}>Province / District{reqMark}</label>
               <select
-                className={inputCls}
+                className={errCls('province_district')}
                 value={formState.province_district}
                 disabled={!selectedRegionId}
                 onChange={(e) => {
@@ -1272,14 +1275,14 @@ export function IncidentForm({
               </select>
             </div>
 
-            <div>
-              <label className={labelCls}>City / Municipality</label>
+            <div data-field-error={fieldErrors.has('city_municipality') ? 'true' : undefined}>
+              <label className={labelCls}>City / Municipality{reqMark}</label>
               {(() => {
                 const effectiveRegionId = getEffectiveRegionId();
                 const cities = getCitiesForProvince(effectiveRegionId, formState.province_district);
                 return cities.length > 0 ? (
                   <select
-                    className={inputCls}
+                    className={errCls('city_municipality')}
                     value={formState.city_municipality}
                     onChange={(e) => setFormState((prev) => ({ ...prev, city_municipality: e.target.value }))}
                   >
@@ -1291,7 +1294,7 @@ export function IncidentForm({
                 ) : (
                   <input
                     type="text"
-                    className={inputCls}
+                    className={errCls('city_municipality')}
                     placeholder="Type city or municipality name"
                     value={formState.city_municipality}
                     onChange={(e) => setFormState((prev) => ({ ...prev, city_municipality: e.target.value }))}
@@ -1403,10 +1406,10 @@ export function IncidentForm({
                 onChange={handleClassificationChange}
               >
                 <option value="">Select Classification</option>
-                <option value="STRUCTURAL">Structural Fire</option>
-                <option value="NON_STRUCTURAL">Non-Structural Fire</option>
-                <option value="WILDLAND">Wildland Fire</option>
-                <option value="VEHICULAR">Transportation / Vehicular Fire</option>
+                <option value="STRUCTURAL">Structural</option>
+                <option value="NON_STRUCTURAL">Non-Structural</option>
+                <option value="WILDLAND">Wildland</option>
+                <option value="TRANSPORTATION">Transportation</option>
               </select>
             </div>
 
@@ -1805,13 +1808,13 @@ export function IncidentForm({
           <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">L. Disposition</h3>
           <textarea name="disposition" rows={4} className={inputCls} placeholder="As of this date, no complaint has been filed..." value={formState.disposition} onChange={handleChange} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>Prepared by (Shift-in-Charge)</label>
-              <input type="text" name="disposition_prepared_by" className={inputCls} value={formState.disposition_prepared_by} onChange={handleChange} />
+            <div data-field-error={fieldErrors.has('disposition_prepared_by') ? 'true' : undefined}>
+              <label className={labelCls}>Prepared by (Shift-in-Charge){reqMark}</label>
+              <input type="text" name="disposition_prepared_by" className={errCls('disposition_prepared_by')} value={formState.disposition_prepared_by} onChange={handleChange} />
             </div>
-            <div>
-              <label className={labelCls}>Noted by (Engine Company Commander)</label>
-              <input type="text" name="disposition_noted_by" className={inputCls} value={formState.disposition_noted_by} onChange={handleChange} />
+            <div data-field-error={fieldErrors.has('disposition_noted_by') ? 'true' : undefined}>
+              <label className={labelCls}>Noted by (Engine Company Commander){reqMark}</label>
+              <input type="text" name="disposition_noted_by" className={errCls('disposition_noted_by')} value={formState.disposition_noted_by} onChange={handleChange} />
             </div>
           </div>
         </section>
@@ -1956,37 +1959,6 @@ export function IncidentForm({
         />
       )}
 
-      {/* ── Region Mismatch Modal ── */}
-      {regionMismatchData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white rounded-lg shadow-2xl p-6 max-w-sm">
-            <h2 className="text-xl font-bold text-red-900 mb-4">Region Mismatch</h2>
-            <p className="text-gray-700 mb-6">
-              Your assigned region does not match the incident&apos;s location.
-            </p>
-            <p className="text-sm text-gray-600 mb-6">
-              Assigned Region: <span className="font-semibold">{PH_REGIONS.find((r) => r.regionId === regionMismatchData.assignedRegionId)?.regionName}</span>
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setRegionMismatchData(null)}
-                className="flex-1 px-4 py-2 bg-gray-300 text-gray-900 rounded font-semibold hover:bg-gray-400"
-              >
-                Continue Editing
-              </button>
-              <button
-                onClick={() => {
-                  setRegionMismatchData(null);
-                  router.push('/dashboard/regional');
-                }}
-                className="flex-1 px-4 py-2 bg-red-600 text-white rounded font-semibold hover:bg-red-700"
-              >
-                Back to Regional
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

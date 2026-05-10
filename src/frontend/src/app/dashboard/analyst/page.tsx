@@ -26,6 +26,7 @@ import {
 } from '@/lib/api';
 import { TrendCharts } from '@/components/analytics/TrendCharts';
 import { RefreshCw, Download } from 'lucide-react';
+import { getShortRegionName } from '@/lib/ph-regions';
 
 const HeatmapViewer = dynamic(
   () => import('@/components/analytics/HeatmapViewer').then((m) => m.HeatmapViewer),
@@ -665,7 +666,7 @@ export default function AnalystDashboardPage() {
                   <div>
                     {responseTime.map((d) => (
                       <div key={d.region_id} className="py-2 text-sm border-b" style={{ borderColor: 'var(--border-color)' }}>
-                        <div className="font-medium">Region {d.region_id}</div>
+                        <div className="font-medium">{getShortRegionName(d.region_id)}</div>
                         <div className="text-gray-500">
                           Avg: <span className="font-bold text-gray-700">{d.avg_response_time}</span> min
                           &nbsp;|&nbsp; Min: {d.min_response_time} / Max: {d.max_response_time}
@@ -697,7 +698,7 @@ export default function AnalystDashboardPage() {
                   <tbody>
                     {compareRegions.map((r) => (
                       <tr key={r.region_id} className="border-b" style={{ borderColor: 'var(--border-color)' }}>
-                        <td className="py-2">Region {r.region_name}</td>
+                        <td className="py-2">{getShortRegionName(r.region_id)}</td>
                         <td className="text-right py-2 font-bold">{r.total_incidents}</td>
                         <td className="text-right py-2">{r.avg_response_time ?? '—'}</td>
                         <td className="text-right py-2">{r.top_type ?? '—'}</td>

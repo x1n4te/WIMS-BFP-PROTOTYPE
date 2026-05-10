@@ -151,6 +151,12 @@ export default function RegionalDashboardPage() {
             Refresh
           </button>
           <Link
+            href="/dashboard/regional/audit"
+            className="card flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors hover:bg-gray-50"
+          >
+            Activity Log
+          </Link>
+          <Link
             href="/afor/import"
             className="card flex items-center gap-2 px-3 py-2 text-sm font-medium text-white transition-colors"
             style={{ backgroundColor: 'var(--bfp-maroon)' }}

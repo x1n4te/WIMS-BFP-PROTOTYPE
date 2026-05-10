@@ -18,6 +18,7 @@ import {
 import dynamic from 'next/dynamic';
 import { UpdateRequestDiffPanel } from '@/components/UpdateRequestDiffPanel';
 import type { Incident } from '@/lib/edgeFunctions';
+import { getShortRegionName } from '@/lib/ph-regions';
 
 // Read-only map zoomed in on the pinned coordinates (M4 Bug 8-B/8-C)
 const IncidentLocationMap = dynamic(
@@ -240,6 +241,8 @@ export default function RegionalIncidentDetailPage() {
   const [duplicateFound, setDuplicateFound] = useState<{ matchedIncidentId: number } | null>(null);
   const [pendingDuplicateFound, setPendingDuplicateFound] = useState<{ matchedIncidentId: number } | null>(null);
   const [staleAlert, setStaleAlert] = useState(false);
+  const [showMissingFieldsModal, setShowMissingFieldsModal] = useState(false);
+  const [missingFieldsList, setMissingFieldsList] = useState<string[]>([]);
 
   const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
   const isValidator = role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR';
@@ -347,6 +350,28 @@ export default function RegionalIncidentDetailPage() {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleSubmitClick = () => {
+    if (!detail) return;
+    const ns = (detail.nonsensitive as Record<string, unknown>) ?? {};
+    const sen = (detail.sensitive as Record<string, unknown>) ?? {};
+    const missing: string[] = [];
+    if (!ns.notification_dt) missing.push('Date and Time of Fire Notification Received');
+    if (!ns.general_category) missing.push('Classification of Involved');
+    if (ns.general_category && !detail.incident_type_code) missing.push('Type of Involved (e.g. APT, Daycare)');
+    if (!detail.region_id) missing.push('Region');
+    if (!ns.province_district) missing.push('Province / District');
+    if (!ns.city_municipality) missing.push('City / Municipality');
+    if (!ns.extent_of_damage) missing.push('Extent of Damage');
+    if (!sen.prepared_by_officer && !sen.disposition_prepared_by) missing.push('Prepared by (Officer)');
+    if (!sen.noted_by_officer && !sen.disposition_noted_by) missing.push('Noted by (Officer)');
+    if (missing.length > 0) {
+      setMissingFieldsList(missing);
+      setShowMissingFieldsModal(true);
+      return;
+    }
+    void handleSubmit({});
   };
 
   const handleUnpend = async () => {
@@ -720,6 +745,40 @@ export default function RegionalIncidentDetailPage() {
         </div>
       )}
 
+      {/* Missing required fields modal — shown when encoder tries to submit an incomplete draft */}
+      {showMissingFieldsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <h2 className="text-lg font-bold text-red-900">Incomplete Incident Report</h2>
+            <p className="text-sm text-gray-600">
+              The following required fields are missing. Please fill them in before submitting.
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-sm text-gray-800">
+              {missingFieldsList.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowMissingFieldsModal(false)}
+                className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  setShowMissingFieldsModal(false);
+                  setIsEditing(true);
+                }}
+                className="px-4 py-2 text-sm font-semibold text-white bg-red-800 rounded-lg hover:bg-red-700"
+              >
+                Continue Editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <Link
           href={isValidator ? '/dashboard/validator' : '/dashboard/regional'}
@@ -768,7 +827,7 @@ export default function RegionalIncidentDetailPage() {
                 {/* Submit / Resubmit — only for DRAFT or REJECTED */}
                 {(detail.verification_status === 'DRAFT' || detail.verification_status === 'REJECTED') && (
                   <button
-                    onClick={() => void handleSubmit({})}
+                    onClick={handleSubmitClick}
                     disabled={actionLoading}
                     className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium bg-red-800 text-white hover:bg-red-700 disabled:opacity-50"
                   >
@@ -883,7 +942,7 @@ export default function RegionalIncidentDetailPage() {
                 {detail.verification_status !== 'VERIFIED' || !detail.reference_number
                   ? `Incident #${detail.incident_id} · `
                   : ''}
-                Region {detail.region_id}
+                {getShortRegionName(detail.region_id)}
                 {detail.created_at && <>{' · '}Created {new Date(detail.created_at).toLocaleString()}</>}
               </p>
             </div>

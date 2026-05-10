@@ -57,18 +57,38 @@ def upload_incident_bundle(
     if not isinstance(incidents, list) or len(incidents) == 0:
         raise HTTPException(status_code=400, detail="No incidents provided")
 
-    region_id_raw = body.get("region_id") or user.get("assigned_region_id")
+    user_id = user["user_id"]
+    user_role = user.get("role", "")
+
+    # Resolve the user's assigned region from the DB (not available in the base JWT payload)
+    assigned_row = db.execute(
+        text("SELECT assigned_region_id FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
+        {"uid": user_id},
+    ).fetchone()
+    assigned_region_id = assigned_row[0] if assigned_row else None
+
+    region_id_raw = body.get("region_id")
     try:
         region_id = int(region_id_raw)
     except (TypeError, ValueError):
-        region_row = db.execute(
-            text("SELECT region_id FROM wims.ref_regions LIMIT 1")
-        ).fetchone()
-        if not region_row:
-            raise HTTPException(status_code=500, detail="No region available")
-        region_id = int(region_row[0])
+        # Fall back to assigned region (encoder) or first available region
+        if assigned_region_id:
+            region_id = int(assigned_region_id)
+        else:
+            region_row = db.execute(
+                text("SELECT region_id FROM wims.ref_regions LIMIT 1")
+            ).fetchone()
+            if not region_row:
+                raise HTTPException(status_code=500, detail="No region available")
+            region_id = int(region_row[0])
 
-    user_id = user["user_id"]
+    # Enforce REGIONAL_ENCODER can only submit for their assigned region
+    if user_role in ("REGIONAL_ENCODER", "ENCODER") and assigned_region_id is not None:
+        if region_id != int(assigned_region_id):
+            raise HTTPException(
+                status_code=403,
+                detail="REGION_MISMATCH: You can only submit incidents for your assigned region.",
+            )
 
     batch_row = db.execute(
         text(

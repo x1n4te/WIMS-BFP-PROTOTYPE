@@ -10,7 +10,7 @@ import { apiFetch, ApiRequestError, fetchValidatorStats } from "@/lib/api";
 import { IncidentDiffPanel } from "@/components/IncidentDiffPanel";
 import { UpdateRequestDiffPanel } from "@/components/UpdateRequestDiffPanel";
 import { formatClassification } from "@/lib/afor-utils";
-import { PH_REGIONS } from "@/lib/ph-regions";
+import { getShortRegionName } from "@/lib/ph-regions";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,14 +75,7 @@ const STATUS_COLORS: Record<string, string> = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const PLAIN_CODES = new Set(["NCR", "CAR", "BARMM", "NIR"]);
-
-function regionDisplay(regionId: number): string {
-  const region = PH_REGIONS.find((r) => r.regionId === regionId);
-  if (!region) return `Region ${regionId}`;
-  const code = region.regionCode;
-  return PLAIN_CODES.has(code) ? code : `Region ${code}`;
-}
+const regionDisplay = getShortRegionName;
 
 function formatCallReceived(dt: string | null): string {
   if (!dt) return "—";
@@ -147,6 +140,8 @@ export default function ValidatorDashboard() {
   // Validator duplicate resolution state
   const [validatorDupTarget, setValidatorDupTarget] = useState<ValidatorIncident | null>(null);
   const [validatorDupMatchedId, setValidatorDupMatchedId] = useState<number | null>(null);
+  const [newIncidentBanner, setNewIncidentBanner] = useState(false);
+  const lastKnownTotal = useRef<number | null>(null);
 
   const togglePending = (inc: ValidatorIncident, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -333,6 +328,8 @@ export default function ValidatorDashboard() {
       );
       setIncidents(data.items);
       setTotal(data.total);
+      lastKnownTotal.current = data.total;
+      setNewIncidentBanner(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load queue");
     } finally {
@@ -350,6 +347,25 @@ export default function ValidatorDashboard() {
       .catch(() => {
         /* non-critical */
       });
+  }, []);
+
+  // Background poll: check for new pending incidents every 30 seconds
+  useEffect(() => {
+    const checkForNewIncidents = async () => {
+      try {
+        const data: QueueResponse = await apiFetch(
+          `/regional/validator/incidents?limit=1&offset=0`
+        );
+        if (lastKnownTotal.current !== null && data.total > lastKnownTotal.current) {
+          setNewIncidentBanner(true);
+        }
+        lastKnownTotal.current = data.total;
+      } catch {
+        /* non-critical */
+      }
+    };
+    const intervalId = setInterval(checkForNewIncidents, 30_000);
+    return () => clearInterval(intervalId);
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -443,6 +459,18 @@ export default function ValidatorDashboard() {
         Encoder-submitted incidents from all regions awaiting review.
       </p>
 
+      {newIncidentBanner && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <span>New incidents have been submitted. Refresh to see the latest queue.</span>
+          <button
+            onClick={fetchQueue}
+            className="ml-4 rounded bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700"
+          >
+            Refresh now
+          </button>
+        </div>
+      )}
+
       {/* ── Summary cards ── */}
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
@@ -458,9 +486,11 @@ export default function ValidatorDashboard() {
               {stats.total_verified}
             </p>
           </div>
-          {(["STRUCTURAL", "NON_STRUCTURAL", "VEHICULAR"] as const).map(
+          {(["STRUCTURAL", "NON_STRUCTURAL", "TRANSPORTATION"] as const).map(
             (cat) => {
-              const entry = stats.by_category.find((c) => c.category === cat);
+              const entry = stats.by_category.find(
+                (c) => c.category === cat || (cat === "TRANSPORTATION" && c.category === "VEHICULAR")
+              );
               return (
                 <div
                   key={cat}

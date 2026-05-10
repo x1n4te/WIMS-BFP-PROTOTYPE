@@ -11,11 +11,28 @@ $password = "Password123!"
 
 $roles = @("REGIONAL_ENCODER", "NATIONAL_VALIDATOR", "ANALYST", "NATIONAL_ANALYST", "SYSTEM_ADMIN")
 $users = @(
-    @{ username = "encoder_test"; email = "encoder@bfp.gov.ph"; role = "REGIONAL_ENCODER"; region = 1 },
-    @{ username = "validator_test"; email = "validator@bfp.gov.ph"; role = "NATIONAL_VALIDATOR"; region = 1 },
-    @{ username = "analyst_test"; email = "analyst@bfp.gov.ph"; role = "NATIONAL_ANALYST"; region = $null },
-    @{ username = "analyst1_test"; email = "analyst1_test@gmail.com"; role = "NATIONAL_ANALYST"; region = $null },
-    @{ username = "admin_test"; email = "admin@bfp.gov.ph"; role = "SYSTEM_ADMIN"; region = $null }
+    @{ username = "encoder_test";  email = "encoder@bfp.gov.ph";       role = "REGIONAL_ENCODER";   region = 1 },
+    @{ username = "encoder_r02";   email = "encoder_r02@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 2 },
+    @{ username = "encoder_r03";   email = "encoder_r03@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 3 },
+    @{ username = "encoder_r04";   email = "encoder_r04@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 4 },
+    @{ username = "encoder_r05";   email = "encoder_r05@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 5 },
+    @{ username = "encoder_r06";   email = "encoder_r06@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 6 },
+    @{ username = "encoder_r07";   email = "encoder_r07@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 7 },
+    @{ username = "encoder_r08";   email = "encoder_r08@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 8 },
+    @{ username = "encoder_r09";   email = "encoder_r09@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 9 },
+    @{ username = "encoder_r10";   email = "encoder_r10@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 10 },
+    @{ username = "encoder_r11";   email = "encoder_r11@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 11 },
+    @{ username = "encoder_r12";   email = "encoder_r12@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 12 },
+    @{ username = "encoder_r13";   email = "encoder_r13@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 13 },
+    @{ username = "encoder_r14";   email = "encoder_r14@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 14 },
+    @{ username = "encoder_r15";   email = "encoder_r15@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 15 },
+    @{ username = "encoder_r16";   email = "encoder_r16@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 16 },
+    @{ username = "encoder_r17";   email = "encoder_r17@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 17 },
+    @{ username = "encoder_r18";   email = "encoder_r18@bfp.gov.ph";   role = "REGIONAL_ENCODER";   region = 18 },
+    @{ username = "validator_test"; email = "validator@bfp.gov.ph";    role = "NATIONAL_VALIDATOR"; region = 1 },
+    @{ username = "analyst_test";  email = "analyst@bfp.gov.ph";       role = "NATIONAL_ANALYST";   region = $null },
+    @{ username = "analyst1_test"; email = "analyst1_test@gmail.com";  role = "NATIONAL_ANALYST";   region = $null },
+    @{ username = "admin_test";    email = "admin@bfp.gov.ph";         role = "SYSTEM_ADMIN";       region = $null }
 )
 
 Write-Host "Waiting for keycloak..."

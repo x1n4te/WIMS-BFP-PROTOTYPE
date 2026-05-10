@@ -79,23 +79,15 @@ export function UpdateRequestDiffPanel({ updateIncidentId, originalIncidentId }:
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     Promise.all([
       fetchRegionalIncident(originalIncidentId),
       fetchRegionalIncident(updateIncidentId),
     ])
       .then(([orig, upd]) => {
-        if (!cancelled) {
-          setOriginal(orig);
-          setUpdate(upd);
-        }
+        if (!cancelled) { setOriginal(orig); setUpdate(upd); setLoading(false); }
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load incidents');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load incidents'); setLoading(false); }
       });
     return () => { cancelled = true; };
   }, [originalIncidentId, updateIncidentId]);
