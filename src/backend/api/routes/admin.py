@@ -34,6 +34,49 @@ logger = logging.getLogger("wims.admin")
 router = APIRouter(tags=["admin"])
 
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/app/storage/backups"))
+BACKUP_MAX_FILES = int(os.environ.get("BACKUP_MAX_FILES", "100"))
+_BACKUP_DIR_READY = False
+
+
+def _ensure_backup_dir() -> None:
+    """Create backup directory lazily once per process."""
+    global _BACKUP_DIR_READY
+    if _BACKUP_DIR_READY:
+        return
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    _BACKUP_DIR_READY = True
+
+
+def _apply_backup_retention() -> None:
+    """Delete oldest backups when count exceeds BACKUP_MAX_FILES."""
+    if BACKUP_MAX_FILES <= 0:
+        return
+
+    def _mtime(path: Path) -> float:
+        try:
+            return float(path.stat().st_mtime)
+        except Exception:
+            # Be defensive with mocked or transient fs states.
+            return 0.0
+
+    backups: list[Path] = []
+    try:
+        # Use os.scandir to avoid pathlib's internal is_dir/stat checks.
+        with os.scandir(BACKUP_DIR) as entries:
+            for entry in entries:
+                if entry.is_file() and re.match(r"^wims_\d{8}_\d{6}\.sql\.enc$", entry.name):
+                    backups.append(BACKUP_DIR / entry.name)
+    except FileNotFoundError:
+        return
+
+    backups.sort(key=_mtime, reverse=True)
+    stale = backups[BACKUP_MAX_FILES:]
+    for backup_path in stale:
+        try:
+            backup_path.unlink()
+        except FileNotFoundError:
+            # Another worker/process may have already removed it.
+            continue
 
 
 # ---------------------------------------------------------------------------
@@ -746,7 +789,7 @@ async def trigger_backup(
     db: Session = Depends(get_db_with_rls),
 ):
     """Trigger a pg_dump backup of the wims database."""
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_backup_dir()
 
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     filename = f"wims_{timestamp}.sql"
@@ -821,7 +864,12 @@ async def trigger_backup(
         )
 
     size_bytes = encrypted_path.stat().st_size
-    created_at = datetime.utcfromtimestamp(encrypted_path.stat().st_mtime).isoformat()
+    try:
+        created_ts = float(encrypted_path.stat().st_mtime)
+        created_at = datetime.utcfromtimestamp(created_ts).isoformat()
+    except Exception:
+        created_at = datetime.utcnow().isoformat()
+    _apply_backup_retention()
 
     log_system_audit(
         db=db,
@@ -845,7 +893,7 @@ async def list_backups(
     current_user: dict = Depends(get_system_admin),
 ):
     """List all available backup files sorted newest first."""
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_backup_dir()
 
     files = []
     for f in BACKUP_DIR.glob("wims_*.sql.enc"):
@@ -868,6 +916,8 @@ async def download_backup(
     current_user: dict = Depends(get_system_admin),
 ):
     """Download a specific backup file."""
+    _ensure_backup_dir()
+
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
