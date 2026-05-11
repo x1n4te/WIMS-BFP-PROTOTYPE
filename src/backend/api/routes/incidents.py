@@ -69,7 +69,7 @@ def upload_incident_bundle(
     try:
         region_id = int(region_id_raw)
     except (TypeError, ValueError):
-# Fall back to assigned region (encoder) or first available region
+        # Fall back to assigned region (encoder) or first available region
         if assigned_region_id:
             region_id = int(assigned_region_id)
         else:

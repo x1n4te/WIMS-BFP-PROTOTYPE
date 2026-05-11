@@ -18,6 +18,7 @@ Usage
     if matched_id:
         # duplicate found
 """
+
 from __future__ import annotations
 
 from sqlalchemy import text
@@ -154,14 +155,10 @@ def check_for_duplicate(
     }
 
     if incident_type_code:
-        cat_conditions.append(
-            "(:type_code IS NOT NULL AND fi.incident_type_code = :type_code)"
-        )
+        cat_conditions.append("(:type_code IS NOT NULL AND fi.incident_type_code = :type_code)")
         fallback_params["type_code"] = incident_type_code
     if general_category:
-        cat_conditions.append(
-            "(:gen_cat IS NOT NULL AND nd.general_category = :gen_cat)"
-        )
+        cat_conditions.append("(:gen_cat IS NOT NULL AND nd.general_category = :gen_cat)")
         fallback_params["gen_cat"] = general_category
 
     cat_sql = " OR ".join(cat_conditions)

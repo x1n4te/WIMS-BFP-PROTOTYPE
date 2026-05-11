@@ -1590,9 +1590,7 @@ def _commit_wildland_afor_row(
         )
 
 
-def _extract_row_match_fields(
-    row_data: dict[str, Any], form_kind: AforFormKind
-) -> dict[str, Any]:
+def _extract_row_match_fields(row_data: dict[str, Any], form_kind: AforFormKind) -> dict[str, Any]:
     """Extract the fields used for duplicate matching from one parsed row.
 
     Returns a dict with: alarm_level, general_category, notification_dt (date), fire_station_name.
@@ -1836,7 +1834,8 @@ async def commit_afor_import(
                     "alarm_level": ns_merge.get("alarm_level", "") or "",
                     "general_category": _normalize_general_category(
                         ns_merge.get("general_category", "") or ""
-                    ) or "",
+                    )
+                    or "",
                     "sub_category": ns_merge.get("sub_category", "") or "",
                     "fire_station_name": ns_merge.get("fire_station_name", "") or "",
                     "structures_affected": ns_merge.get("structures_affected"),
@@ -1846,9 +1845,7 @@ async def commit_afor_import(
                 },
             )
             db.execute(
-                text(
-                    "UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"
-                ),
+                text("UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"),
                 {"iid": existing_id},
             )
             incident_ids.append(existing_id)
@@ -2255,17 +2252,20 @@ def list_encoder_drafts(
         ),
         {"eid": str(encoder_id), "limit": limit, "offset": offset},
     ).fetchall()
-    total = db.execute(
-        text(
-            """
+    total = (
+        db.execute(
+            text(
+                """
             SELECT COUNT(*) FROM wims.fire_incidents
             WHERE encoder_id = CAST(:eid AS uuid)
               AND verification_status = 'DRAFT'
               AND is_archived = FALSE
             """
-        ),
-        {"eid": str(encoder_id)},
-    ).scalar() or 0
+            ),
+            {"eid": str(encoder_id)},
+        ).scalar()
+        or 0
+    )
     return {
         "items": [
             {
@@ -2734,8 +2734,20 @@ def get_regional_stats(
 # CRUD — Direct Incident Create / Update / Delete
 # ---------------------------------------------------------------------------
 
-_AFOR_MONTH_CODES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+_AFOR_MONTH_CODES = [
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+]
 
 
 _REGION_CODE_TO_AFOR: dict[str, str] = {
@@ -2780,7 +2792,11 @@ def _generate_reference_number(
     rgn_code = _REGION_CODE_TO_AFOR.get(raw_code, f"RGN-{raw_code}")
 
     try:
-        dt = datetime.fromisoformat(str(notification_dt).replace("Z", "+00:00")) if notification_dt else datetime.now()
+        dt = (
+            datetime.fromisoformat(str(notification_dt).replace("Z", "+00:00"))
+            if notification_dt
+            else datetime.now()
+        )
     except (ValueError, TypeError):
         dt = datetime.now()
 
@@ -2799,7 +2815,9 @@ def _generate_reference_number(
         """),
     ).fetchone()
     if not seq_row:
-        raise RuntimeError("reference_sequence row id=0 is missing — cannot generate reference number")
+        raise RuntimeError(
+            "reference_sequence row id=0 is missing — cannot generate reference number"
+        )
     seq = int(seq_row[0])
     return f"AFOR-{rgn_code}-{station}-{incident_type_code}-{month}-{year}-{seq:04d}"
 
@@ -3125,14 +3143,33 @@ def _apply_incident_field_updates(
     )
 
     ns_fields = {
-        "notification_dt", "alarm_level", "general_category", "sub_category",
-        "specific_type", "occupancy_type", "city_id", "barangay_id",
-        "province_district", "city_municipality",
-        "distance_from_station_km", "estimated_damage_php",
-        "civilian_injured", "civilian_deaths", "firefighter_injured", "firefighter_deaths",
-        "families_affected", "structures_affected", "households_affected", "individuals_affected",
-        "responder_type", "fire_origin", "extent_of_damage", "stage_of_fire",
-        "fire_station_name", "total_response_time_minutes", "recommendations",
+        "notification_dt",
+        "alarm_level",
+        "general_category",
+        "sub_category",
+        "specific_type",
+        "occupancy_type",
+        "city_id",
+        "barangay_id",
+        "province_district",
+        "city_municipality",
+        "distance_from_station_km",
+        "estimated_damage_php",
+        "civilian_injured",
+        "civilian_deaths",
+        "firefighter_injured",
+        "firefighter_deaths",
+        "families_affected",
+        "structures_affected",
+        "households_affected",
+        "individuals_affected",
+        "responder_type",
+        "fire_origin",
+        "extent_of_damage",
+        "stage_of_fire",
+        "fire_station_name",
+        "total_response_time_minutes",
+        "recommendations",
         "station_code",
     }
     ns_updates: list[str] = []
@@ -3158,13 +3195,21 @@ def _apply_incident_field_updates(
     new_type_code = (getattr(body, "incident_type_code", None) or "").strip().upper() or None
     if new_type_code:
         db.execute(
-            text("UPDATE wims.fire_incidents SET incident_type_code = :tc WHERE incident_id = :iid"),
+            text(
+                "UPDATE wims.fire_incidents SET incident_type_code = :tc WHERE incident_id = :iid"
+            ),
             {"tc": new_type_code, "iid": incident_id},
         )
 
     sd_fields = {
-        "street_address", "landmark", "narrative_report", "establishment_name",
-        "receiver_name", "prepared_by_officer", "noted_by_officer", "remarks",
+        "street_address",
+        "landmark",
+        "narrative_report",
+        "establishment_name",
+        "receiver_name",
+        "prepared_by_officer",
+        "noted_by_officer",
+        "remarks",
     }
     pii_fields = ["caller_name", "caller_number", "owner_name", "occupant_name"]
     sd_updates: list[str] = []
@@ -3203,9 +3248,7 @@ def _apply_incident_field_updates(
                 existing_pii[field] = val
         try:
             sp = _get_security_provider()
-            nonce_b64, ct_b64 = sp.encrypt_json(
-                existing_pii, f"incident_id:{incident_id}".encode()
-            )
+            nonce_b64, ct_b64 = sp.encrypt_json(existing_pii, f"incident_id:{incident_id}".encode())
             sd_updates.extend(["pii_blob_enc = :pii_blob", "encryption_iv = :enc_iv"])
             sd_params["pii_blob"] = ct_b64
             sd_params["enc_iv"] = nonce_b64
@@ -3275,9 +3318,7 @@ def _apply_incident_field_updates(
         )
     else:
         db.execute(
-            text(
-                "UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"
-            ),
+            text("UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"),
             {"iid": incident_id},
         )
 
@@ -3322,7 +3363,7 @@ def update_incident(
             detail=f"Cannot edit incident with status '{incident[1]}'. Only DRAFT or REJECTED incidents can be edited.",
         )
 
-# Apply field updates (extracted helper — shared with /incidents/draft/{id})
+    # Apply field updates (extracted helper — shared with /incidents/draft/{id})
     _apply_incident_field_updates(db, incident_id, body)
 
     # M4-B Issue #4: log every encoder edit to the audit trail
@@ -3709,7 +3750,9 @@ def submit_incident_for_review(
             fire_date_str: str | None = None
             if geo_meta[0]:
                 notif_dt = geo_meta[0]
-                fire_date_str = str(notif_dt.date()) if hasattr(notif_dt, "date") else str(notif_dt)[:10]
+                fire_date_str = (
+                    str(notif_dt.date()) if hasattr(notif_dt, "date") else str(notif_dt)[:10]
+                )
 
             # Check against VERIFIED incidents
             verified_dup = check_for_duplicate(
@@ -3725,10 +3768,15 @@ def submit_incident_for_review(
                 exclude_statuses=("DRAFT", "REJECTED", "REPLACED"),
             )
             if verified_dup:
-                matched_status = db.execute(
-                    text("SELECT verification_status FROM wims.fire_incidents WHERE incident_id = :iid"),
-                    {"iid": verified_dup},
-                ).scalar() or "UNKNOWN"
+                matched_status = (
+                    db.execute(
+                        text(
+                            "SELECT verification_status FROM wims.fire_incidents WHERE incident_id = :iid"
+                        ),
+                        {"iid": verified_dup},
+                    ).scalar()
+                    or "UNKNOWN"
+                )
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -3757,7 +3805,11 @@ def submit_incident_for_review(
             if geo_meta:
                 ack_date_str: str | None = None
                 if geo_meta[0]:
-                    ack_date_str = str(geo_meta[0].date()) if hasattr(geo_meta[0], "date") else str(geo_meta[0])[:10]
+                    ack_date_str = (
+                        str(geo_meta[0].date())
+                        if hasattr(geo_meta[0], "date")
+                        else str(geo_meta[0])[:10]
+                    )
                 matched_duplicate_id = check_for_duplicate(
                     db,
                     incident_id=incident_id,
@@ -4091,7 +4143,7 @@ def verify_incident(
             detail=f"Incident is already in status '{current_status}'",
         )
 
-# --- 4a. Prevent invalid state transitions ---
+    # --- 4a. Prevent invalid state transitions ---
     if current_status == "VERIFIED" and action == "reject":
         raise HTTPException(
             status_code=403,
@@ -4129,7 +4181,9 @@ def verify_incident(
         if geo_row and geo_row[7] is None:
             verify_date_str: str | None = None
             if geo_row[2]:
-                verify_date_str = str(geo_row[2].date()) if hasattr(geo_row[2], "date") else str(geo_row[2])[:10]
+                verify_date_str = (
+                    str(geo_row[2].date()) if hasattr(geo_row[2], "date") else str(geo_row[2])[:10]
+                )
             dup_id = check_for_duplicate(
                 db,
                 incident_id=incident_id,
@@ -4408,13 +4462,23 @@ def bulk_approve_incidents(
 
     try:
         for row in rows:
-            iid, prev_status, _, created_at, notif_dt, gen_cat, type_code, region_id, alarm, lat, lon = row
+            (
+                iid,
+                prev_status,
+                _,
+                created_at,
+                notif_dt,
+                gen_cat,
+                type_code,
+                region_id,
+                alarm,
+                lat,
+                lon,
+            ) = row
 
             # Check for duplicates including recently-VERIFIED in the last 60 seconds.
             # fire_date_str may be None — check_for_duplicate handles that with spatial-only match.
-            fire_date_str = (
-                str(notif_dt.date()) if notif_dt and hasattr(notif_dt, "date") else None
-            )
+            fire_date_str = str(notif_dt.date()) if notif_dt and hasattr(notif_dt, "date") else None
             dup_id = check_for_duplicate(
                 db,
                 incident_id=iid,
@@ -4457,9 +4521,7 @@ def bulk_approve_incidents(
     except Exception:
         db.rollback()
         logger.exception("Bulk approve failed")
-        raise HTTPException(
-            status_code=500, detail="Bulk approve failed — transaction rolled back"
-        )
+        raise HTTPException(status_code=500, detail="Bulk approve failed — transaction rolled back")
 
     logger.info(
         "Validator user_id=%s bulk-approved %d incidents: %s; held: %d",
@@ -4504,9 +4566,7 @@ def archive_incident(
     ).fetchone()
 
     if incident is None:
-        raise HTTPException(
-            status_code=404, detail="Incident not found or already archived"
-        )
+        raise HTTPException(status_code=404, detail="Incident not found or already archived")
 
     current_status = incident[1]
     archivable_statuses = ("VERIFIED", "REJECTED", "REPLACED")
@@ -4556,15 +4616,37 @@ def archive_incident(
 # Field keys included in the diff. PII fields from incident_sensitive_details
 # are intentionally excluded — only nonsensitive operational details are diffed.
 _DIFF_FIELDS = (
-    "notification_dt", "alarm_level", "general_category", "sub_category",
-    "specific_type", "occupancy_type", "city_id", "barangay_id",
-    "distance_from_station_km", "estimated_damage_php",
-    "civilian_injured", "civilian_deaths", "firefighter_injured", "firefighter_deaths",
-    "families_affected", "structures_affected", "households_affected", "individuals_affected",
-    "responder_type", "fire_origin", "extent_of_damage", "stage_of_fire",
-    "fire_station_name", "total_response_time_minutes", "recommendations",
-    "vehicles_affected", "extent_total_floor_area_sqm", "extent_total_land_area_hectares",
-    "alarm_timeline", "resources_deployed", "problems_encountered",
+    "notification_dt",
+    "alarm_level",
+    "general_category",
+    "sub_category",
+    "specific_type",
+    "occupancy_type",
+    "city_id",
+    "barangay_id",
+    "distance_from_station_km",
+    "estimated_damage_php",
+    "civilian_injured",
+    "civilian_deaths",
+    "firefighter_injured",
+    "firefighter_deaths",
+    "families_affected",
+    "structures_affected",
+    "households_affected",
+    "individuals_affected",
+    "responder_type",
+    "fire_origin",
+    "extent_of_damage",
+    "stage_of_fire",
+    "fire_station_name",
+    "total_response_time_minutes",
+    "recommendations",
+    "vehicles_affected",
+    "extent_total_floor_area_sqm",
+    "extent_total_land_area_hectares",
+    "alarm_timeline",
+    "resources_deployed",
+    "problems_encountered",
 )
 
 
@@ -4618,10 +4700,7 @@ def get_incident_diff(
     original_subset: dict[str, Any] = {k: snapshot.get(k) for k in _DIFF_FIELDS if k in snapshot}
     current_subset: dict[str, Any] = {k: current.get(k) for k in _DIFF_FIELDS if k in current}
     all_keys = set(original_subset.keys()) | set(current_subset.keys())
-    changed_fields = sorted(
-        k for k in all_keys
-        if original_subset.get(k) != current_subset.get(k)
-    )
+    changed_fields = sorted(k for k in all_keys if original_subset.get(k) != current_subset.get(k))
 
     return {
         "original": original_subset,
@@ -4675,12 +4754,13 @@ def get_encoder_audit_log(
         {**params, "limit": limit, "offset": offset},
     ).fetchall()
 
-    total = db.execute(
-        text(
-            f"SELECT COUNT(*) FROM wims.incident_verification_history ivh WHERE {where_sql}"
-        ),
-        params,
-    ).scalar() or 0
+    total = (
+        db.execute(
+            text(f"SELECT COUNT(*) FROM wims.incident_verification_history ivh WHERE {where_sql}"),
+            params,
+        ).scalar()
+        or 0
+    )
 
     return {
         "items": [
@@ -4777,17 +4857,20 @@ def get_validator_audit_logs(
         list_params,
     ).fetchall()
 
-    total = db.execute(
-        text(
-            f"""
+    total = (
+        db.execute(
+            text(
+                f"""
             SELECT COUNT(*)
             FROM wims.incident_verification_history ivh
             JOIN wims.fire_incidents fi ON fi.incident_id = ivh.target_id
             WHERE {where_sql}
             """
-        ),
-        params,
-    ).scalar() or 0
+            ),
+            params,
+        ).scalar()
+        or 0
+    )
 
     return {
         "items": [
@@ -4854,20 +4937,37 @@ def export_validator_audit_logs(
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([
-        "history_id", "incident_id", "region_id", "region_display",
-        "action_by_user_id", "actor_username",
-        "previous_status", "new_status", "action_label",
-        "notes", "action_timestamp",
-    ])
+    writer.writerow(
+        [
+            "history_id",
+            "incident_id",
+            "region_id",
+            "region_display",
+            "action_by_user_id",
+            "actor_username",
+            "previous_status",
+            "new_status",
+            "action_label",
+            "notes",
+            "action_timestamp",
+        ]
+    )
     for r in rows:
-        writer.writerow([
-            r[0], r[1], r[2], r[9] or "",
-            str(r[3]) if r[3] else "", r[8] or "",
-            r[4], r[5], r[10] or "",
-            (r[6] or "").replace("\n", " "),
-            r[7].isoformat() if r[7] else "",
-        ])
+        writer.writerow(
+            [
+                r[0],
+                r[1],
+                r[2],
+                r[9] or "",
+                str(r[3]) if r[3] else "",
+                r[8] or "",
+                r[4],
+                r[5],
+                r[10] or "",
+                (r[6] or "").replace("\n", " "),
+                r[7].isoformat() if r[7] else "",
+            ]
+        )
 
     export_date = datetime.utcnow().strftime("%Y%m%d")
     return Response(

@@ -14,8 +14,8 @@ from typing import Annotated
 import os
 import time
 import tasks.suricata  # noqa: F401, E402
-import tasks.exports   # noqa: F401, E402
-import tasks.drafts    # noqa: F401, E402  # M4-E: registers expire_old_drafts task for beat
+import tasks.exports  # noqa: F401, E402
+import tasks.drafts  # noqa: F401, E402  # M4-E: registers expire_old_drafts task for beat
 import httpx
 import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, HTTPException, Request
