@@ -121,12 +121,25 @@ def verified_incident(encoder_region, validator_region):
     with TestClient(app) as client:
         resp = client.post(
             "/api/regional/incidents",
-            json={"latitude": 14.5995, "longitude": 120.9842},
+            json={
+                "latitude": 14.5995,
+                "longitude": 120.9842,
+                "notification_dt": "2026-05-11T08:00:00+08:00",
+                "general_category": "STRUCTURAL",
+                "province_district": "Metro Manila",
+                "city_municipality": "Quezon City",
+                "alarm_level": "FIRST_ALARM",
+                "station_code": "TST",
+                "incident_type_code": "APT",
+            },
         )
         assert resp.status_code == 201, f"Create incident failed: {resp.text}"
         incident_id = resp.json()["incident_id"]
 
-        resp = client.patch(f"/api/regional/incidents/{incident_id}/submit")
+        resp = client.patch(
+            f"/api/regional/incidents/{incident_id}/submit",
+            params={"force": True},
+        )
         assert resp.status_code == 200, f"Submit failed: {resp.text}"
 
     # Step 2: approve as validator
@@ -142,6 +155,7 @@ def verified_incident(encoder_region, validator_region):
     with TestClient(app) as client:
         resp = client.patch(
             f"/api/regional/incidents/{incident_id}/verification",
+            params={"force": True},
             json={"action": "accept", "notes": "Integration test approval"},
         )
         assert resp.status_code == 200, f"Verify failed: {resp.text}"

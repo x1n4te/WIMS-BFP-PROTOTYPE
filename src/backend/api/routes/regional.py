@@ -3623,10 +3623,10 @@ def delete_incident(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
 
-    if incident[1] not in ("DRAFT", "PENDING", "REJECTED"):
+    if incident[1] not in ("DRAFT", "REJECTED"):
         raise HTTPException(
             status_code=403,
-            detail=f"Cannot delete incident with status '{incident[1]}'. Only DRAFT, PENDING, or REJECTED incidents can be deleted.",
+            detail=f"Cannot delete incident with status '{incident[1]}'. Only DRAFT or REJECTED incidents can be deleted.",
         )
 
     db.execute(
