@@ -288,32 +288,11 @@ export function IncidentForm({
     return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
   }, []);
 
-}, [selectedRegionId, formState.station_code, incidentTypeCode, formState.notification_dt_date]);
-
-  // ── Utility helpers ────────────────────────────────────────────────────────
-
   const buildNotificationDateTime = (dateValue: string, timeValue: string): string | undefined => {
     if (!dateValue) return undefined;
     const time = timeValue || '00:00';
     return `${dateValue}T${time}:00+08:00`;
   };
-
-  const toDateTimeLocalValue = useCallback((raw: unknown): string => {
-    if (!raw) return '';
-    const value = String(raw).trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T00:00`;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
-      return match ? `${match[1]}T${match[2]}` : '';
-    }
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
-    const dd = String(date.getDate()).padStart(2, '0');
-    const hh = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
-  }, []);
 
   const alarmEntryToDateTimeLocal = (entry: unknown): string => {
     if (!entry) return '';
@@ -323,7 +302,7 @@ export function IncidentForm({
       return toDateTimeLocalValue(obj.time ?? obj.value ?? obj.datetime ?? '');
     }
     return '';
-  }, [toDateTimeLocalValue]);
+  };
 
   const alarmEntryToCommander = (entry: unknown): string => {
     if (!entry || typeof entry !== 'object') return '';

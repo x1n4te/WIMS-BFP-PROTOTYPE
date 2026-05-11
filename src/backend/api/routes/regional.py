@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -2945,7 +2945,6 @@ def create_incident(
 
     # Reference number is assigned only at validator approval — not at create time
     type_code = (body.incident_type_code or "").strip().upper() or None
-    station_code = (body.station_code or "TBA").strip() or "TBA"
 
     # Insert fire_incidents core row
     incident_row = db.execute(
