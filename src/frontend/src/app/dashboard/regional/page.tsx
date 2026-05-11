@@ -14,6 +14,7 @@ import {
   offsetFromPage,
   totalRegionalPages,
 } from '@/lib/regional-incidents';
+import { formatClassification } from '@/lib/afor-utils';
 
 interface RegionalStatsPayload {
   total_incidents?: number;
@@ -150,6 +151,12 @@ export default function RegionalDashboardPage() {
             Refresh
           </button>
           <Link
+            href="/dashboard/regional/audit"
+            className="card flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors hover:bg-gray-50"
+          >
+            Activity Log
+          </Link>
+          <Link
             href="/afor/import"
             className="card flex items-center gap-2 px-3 py-2 text-sm font-medium text-white transition-colors"
             style={{ backgroundColor: 'var(--bfp-maroon)' }}
@@ -231,7 +238,7 @@ export default function RegionalDashboardPage() {
                 <option value="">All classifications</option>
                 {REGIONAL_INCIDENT_GENERAL_CATEGORIES.map((c) => (
                   <option key={c} value={c}>
-                    {c === 'NON_STRUCTURAL' ? 'Non-Structural' : c.charAt(0) + c.slice(1).toLowerCase()}
+                    {formatClassification(c)}
                   </option>
                 ))}
               </select>
@@ -307,6 +314,8 @@ export default function RegionalDashboardPage() {
                 <th className="px-6 py-3">Date</th>
                 <th className="px-6 py-3">Classification</th>
                 <th className="px-6 py-3">Station</th>
+                <th className="px-6 py-3">Location</th>
+                <th className="px-6 py-3">Last Modified</th>
                 <th className="px-6 py-3">Status</th>
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
@@ -314,13 +323,13 @@ export default function RegionalDashboardPage() {
             <tbody>
               {incidentsLoading ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
                     Loading incidents…
                   </td>
                 </tr>
               ) : incidents.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
+                  <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
                     {incidentsError ? 'Could not load incidents.' : 'No incidents match the current filters.'}
                   </td>
                 </tr>
@@ -332,12 +341,16 @@ export default function RegionalDashboardPage() {
                         const raw = inc.notification_dt || inc.created_at;
                         if (!raw) return '—';
                         const d = new Date(raw);
-                        return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+                        return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-PH', {
+                          timeZone: 'Asia/Manila',
+                          year: 'numeric', month: '2-digit', day: '2-digit',
+                          hour: '2-digit', minute: '2-digit', hour12: false,
+                        });
                       })()}
                     </td>
                     <td className="px-6 py-4 font-medium">
                       <div className="flex items-center gap-2">
-                        {inc.general_category ?? '—'}
+                        {formatClassification(inc.general_category)}
                         {inc.is_wildland && (
                           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
                             Wildland
@@ -346,6 +359,17 @@ export default function RegionalDashboardPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-gray-500">{inc.fire_station_name || 'N/A'}</td>
+                    <td className="px-6 py-4 text-gray-500 text-xs">{inc.location_display ?? 'Location pending'}</td>
+                    <td className="px-6 py-4 text-gray-500 text-xs">
+                      {inc.updated_at ? (() => {
+                        const d = new Date(inc.updated_at);
+                        return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-PH', {
+                          timeZone: 'Asia/Manila',
+                          year: 'numeric', month: '2-digit', day: '2-digit',
+                          hour: '2-digit', minute: '2-digit', hour12: false,
+                        });
+                      })() : '—'}
+                    </td>
                     <td className="px-6 py-4">
                       <span
                         className={`rounded-full px-2 py-1 text-xs font-medium ${

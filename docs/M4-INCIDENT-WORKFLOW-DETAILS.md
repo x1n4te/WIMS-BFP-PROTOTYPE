@@ -1,10 +1,11 @@
 # M4: Incident Workflow (REGIONAL_ENCODER + NATIONAL_VALIDATOR)
 
-**Status:** Open
-**Open Issues:** 9
-**Closed Issues:** 0
+**Status:** Complete — all 9 original issues closed or explicitly deferred; 3 systems added beyond spec
+**Open Issues:** 1 deferred (M4-D per-row duplicate decision UI)
 **Created:** 2026-04-27
-**Updated:** 2026-04-27
+**Updated:** 2026-05-10
+
+---
 
 ## Milestone Overview
 
@@ -12,248 +13,383 @@ End-to-end incident lifecycle from encoding through verification. This milestone
 
 **Key Stakeholders:**
 - **REGIONAL_ENCODER**: Creates, imports, and edits incidents
-- **NATIONAL_VALIDATOR**: Reviews, approves, rejects, and audits incidents
+- **NATIONAL_VALIDATOR**: Reviews, approves, rejects, archives, and audits incidents
 
 ---
 
-## Issues Roadmap
+## Implementation Status
+
+| Issue | Title | Status |
+|-------|-------|--------|
+| M4-A | Incident Creation with PostGIS Location | ✅ Complete |
+| M4-B | Incident Edit (Own, Non-Verified Only) | ✅ Complete |
+| M4-C | AFOR Spreadsheet Import | ✅ Complete |
+| M4-D | Duplicate Detection on Import — per-row UI | ⏸ Deferred |
+| M4-E | Draft Save + Auto-expiry | ✅ Complete |
+| M4-F | National Validator Verification Queue | ✅ Complete + Enhanced |
+| M4-G | Side-by-Side Diff View | ✅ Complete + Enhanced |
+| M4-H | Bulk Approve | ✅ Complete |
+| M4-I | Validator Audit Trail Viewer | ✅ Complete |
+| — | Encoder Audit Trail | ✅ Added (beyond spec) |
+| — | Duplicate Detection System (Encoder + Validator) | ✅ Added (beyond spec) |
+| — | Incident Archive & REPLACED Status | ✅ Added (beyond spec) |
+| — | Reference Number Generation | ✅ Added (beyond spec) |
+| — | Regional RBAC (18 encoder accounts + region enforcement) | ✅ Added (beyond spec) |
+
+---
+
+## Issues Detail
 
 ### M4-A: Incident Creation with PostGIS Location
-**Priority:** High | **Status:** Open | **Issue #48**
+**Priority:** High | **Status:** ✅ Complete
 
-#### Scope
-Regional Encoder creates incidents with geometry point.
+#### Implemented
+- `POST /api/regional/incidents` — creates incident with full AFOR form data
+- `fi.location` stored as `ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography`
+- MapPickerInner component with pin-drop, search bar, and read-only view mode
+- Full AFOR form covering all required sections (A–L): alarm timeline, personnel, damage, narrative
+- Draft → Submit → PENDING → VERIFIED lifecycle fully wired
+- Reference number generated on first VERIFIED transition (format: `AFOR-RGN-{region}-{station}-{type}-{month/year}-{seq}`)
+- All timestamps stored UTC, displayed in Asia/Manila (PHT) via `toLocaleString('en-PH', { timeZone: 'Asia/Manila' })`
 
-#### Details
-- **Endpoint:** `POST /api/regional/incidents`
-- **Request Body:** `{region_id, general_category, alarm_level, incident_date, latitude, longitude, ...}`
-- **Geometry:** `ST_SetSRID(ST_MakePoint(lon, lat), 4326)` for PostGIS
-- **RLS:** Encoder can only create in their assigned region (validated in app + DB policy)
-- **Frontend:** `/incidents/create` page for authenticated regional encoders
+#### Required Field Validation
+- Backend: `PATCH /incidents/{id}/submit` validates `province_district` and `city_municipality` before allowing PENDING status (HTTP 422 if missing)
+- Frontend: Province/District, City/Municipality, Prepared by, Noted by are required in IncidentForm
+- Draft-submit modal: clicking "Submit for Review" on the detail page checks required fields from `detail` data and shows a modal listing missing fields with "Continue Editing" / "Dismiss" buttons
 
 #### Exit Criteria
-- [/] Encoder can create incident with map-picked coordinates
-- [/] Incident appears in regional incident list
+- [x] Encoder can create incident with map-picked coordinates
+- [x] Incident appears in regional incident list
+- [x] Required fields enforced in both frontend and backend
 
 ---
 
 ### M4-B: Incident Edit (Own, Non-Verified Only)
-**Priority:** High | **Status:** Open | **Issue #49**
+**Priority:** High | **Status:** ✅ Complete
 
-#### Scope
-Regional Encoder edits their own pending incidents.
-
-#### Details
-- **Endpoint:** `PATCH /api/regional/incidents/{id}`
-- **Guards:** `verification_status == PENDING_REVIEW AND encoder_id == current_user`
-- **Audit Logging:** Creates audit log entry on every edit
-- **Frontend:** `/dashboard/regional/incidents/[id]` edit mode
+#### Implemented
+- `PATCH /api/regional/incidents/{id}` with full AFOR field updates
+- Edit mode on `/dashboard/regional/incidents/[id]` — edit icon visible only to encoder for non-VERIFIED incidents
+- IncidentForm component with `initialData` hydration; time fields loaded from `alarm_timeline._response` JSONB
+- Audit trail: `action_label='EDITED'` written after each draft edit
 
 #### Exit Criteria
-- [/] Encoder can edit their own `PENDING_REVIEW` incidents
-- [/] Encoder cannot edit `VERIFIED` or other users' incidents
-- [ ] Edit creates audit trail entry
+- [x] Encoder can edit their own non-VERIFIED incidents
+- [x] Encoder cannot edit VERIFIED incidents (UI guard)
+- [x] Edit creates audit trail entry
 
 ---
 
 ### M4-C: AFOR Spreadsheet Import
-**Priority:** High | **Status:** Open | **Issue #50**
+**Priority:** High | **Status:** ✅ Complete
 
-#### Scope
-Regional Encoder uploads xlsx files for bulk incident import.
-
-#### Details
-- **Endpoint:** `POST /api/regional/incidents/import`
-- **Content-Type:** `multipart/form-data` xlsx
-- **Parser:** Uses existing `parse_wildland_afor_report_data` in `regional.py`
-- **Response:** `{created: N, updated: N, duplicates: N, errors: [{row, message}]}`
-- **Frontend:** `/afor/import` page with file upload + import summary
+#### Implemented
+- `POST /api/regional/incidents/import` — multipart/form-data xlsx upload
+- Parser: `parse_wildland_afor_report_data` and structural AFOR formats
+- Response: `{created, updated, duplicates, errors: [{row, message}]}`
+- `/afor/import` page with drag-and-drop upload → redirects to manual form for correction
+- `POST /api/regional/incidents/upload-bundle` — region enforcement (403 REGION_MISMATCH if encoder submits for wrong region)
 
 #### Exit Criteria
-- [ ] Encoder can import AFOR xlsx and see summary
-- [ ] Import errors shown per row
+- [x] Encoder can import AFOR xlsx and see summary
+- [x] Import errors shown per row
+- [x] Region enforcement on upload-bundle
 
 ---
 
-### M4-D: Duplicate Detection on Import
-**Priority:** High | **Status:** Open | **Issue #51**
+### M4-D: Duplicate Detection on Import — Per-Row UI
+**Priority:** High | **Status:** ⏸ Deferred
 
-#### Scope
-Detect and present duplicates before committing AFOR import.
+#### Implemented (automatic detection only)
+- Import pipeline calls `check_for_duplicate()` before committing each row
+- Duplicate rows are counted in the summary response under `duplicates`
+- Skip behavior is the default (duplicate rows are not imported)
 
-#### Details
-- **Detection Query:** Before commit, query for incidents with same `(region_id, incident_date, alarm_level)` within 1km radius using `ST_DWithin`
-- **UI Flow:** Show duplicates to encoder in confirmation modal
-- **Encoder Options:**
-  - Skip duplicate
-  - Merge (update existing)
-  - Force create
-- **Merge Behavior:** Update existing incident instead of creating new
+#### Deferred
+- **Per-row UI decision** — encoder cannot currently choose skip / merge / force-create on a per-row basis. All duplicates are silently skipped. The spec calls for a confirmation modal before commit.
 
 #### Exit Criteria
-- [ ] Import shows duplicate confirmation before commit
-- [ ] Encoder can choose skip/merge/force per duplicate
+- [x] Import detects duplicates
+- [x] Duplicate rows reported in summary
+- [ ] Encoder chooses skip / merge / force per duplicate before commit *(deferred)*
 
 ---
 
-### M4-E: Draft Save
-**Priority:** Medium | **Status:** Open | **Issue #52**
+### M4-E: Draft Save + Auto-Expiry
+**Priority:** Medium | **Status:** ✅ Complete
 
-#### Scope
-Regional Encoder can save incident drafts and resume later.
-
-#### Details
-- **Create Draft:** `POST /api/regional/incidents/draft`
-- **List Drafts:** `GET /api/regional/incidents/drafts` (own drafts only)
-- **Update Draft:** `PATCH /api/regional/incidents/draft/{id}`
-- **Draft Status:** `verification_status = DRAFT`, not visible to validators
-- **Auto-Expiry:** Drafts expire after 30 days (Celery periodic task)
+#### Implemented
+- `POST /api/regional/incidents` with `verification_status = DRAFT` on initial save
+- `GET /api/regional/incidents/drafts` — encoder's own drafts only
+- `PATCH /api/regional/incidents/{id}` — update draft fields; writes `action_label='DELETED_DRAFT'` on delete
+- `POST /api/regional/incidents/{id}/submit` — transition DRAFT → PENDING
+- `/dashboard/regional/drafts` list page
+- Drafts excluded from validator queue (`status != DRAFT` filter)
+- `tasks/drafts.py` Celery periodic task: `expire-stale-drafts-daily` — expires DRAFT incidents older than 30 days
+- `celery_config.py` beat schedule entry
 
 #### Exit Criteria
-- [/] Encoder can save and resume drafts
-- [/] Drafts do not appear in validator queue
+- [x] Encoder can save and resume drafts
+- [x] Drafts do not appear in validator queue
+- [x] Drafts auto-expire after 30 days
 
 ---
 
 ### M4-F: National Validator Verification Queue
-**Priority:** High | **Status:** Open | **Issue #53**
+**Priority:** High | **Status:** ✅ Complete + Enhanced
 
-#### Scope
-Upgrade existing validator queue with full workflow.
+#### Implemented (original spec)
+- `GET /api/regional/validator/incidents` — **cross-region** (all regions, not just assigned)
+- `PATCH /api/regional/incidents/{id}/verification` — accept / reject / pending actions
+- Audit trail entry per action via `incident_verification_history`
+- `/dashboard/validator` queue page with filters, pagination, status badges
 
-#### Details
-- **Get Queue:** `GET /api/validator/incidents` (cross-region, all `PENDING_REVIEW`)
-- **Verify Action:** `PATCH /api/validator/incidents/{id}/verification`
-  - **Body:** `{action: approve|reject, reason?: string}`
-  - **Approve:** Set `verification_status = VERIFIED`
-  - **Reject:** Set `verification_status = REJECTED`, store reason
-- **Audit Logging:** Create audit log entry per action
-- **Frontend:** `/dashboard/validator` (upgrade existing page)
+#### Implemented (enhancements beyond spec)
+- **Status values extended:** `REPLACED` added alongside `DRAFT`, `PENDING`, `PENDING_VALIDATION`, `VERIFIED`, `REJECTED`
+- **action_label column** on `incident_verification_history` — human-readable label per action (`APPROVED`, `REJECTED`, `BULK_APPROVED`, `REPLACED_EXISTING`, `ACCEPTED_AS_NEW`, `ARCHIVED`, `EDITED`, `CREATED_DRAFT`, `DELETED_DRAFT`)
+- **Archive endpoint:** `PATCH /api/regional/validator/incidents/{id}/archive` — archives VERIFIED / REJECTED / REPLACED incidents
+- **Archived tab:** filter `?archived=true` shows only archived incidents; no action buttons
+- **Conditional action buttons:** finalized incidents (VERIFIED / REJECTED / REPLACED) show Archive only; pending incidents show Accept + Reject
+- **DUPLICATE badge** — shown on PENDING incidents with `is_duplicate = TRUE`
+- **Newest-first sort** on queue
+- **Submitted column** — leftmost data column showing `created_at` in PHT
+- **Direct Accept flow** — clicking Accept immediately calls the backend (no intermediate Confirm step). If backend returns 409 DUPLICATE\_DETECTED, the side-by-side resolution modal appears automatically
+- **Bulk confirm modal** — replaced `window.confirm()` with an in-app modal
+- **Refresh notification** — background poll every 30s; blue banner "New incidents have been submitted — Refresh now" when count increases
 
 #### Exit Criteria
-- [ ] Validator sees cross-region queue
-- [/] Validator can approve or reject with reason
-- [ ] Each action creates audit trail entry
+- [x] Validator sees cross-region queue
+- [x] Validator can approve or reject with reason
+- [x] Each action creates audit trail entry with action_label
+- [x] VERIFIED / REJECTED incidents can be archived
+- [x] Archived incidents visible in separate tab
+- [x] Validator notified when new incidents are submitted
 
 ---
 
 ### M4-G: Side-by-Side Diff View
-**Priority:** Medium | **Status:** Open | **Issue #54**
+**Priority:** Medium | **Status:** ✅ Complete + Enhanced
 
-#### Scope
-National Validator sees original vs current values before approving.
+#### Implemented (original spec)
+- `GET /api/regional/validator/incidents/{id}/diff` — returns original snapshot vs current field values
+- `UpdateRequestDiffPanel` component — renders two-column field-by-field comparison with changed fields highlighted
+- Used in validator queue action modal for update requests (`parent_incident_id` set)
 
-#### Details
-- **Endpoint:** `GET /api/validator/incidents/{id}/diff`
-- **Response:** `{original: {...}, current: {...}, changed_fields: [...]}`
-- **Compare Fields:** All fields in `incident_nonsensitive_details`
-- **Frontend:** Diff view panel in validator queue item detail modal
+#### Implemented (enhancements beyond spec)
+- **Duplicate resolution modal** — when the validator clicks Accept on any incident, the backend runs `check_for_duplicate()`. If a match is found (409), a full side-by-side modal appears showing the PENDING incident vs the matched VERIFIED incident
+- **4 resolution options in modal:**
+  - **Replace Existing** — verifies the new incident with the original's reference number; marks the old incident as `REPLACED` + `is_archived = TRUE`
+  - **Verify as New** — verifies with a brand-new reference number; `force = true` bypasses the duplicate check
+  - **Reject** — opens the rejection notes flow
+  - **Cancel** — keeps incident as PENDING for further review
+- **Auto-show on detail page** — when a validator opens a duplicate-flagged incident (`is_duplicate = TRUE, duplicate_of` set), the side-by-side modal appears automatically
 
 #### Exit Criteria
-- [ ] Validator sees what changed before approving
+- [x] Validator sees what changed before approving (update requests)
+- [x] Validator sees side-by-side comparison for duplicate incidents before accepting
+- [x] Validator has 4 resolution options for duplicates
 
 ---
 
 ### M4-H: Bulk Approve
-**Priority:** Medium | **Status:** Open | **Issue #57**
+**Priority:** Medium | **Status:** ✅ Complete
 
-#### Scope
-National Validator can approve multiple incidents in a single action.
-
-#### Details
-- **Endpoint:** `POST /api/validator/incidents/bulk-approve`
-- **Request Body:** `{incident_ids: [uuid]}`
-- **Validation:** Validates all are `PENDING_REVIEW` before proceeding
-- **Atomicity:** Atomic rollback on failure (all-or-nothing)
-- **Audit:** Creates audit log entry per incident
-- **Response:** `{approved: N, failed: [{id, reason}]}`
-- **Frontend:** Checkbox selection in validator queue + bulk approve button
+#### Implemented
+- Checkbox selection on all PENDING incidents in the queue
+- Select-all for PENDING checkbox in table header
+- `POST /api/regional/validator/incidents/bulk-approve` with `{incident_ids: [int]}`
+- Processes incidents in chronological order (`created_at ASC`) to preserve temporal integrity
+- Per-incident `check_for_duplicate()` call during bulk with `verified_window_seconds=60` guard
+- `held_for_review: [{id, matching_incident_id}]` in response for mid-batch duplicates
+- **Bulk confirm modal** (in-app, not `window.confirm`) showing count before execution
+- Response shape: `{approved: N, incident_ids: [...], held_for_review: [...]}`
+- `action_label = 'BULK_APPROVED'` in audit trail
 
 #### Exit Criteria
-- [ ] Validator can select multiple incidents and approve in one click
-- [ ] Partial failure (some not `PENDING_REVIEW`) does not approve any
+- [x] Validator can select multiple incidents and approve in one click
+- [x] In-app confirmation modal (not browser dialog)
+- [x] Chronological processing order
+- [x] Mid-batch duplicates held for review, not silently approved
 
 ---
 
 ### M4-I: Validator Audit Trail Viewer
-**Priority:** Medium | **Status:** Open | **Issue #55**
+**Priority:** Medium | **Status:** ✅ Complete
 
-#### Scope
-National Validator can view all verification actions across regions.
-
-#### Details
-- **Endpoint:** `GET /api/validator/audit-logs`
-- **Available Filters:**
-  - `date_from`, `date_to`
-  - `region_id`
-  - `validator_id`
-  - `action` (approve/reject)
-- **Export:** `GET /api/validator/audit-logs/export?format=csv`
-- **Frontend:** `/dashboard/validator/audit` page with filters and export
+#### Implemented
+- `GET /api/regional/validator/audit-logs` with filters: `date_from`, `date_to`, `region_id`, `encoder_id`, `action`
+- `GET /api/regional/validator/audit-logs/export` — CSV download with date-stamped filename
+- Response fields: `incident_id`, `previous_status`, `new_status`, `action_by_user_id`, `actor_username` (resolved), `region_display` (resolved region name), `action_label`, `notes`, `action_timestamp`
+- `/dashboard/validator/audit` page with filter form, paginated table, and Export CSV button
+- Table columns: **Date & Time** | **Incident** | **Region** | **By** | **Action**
+- Action filter dropdown: APPROVED / REJECTED / BULK_APPROVED / REPLACED_EXISTING / ACCEPTED_AS_NEW / ARCHIVED
 
 #### Exit Criteria
-- [ ] Validator can search audit trail by date, region, action
-- [ ] Validator can export as CSV
+- [x] Validator can search audit trail by date, region, encoder
+- [x] Validator can filter by action type
+- [x] Validator can export as CSV
+- [x] Action labels are human-readable (not raw status codes)
+- [x] Actor shown as username, not UUID
 
 ---
 
-## Implementation Order (Suggested)
+## Enhancements Added Beyond Original Spec
 
-1. **M4-A** (Incident Creation) - Foundation
-2. **M4-B** (Incident Edit) - Encoder workflow
-3. **M4-C** (AFOR Import) - Bulk operations
-4. **M4-D** (Duplicate Detection) - Quality gate for imports
-5. **M4-E** (Draft Save) - Convenience feature
-6. **M4-F** (Validator Queue) - Validator workflow foundation
-7. **M4-G** (Diff View) - Validator UX enhancement
-8. **M4-H** (Bulk Approve) - Validator efficiency
-9. **M4-I** (Audit Trail) - Compliance & monitoring
+### EXT-1: Encoder Audit Trail
+**Status:** ✅ Complete
+
+- **Backend:** `GET /api/regional/audit-log` — encoder's own action history, paginated; filtered by `action_by_user_id = encoder.user_id`
+- **Backend:** `POST /incidents` (create) now writes `action_label='CREATED_DRAFT'`; draft edit writes `EDITED`; draft delete writes `DELETED_DRAFT`
+- **Frontend:** `/dashboard/regional/audit` — "My Activity Log" page with date range filter, paginated table
+- Link added to regional dashboard nav
 
 ---
 
-## Database & API Layer Requirements
+### EXT-2: Duplicate Detection System
+**Status:** ✅ Complete
 
-### Status Values
-- `DRAFT` - Encoder working on draft
-- `PENDING_REVIEW` - Submitted for validation
-- `VERIFIED` - Approved by validator
-- `REJECTED` - Rejected with reason
+A dedicated `services/duplicate_detection.py` service implements spatial + temporal duplicate matching used across multiple call sites.
 
-### Key Audit Events
-- Incident created
-- Incident edited
-- Incident submitted for review
-- Incident verified/approved
-- Incident rejected
-- Bulk approval action
-- Audit log exported
+#### Detection Logic
+- **Primary check:** `ST_DWithin(fi.location::geography, point, 5000)` (5 km radius) + same `region_id` + not archived + `verification_status NOT IN (DRAFT, REJECTED, REPLACED)`
+- **Date filter (optional):** When `notification_dt` is available, match within ±1 day in Asia/Manila timezone. When absent, date filter is skipped (spatial-only match)
+- **Fallback:** When no lat/lon available, match on `region_id` + `general_category` OR `incident_type_code` with same optional date window
+- **Update request exclusion:** Incidents with `parent_incident_id` set are excluded from the validator-side duplicate check
 
-### PostGIS/Geometry
-- All incidents require `geometry` field: `Point(longitude, latitude)` with SRID 4326
-- Duplicate detection uses `ST_DWithin` for spatial queries
-- 1km radius = ~0.009 degrees (approximate)
+#### Encoder-side (submission)
+- `POST /api/regional/incidents/{id}/submit` calls `check_for_duplicate()` before transitioning to PENDING
+- Returns `HTTP 409 {code: "DUPLICATE_DETECTED", matched_incident_id, matched_status}`
+- Frontend modal: **Submit Anyway** (force) | **View Existing** | **Edit Incident** | **Cancel**
+
+#### Validator-side (accept)
+- `PATCH /api/regional/incidents/{id}/verification?action=accept` triggers `check_for_duplicate()`
+- Returns `HTTP 409 {code: "DUPLICATE_DETECTED", matched_incident_id}` when match found
+- Frontend: clicking **Accept** immediately calls the backend. On 409, the side-by-side modal auto-opens with 4 resolution options
 
 ---
 
-## Frontend Routes
+### EXT-3: Incident Archive & REPLACED Status
+**Status:** ✅ Complete
+
+- `PATCH /api/regional/validator/incidents/{id}/archive` — archives VERIFIED / REJECTED / REPLACED incidents
+- `archived_at TIMESTAMPTZ` column; `verification_status` CHECK expanded to include `REPLACED`
+- Archived tab in validator queue (`?archived=true`)
+
+---
+
+### EXT-4: Reference Number Generation
+**Status:** ✅ Complete
+
+Reference numbers are generated on first `VERIFIED` transition.
+
+#### Format
+```
+AFOR-RGN-{REGION}-{STATION_CODE}-{TYPE_CODE}-{MON}-{YEAR}-{SEQ:04d}
+```
+Examples:
+- `AFOR-RGN-NCR-TBA-APT-MAY-2026-0001`
+- `AFOR-RGN-1-TBA-INF-MAY-2026-0004`
+- `AFOR-RGN-4A-TBA-SFD-MAY-2026-0007`
+
+Region codes: RGN-NCR, RGN-CAR, RGN-NIR, RGN-BARMM, RGN-1 through RGN-13
+
+Sequence is **global** (increments monotonically across all incidents, not per region/type/month).
+
+---
+
+### EXT-5: Regional RBAC
+**Status:** ✅ Complete
+
+- 18 Keycloak encoder accounts (encoder_r01 through encoder_r18), one per PH region
+- `encoder_test` remains as Region 1 (NCR) encoder for development
+- `seed-dev-users.sh` and `.ps1` updated with all 18 encoders and their region assignments
+- Backend `POST /incidents` enforces `region_id == assigned_region_id` (raises 403 REGION_MISMATCH)
+- Backend `POST /incidents/upload-bundle` also enforces region assignment (raises 403 REGION_MISMATCH)
+- Frontend: region dropdown disabled for encoders; 403 from backend shows a clean message with region field highlighted
+
+---
+
+## Database Schema Summary
+
+### Status Values (current)
+| Status | Description |
+|--------|-------------|
+| `DRAFT` | Encoder working on incident, not yet submitted |
+| `PENDING` | Submitted for validation |
+| `PENDING_VALIDATION` | Public DMZ / system-submitted, awaiting triage |
+| `VERIFIED` | Approved by validator; reference number assigned |
+| `REJECTED` | Rejected with reason |
+| `REPLACED` | Superseded by a newer verified incident |
+
+### Key Columns (wims.fire_incidents)
+| Column | Type | Description |
+|--------|------|-------------|
+| `verification_status` | VARCHAR | One of the 6 statuses above |
+| `is_archived` | BOOLEAN | Soft-delete flag |
+| `archived_at` | TIMESTAMPTZ | When archived |
+| `is_duplicate` | BOOLEAN | Set by ack_duplicate path |
+| `duplicate_of` | INTEGER FK | Points to matched incident |
+| `parent_incident_id` | INTEGER FK | Set for update requests |
+| `reference_number` | VARCHAR | AFOR format, assigned on VERIFIED |
+| `location` | GEOGRAPHY(Point,4326) | PostGIS coordinates |
+
+### Key Audit Events (action_label values)
+| Label | Trigger |
+|-------|---------|
+| `CREATED_DRAFT` | Encoder creates new incident (DRAFT) |
+| `SUBMITTED` | Encoder submits DRAFT → PENDING |
+| `EDITED` | Encoder edits draft fields |
+| `DELETED_DRAFT` | Encoder or system deletes draft |
+| `APPROVED` | Validator accepts → VERIFIED |
+| `REJECTED` | Validator rejects |
+| `BULK_APPROVED` | Validated via bulk approve |
+| `REPLACED_EXISTING` | accept_replace — new supersedes old |
+| `ACCEPTED_AS_NEW` | force accept bypassing duplicate |
+| `ARCHIVED` | Validator archives finalized incident |
+
+---
+
+## Frontend Routes (current)
 
 | Route | Role | Purpose |
 |-------|------|---------|
-| `/incidents/create` | REGIONAL_ENCODER | Create new incident |
-| `/dashboard/regional/incidents/[id]` | REGIONAL_ENCODER | Edit own incident |
-| `/dashboard/regional/incidents` | REGIONAL_ENCODER | View own incidents |
-| `/afor/import` | REGIONAL_ENCODER | Import AFOR spreadsheet |
-| `/dashboard/validator` | NATIONAL_VALIDATOR | Verification queue |
-| `/dashboard/validator/audit` | NATIONAL_VALIDATOR | Audit log viewer |
+| `/dashboard/regional` | REGIONAL_ENCODER | Incident list with stats |
+| `/dashboard/regional/audit` | REGIONAL_ENCODER | Encoder activity log |
+| `/dashboard/regional/drafts` | REGIONAL_ENCODER | Draft list |
+| `/dashboard/regional/incidents/[id]` | REGIONAL_ENCODER / NATIONAL_VALIDATOR | View, edit, submit, validate |
+| `/afor/create` | REGIONAL_ENCODER | Manual AFOR entry (structural + wildland) |
+| `/afor/import` | REGIONAL_ENCODER | AFOR xlsx bulk import |
+| `/dashboard/validator` | NATIONAL_VALIDATOR | Verification queue + archive tab |
+| `/dashboard/validator/audit` | NATIONAL_VALIDATOR | Audit trail with CSV export + action filter |
 
 ---
 
-## Notes for Planning
+## API Endpoints Reference
 
-- **M4 depends on M1** (Infrastructure Foundation) - ensure schema and base setup complete
-- **Atomic operations** are critical for bulk approve to maintain data integrity
-- **Audit logging** must be comprehensive for compliance tracking
-- **RLS policies** ensure regional encoders can only access their region's incidents
-- **Draft expiry** requires Celery task configuration (see backend setup)
-- **Diff view** should highlight changes visually for clarity
-- All timestamps should be in UTC
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| POST | `/regional/incidents` | ENCODER | Create incident (DRAFT); writes CREATED_DRAFT audit |
+| GET | `/regional/incidents` | ENCODER | List own incidents |
+| PATCH | `/regional/incidents/{id}` | ENCODER | Edit incident fields; writes EDITED audit |
+| DELETE | `/regional/incidents/draft/{id}` | ENCODER | Delete draft; writes DELETED_DRAFT audit |
+| POST | `/regional/incidents/{id}/submit` | ENCODER | Submit DRAFT → PENDING |
+| POST | `/regional/incidents/upload-bundle` | ENCODER | Bulk AFOR xlsx import (region-enforced) |
+| GET | `/regional/incidents/drafts` | ENCODER | List own drafts |
+| GET | `/regional/audit-log` | ENCODER | Encoder's own action history |
+| GET | `/regional/validator/incidents` | VALIDATOR | Cross-region queue |
+| PATCH | `/regional/incidents/{id}/verification` | VALIDATOR | Accept / reject / pending |
+| POST | `/regional/validator/incidents/bulk-approve` | VALIDATOR | Bulk accept |
+| PATCH | `/regional/validator/incidents/{id}/archive` | VALIDATOR | Archive finalized incident |
+| GET | `/regional/validator/incidents/{id}/diff` | VALIDATOR | Side-by-side diff |
+| GET | `/regional/validator/audit-logs` | VALIDATOR | Audit trail (filterable by action) |
+| GET | `/regional/validator/audit-logs/export` | VALIDATOR | CSV export |
+
+---
+
+## Remaining Gaps
+
+| Gap | Priority | Notes |
+|-----|----------|-------|
+| M4-D: AFOR import per-row duplicate decision UI | Medium | Encoders see a count; cannot choose skip/merge/force per row. Backend already accepts `per_row_decisions` param |
+| Bulk approve atomicity | Low | Mid-batch failure leaves earlier incidents approved; no rollback |
+| Incident edit version history | Low | Field-level snapshots not stored; only action_label EDITED is recorded |

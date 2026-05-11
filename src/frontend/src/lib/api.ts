@@ -65,7 +65,7 @@ function errorMessageFromJson(json: unknown, fallback: string): string {
 
 export async function apiFetch<T>(
   path: string,
-  options: RequestInit & { _retried?: boolean } = {}
+  options: RequestInit & { _retried?: boolean; skipAuthRedirect?: boolean } = {}
 ): Promise<T> {
   const normalizedPath =
     path === '/api' ? '/' : path.startsWith('/api/') ? path.slice(4) : path;
@@ -77,7 +77,7 @@ export async function apiFetch<T>(
   if (!isFormDataBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  const { _retried, ...fetchOptions } = options;
+  const { _retried, skipAuthRedirect, ...fetchOptions } = options;
   const res = await fetch(url, {
     ...fetchOptions,
     credentials: 'include',
@@ -90,7 +90,10 @@ export async function apiFetch<T>(
         return apiFetch<T>(path, { ...options, _retried: true });
       }
     } catch { /* ignore, fall through to throw */ }
-    if (typeof window !== 'undefined') {
+    // M4 Bug 8-A: callers like AFOR commit can opt out of the global redirect
+    // so that a 401 from a single endpoint does not yank the user to /login
+    // mid-flow. The caller is then responsible for surfacing the error.
+    if (!skipAuthRedirect && typeof window !== 'undefined') {
       window.location.href = '/login';
     }
     throw new ApiRequestError('Session expired. Please log in again.', 401);
@@ -450,6 +453,7 @@ export interface RegionalIncidentListItem {
   incident_id: number;
   verification_status: string;
   created_at: string | null;
+  updated_at: string | null;
   notification_dt: string | null;
   general_category: string | null;
   alarm_level: string | null;
@@ -464,6 +468,7 @@ export interface RegionalIncidentListItem {
   establishment_name: string | null;
   caller_name: string | null;
   is_wildland: boolean;
+  location_display: string | null;
 }
 
 export interface RegionalIncidentsListResponse {
@@ -478,9 +483,15 @@ export interface RegionalIncidentDetailResponse {
   incident_id: number;
   verification_status: string;
   created_at: string | null;
+  updated_at: string | null;
   region_id: number;
   latitude: number | null;
   longitude: number | null;
+  reference_number: string | null;
+  incident_type_code: string | null;
+  parent_incident_id: number | null;
+  is_duplicate: boolean;
+  duplicate_of: number | null;
   is_wildland: boolean;
   wildland_fire_type: string | null;
   wildland_area_hectares: number | null;
@@ -511,9 +522,14 @@ export async function fetchRegionalIncident(
 }
 
 export async function createRegionalIncident(
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  options?: { skipAuthRedirect?: boolean }
 ): Promise<{ status: string; incident_id: number; verification_status: string }> {
-  return apiFetch('/regional/incidents', { method: 'POST', body: JSON.stringify(body) });
+  return apiFetch('/regional/incidents', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    skipAuthRedirect: options?.skipAuthRedirect,
+  });
 }
 
 export async function updateRegionalIncident(
@@ -524,15 +540,130 @@ export async function updateRegionalIncident(
 }
 
 export async function submitIncidentForReview(
+  incidentId: number,
+  options?: { skipAuthRedirect?: boolean; ackDuplicate?: boolean; force?: boolean }
+): Promise<{ status: string; incident_id: number; verification_status: string; matched_incident_id?: number }> {
+  const params = new URLSearchParams();
+  if (options?.ackDuplicate) params.set('ack_duplicate', 'true');
+  if (options?.force) params.set('force', 'true');
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const url = `/regional/incidents/${incidentId}/submit${qs}`;
+  return apiFetch(url, {
+    method: 'PATCH',
+    skipAuthRedirect: options?.skipAuthRedirect,
+  });
+}
+
+export async function archiveIncident(
   incidentId: number
-): Promise<{ status: string; incident_id: number; verification_status: string }> {
-  return apiFetch(`/regional/incidents/${incidentId}/submit`, { method: 'PATCH' });
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/validator/incidents/${incidentId}/archive`, { method: 'PATCH' });
 }
 
 export async function unpendIncident(
   incidentId: number
 ): Promise<{ status: string; incident_id: number }> {
   return apiFetch(`/regional/incidents/${incidentId}/unpend`, { method: 'PATCH' });
+}
+
+// ── Reference-number based duplicate detection ─────────────────────────────
+
+export interface RefDuplicateIncident {
+  incident_id: number;
+  reference_number: string | null;
+  verification_status: string;
+  notification_dt: string | null;
+  alarm_level: string | null;
+  general_category: string | null;
+  incident_type_code: string | null;
+  type_of_involved: string | null;
+  fire_station_name: string | null;
+  station_code: string | null;
+  city_municipality: string | null;
+  province_district: string | null;
+  region_name: string | null;
+  street_address: string | null;
+}
+
+/**
+ * Check whether an incident with the same region + type/category + fire date already exists.
+ * Checks reference number space (same month+year+type) and exact-date matches.
+ * Returns [] if none found or on error.
+ */
+export async function checkIncidentDuplicate(params: {
+  regionId: number;
+  fireDate: string; // YYYY-MM-DD
+  incidentTypeCode?: string;
+  generalCategory?: string;
+}): Promise<RefDuplicateIncident[]> {
+  try {
+    const qs = new URLSearchParams({ region_id: String(params.regionId), fire_date: params.fireDate });
+    if (params.incidentTypeCode) qs.set('incident_type_code', params.incidentTypeCode);
+    if (params.generalCategory) qs.set('general_category', params.generalCategory);
+    const result = await apiFetch<{ duplicates: RefDuplicateIncident[] }>(
+      `/regional/incidents/check-duplicate?${qs.toString()}`
+    );
+    return result.duplicates ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Soft-delete a DRAFT, PENDING, or REJECTED incident (sets is_archived = TRUE). */
+export async function deleteIncident(incidentId: number): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/incidents/${incidentId}`, { method: 'DELETE' });
+}
+
+/**
+ * Replace a PENDING incident's data without withdrawing it first.
+ * Used when duplicate detection identifies a PENDING incident that the encoder
+ * wants to overwrite directly from the duplicate resolution modal.
+ */
+export async function forceReplaceIncident(
+  incidentId: number,
+  payload: Record<string, unknown>,
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/incidents/${incidentId}/force-replace`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+// ── M4-E: Dedicated draft endpoints ─────────────────────────────────────────
+
+export interface DraftSummary {
+  incident_id: number;
+  region_id: number;
+  created_at: string | null;
+  updated_at: string | null;
+  notification_dt: string | null;
+  general_category: string | null;
+  alarm_level: string | null;
+  fire_station_name: string | null;
+}
+
+export async function listEncoderDrafts(
+  limit = 20,
+  offset = 0
+): Promise<{ items: DraftSummary[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return apiFetch(`/regional/incidents/drafts?${params.toString()}`);
+}
+
+export async function updateDraft(
+  incidentId: number,
+  body: Record<string, unknown>
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/incidents/draft/${incidentId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteDraft(
+  incidentId: number
+): Promise<{ status: string; incident_id: number }> {
+  return apiFetch(`/regional/incidents/draft/${incidentId}`, { method: 'DELETE' });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -583,23 +714,49 @@ export async function importAforFile(file: File): Promise<AforImportPreviewRespo
 
 export type WildlandRowSource = 'AFOR_IMPORT' | 'MANUAL';
 
+export type DuplicateAction = 'skip' | 'merge' | 'force';
+
+export interface RowResolution {
+  row_index: number;
+  action: DuplicateAction;
+  existing_incident_id?: number | null;
+}
+
+export interface DuplicateInfo {
+  row_index: number;
+  existing_incident_id: number;
+  distance_m: number;
+  matched_fields: string[];
+  incoming_values: Record<string, string | null>;
+  existing_values: Record<string, string | null>;
+}
+
+export type AforCommitResult =
+  | { status: 'ok'; batch_id: number; incident_ids: number[]; total_committed: number }
+  | {
+      status: 'DUPLICATE_CHECK_REQUIRED';
+      duplicates: DuplicateInfo[];
+      radius_meters: number;
+      min_matching_fields: number;
+    };
+
 export async function commitAforImport(
   rows: Record<string, unknown>[],
   formKind: AforFormKind,
   options?: {
     wildlandRowSource?: WildlandRowSource;
-    duplicateStrategy?: 'REPLACE_ORIGINAL' | 'KEEP_ORIGINAL';
+    resolutions?: RowResolution[];
     /** WGS84 decimal degrees. PostGIS stores POINT(longitude latitude); not GeoJSON [lat, lon]. */
     latitude?: number;
     longitude?: number;
   }
-): Promise<{ status: string; batch_id: number; incident_ids: number[]; total_committed: number }> {
+): Promise<AforCommitResult> {
   const body: Record<string, unknown> = { form_kind: formKind, rows };
   if (options?.wildlandRowSource != null) {
     body.wildland_row_source = options.wildlandRowSource;
   }
-  if (options?.duplicateStrategy != null) {
-    body.duplicate_strategy = options.duplicateStrategy;
+  if (options?.resolutions != null) {
+    body.resolutions = options.resolutions;
   }
   if (typeof options?.latitude === 'number' && typeof options?.longitude === 'number') {
     body.latitude = options.latitude;
@@ -608,6 +765,8 @@ export async function commitAforImport(
   return apiFetch('/regional/afor/commit', {
     method: 'POST',
     body: JSON.stringify(body),
+    // M4 Bug 8-A: handle errors locally on the import page; do not force /login
+    skipAuthRedirect: true,
   });
 }
 

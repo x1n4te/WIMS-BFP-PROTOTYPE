@@ -1,14 +1,24 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
-import { fetchRegions, fetchProvinces, fetchCities, fetchCitiesByProvinces, updateRegionalIncident } from '@/lib/api';
+import {
+  updateRegionalIncident, forceReplaceIncident, createRegionalIncident,
+  type RefDuplicateIncident,
+  ApiRequestError,
+} from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
+import { useUserProfile } from '@/lib/auth';
+import { PH_REGIONS, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier } from '@/lib/ph-regions';
 import { Loader2, Save, Shuffle } from 'lucide-react';
-import type { Region, Province, City } from '@/types/api';
 import dynamic from 'next/dynamic';
-import { ALL_PROBLEM_OPTIONS, normalizeProblemLabel } from '@/lib/afor-utils';
+import {
+  ALL_PROBLEM_OPTIONS, normalizeProblemLabel,
+  getTypeOptionsForClassification, getTypeCode,
+  generateReferenceNumberPreview, formatClassification,
+} from '@/lib/afor-utils';
+import { DuplicateIncidentModal } from './DuplicateIncidentModal';
 
 const MapPicker = dynamic(
   () => import('./MapPicker').then((m) => m.MapPicker),
@@ -94,14 +104,11 @@ export function IncidentForm({
   onSaved?: () => void;
 }) {
   const router = useRouter();
+  const { assignedRegionId, role } = useUserProfile();
+  const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
   const [loading, setLoading] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
-  const [regions, setRegions] = useState<Region[]>([]);
-  const [provinces, setProvinces] = useState<Province[]>([]);
-  const [cities, setCities] = useState<City[]>([]);
   const [selectedRegionId, setSelectedRegionId] = useState<number | null>(null);
-  const [selectedProvinceId, setSelectedProvinceId] = useState<number | null>(null);
-  const [selectedCityId, setSelectedCityId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Set<string>>(new Set());
@@ -227,6 +234,9 @@ export function IncidentForm({
     disposition: '',
     disposition_prepared_by: '',
     disposition_noted_by: '',
+
+    // Reference Number fields
+    station_code: 'TBA',
   });
 
   const [otherPersonnel, setOtherPersonnel] = useState<{ name: string; designation: string; remarks: string }[]>([
@@ -235,15 +245,41 @@ export function IncidentForm({
     { name: '', designation: '', remarks: '' },
   ]);
 
+  // Duplicate detection modal state
+  const [duplicateModalData, setDuplicateModalData] = useState<{
+    duplicates: RefDuplicateIncident[];
+    proceedCallback: () => Promise<void>;
+  } | null>(null);
+
+
+  // ── Derived reference number values ───────────────────────────────────────
+
+  const incidentTypeCode = useMemo(
+    () => getTypeCode(formState.classification_of_involved, formState.type_of_involved_general_category),
+    [formState.classification_of_involved, formState.type_of_involved_general_category],
+  );
+
+  const referenceNumberPreview = useMemo(() => {
+    const regionCode = selectedRegionId ? getAforRegionIdentifier(selectedRegionId) : '';
+    return generateReferenceNumberPreview({
+      regionCode,
+      stationCode: formState.station_code || 'TBA',
+      typeCode: incidentTypeCode,
+      notificationDate: formState.notification_dt_date,
+    });
+  }, [selectedRegionId, formState.station_code, incidentTypeCode, formState.notification_dt_date]);
+
   // ── Utility helpers ────────────────────────────────────────────────────────
 
   const toDateTimeLocalValue = useCallback((raw: unknown): string => {
     if (!raw) return '';
     const value = String(raw).trim();
-    const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
-    if (match) return `${match[1]}T${match[2]}`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T00:00`;
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
+    if (Number.isNaN(date.getTime())) {
+      const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+      return match ? `${match[1]}T${match[2]}` : '';
+    }
     const yyyy = date.getFullYear();
     const mm = String(date.getMonth() + 1).padStart(2, '0');
     const dd = String(date.getDate()).padStart(2, '0');
@@ -252,7 +288,34 @@ export function IncidentForm({
     return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
   }, []);
 
-  const alarmEntryToDateTimeLocal = useCallback((entry: unknown): string => {
+}, [selectedRegionId, formState.station_code, incidentTypeCode, formState.notification_dt_date]);
+
+  // ── Utility helpers ────────────────────────────────────────────────────────
+
+  const buildNotificationDateTime = (dateValue: string, timeValue: string): string | undefined => {
+    if (!dateValue) return undefined;
+    const time = timeValue || '00:00';
+    return `${dateValue}T${time}:00+08:00`;
+  };
+
+  const toDateTimeLocalValue = useCallback((raw: unknown): string => {
+    if (!raw) return '';
+    const value = String(raw).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T00:00`;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+      return match ? `${match[1]}T${match[2]}` : '';
+    }
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+  }, []);
+
+  const alarmEntryToDateTimeLocal = (entry: unknown): string => {
     if (!entry) return '';
     if (typeof entry === 'string' || typeof entry === 'number') return toDateTimeLocalValue(entry);
     if (typeof entry === 'object') {
@@ -276,15 +339,18 @@ export function IncidentForm({
       .trim();
 
   const resolveRegionId = (): number | null => {
+    // For encoders, their assigned region always wins — prevents submitting to wrong region
+    if (isEncoder && assignedRegionId) return assignedRegionId;
     if (selectedRegionId) return selectedRegionId;
+    if (assignedRegionId) return assignedRegionId;
     if (typeof initialData?.region_id === 'number' && initialData.region_id > 0) return initialData.region_id;
     const raw = formState.region?.trim();
     if (!raw) return null;
     const numeric = Number(raw);
     if (Number.isInteger(numeric) && numeric > 0) return numeric;
     const norm = normalizeRegionLabel(raw);
-    const match = regions.find((r) => normalizeRegionLabel(r.region_name) === norm);
-    return match?.region_id ?? null;
+    const match = PH_REGIONS.find((r) => normalizeRegionLabel(r.regionName) === norm);
+    return match?.regionId ?? null;
   };
 
   const base64ToBlob = (base64: string): Blob => {
@@ -298,25 +364,14 @@ export function IncidentForm({
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
+  // Lock encoder to their assigned region on mount
   useEffect(() => {
-    let active = true;
-    void fetchRegions()
-      .then((items) => { if (active) setRegions(items); })
-      .catch(() => { if (active) setRegions([]); });
-    return () => { active = false; };
-  }, []);
-
-  // Cascade: fetch provinces when a region is selected
-  useEffect(() => {
-    if (!selectedRegionId) { setProvinces([]); setSelectedProvinceId(null); setCities([]); setSelectedCityId(null); return; }
-    fetchProvinces(selectedRegionId).then(setProvinces).catch(() => setProvinces([]));
-  }, [selectedRegionId]);
-
-  // Cascade: fetch cities when a province is selected
-  useEffect(() => {
-    if (!selectedProvinceId) { setCities([]); setSelectedCityId(null); return; }
-    fetchCities(selectedProvinceId).then(setCities).catch(() => setCities([]));
-  }, [selectedProvinceId]);
+    if (assignedRegionId && !selectedRegionId && !initialData) {
+      setSelectedRegionId(assignedRegionId);
+      const r = PH_REGIONS.find((r) => r.regionId === assignedRegionId);
+      setFormState((prev) => ({ ...prev, region: r?.regionName ?? '' }));
+    }
+  }, [assignedRegionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!initialData || formHydratedRef.current) return;
@@ -374,8 +429,8 @@ export function IncidentForm({
       ...prev,
       responder_type: ns.responder_type || '',
       fire_station_name: ns.fire_station_name || '',
-      notification_dt_date: ns.notification_dt ? String(ns.notification_dt).split('T')[0] : '',
-      notification_dt_time: ns.notification_dt ? String(ns.notification_dt).split('T')[1]?.substring(0, 5) : '',
+      notification_dt_date: toDateTimeLocalValue(ns.notification_dt).split('T')[0] || '',
+      notification_dt_time: toDateTimeLocalValue(ns.notification_dt).split('T')[1] || '',
       region: ns.region || '',
       province_district: ns.province_district || (initialData as unknown as Record<string, unknown>)._province_text as string || '',
       city_municipality: initialData._city_text || ns.city_municipality || '',
@@ -395,10 +450,42 @@ export function IncidentForm({
 
       classification_of_involved: (() => {
         const raw = ns.classification_of_involved || ns.general_category || '';
-        const legacyMap: Record<string, string> = { 'Structural': 'STRUCTURAL', 'Non-Structural': 'NON_STRUCTURAL', 'Transportation': 'VEHICULAR' };
+        const legacyMap: Record<string, string> = {
+          'Structural': 'STRUCTURAL', 'Non-Structural': 'NON_STRUCTURAL',
+          'Transportation': 'TRANSPORTATION', 'Vehicular': 'TRANSPORTATION',
+          'Wildland': 'WILDLAND',
+        };
         return legacyMap[raw] ?? raw;
       })(),
-      type_of_involved_general_category: ns.type_of_involved_general_category || (ns as Record<string, unknown>).sub_category as string || '',
+      type_of_involved_general_category: (() => {
+        const rawType = String(
+          ns.type_of_involved_general_category ||
+          (ns as Record<string, unknown>).sub_category ||
+          (ns as Record<string, unknown>).incident_type ||
+          ''
+        );
+        if (!rawType) return '';
+        // Resolve classification first so we can look up valid options
+        const rawClass = ns.classification_of_involved || ns.general_category || '';
+        const legacyCM: Record<string, string> = {
+          'Structural': 'STRUCTURAL', 'Non-Structural': 'NON_STRUCTURAL',
+          'Transportation': 'TRANSPORTATION', 'Vehicular': 'TRANSPORTATION', 'Wildland': 'WILDLAND',
+        };
+        const classification = legacyCM[rawClass] ?? rawClass;
+        const opts = getTypeOptionsForClassification(classification);
+        const exact = opts.find((o) => o.name === rawType);
+        if (exact) return exact.name;
+        const ci = opts.find((o) => o.name.toLowerCase() === rawType.toLowerCase());
+        if (ci) return ci.name;
+        // Try code match (e.g. "INF" → "Informal Settlement")
+        const byCode = opts.find((o) => o.code.toLowerCase() === rawType.toLowerCase());
+        if (byCode) return byCode.name;
+        // Try partial name match for legacy stored values (e.g. "Apartment" → "Apartment Building")
+        const partial = opts.find((o) => o.name.toLowerCase().startsWith(rawType.toLowerCase()) || rawType.toLowerCase().startsWith(o.name.toLowerCase()));
+        if (partial) return partial.name;
+        return rawType; // fall back to raw value; user can correct
+      })(),
+      station_code: (ns as Record<string, unknown>).station_code as string || 'TBA',
       owner_name: sen.owner_name || ns.owner_name || '',
       establishment_name: sen.establishment_name || ns.establishment_name || '',
       general_description_of_involved: ns.general_description_of_involved || responseFields.general_description_of_involved || '',
@@ -507,17 +594,32 @@ export function IncidentForm({
     }
   }, [alarmEntryToDateTimeLocal, initialData]);
 
+  // M4 Bug 8-D: Sync the free-text "Others" field to the "Others" checkbox.
+  // Non-empty text → ensure "Others" is in problems_encountered.
+  // Empty text  → remove "Others" from problems_encountered.
+  useEffect(() => {
+    const othersText = String(formState.problems_others || '').trim();
+    const hasText = othersText.length > 0;
+    const list = formState.problems_encountered || [];
+    const othersNorm = normalizeProblemLabel('Others');
+    const othersInList = list.some((p) => normalizeProblemLabel(p) === othersNorm);
+    if (hasText && !othersInList) {
+      setFormState((prev) => ({
+        ...prev,
+        problems_encountered: [...(prev.problems_encountered || []), 'Others'],
+      }));
+    } else if (!hasText && othersInList) {
+      setFormState((prev) => ({
+        ...prev,
+        problems_encountered: (prev.problems_encountered || []).filter(
+          (p) => normalizeProblemLabel(p) !== othersNorm,
+        ),
+      }));
+    }
+  }, [formState.problems_others, formState.problems_encountered]);
+
   useEffect(() => {
     if (!initialData || locationHydratedRef.current) return;
-    const ns = (initialData.incident_nonsensitive_details || {}) as Record<string, unknown>;
-    const regionId = typeof initialData.region_id === 'number' ? initialData.region_id : null;
-    if (regionId && regionId > 0) {
-      setSelectedRegionId(regionId);
-    }
-    const cityId = Number(ns.city_id || 0) || null;
-    if (cityId) {
-      setSelectedCityId(cityId);
-    }
     // Restore coordinates from initialData (top-level fields from API response)
     const lat = typeof initialData.latitude === 'number' ? initialData.latitude : null;
     const lng = typeof initialData.longitude === 'number' ? initialData.longitude : null;
@@ -526,50 +628,40 @@ export function IncidentForm({
     locationHydratedRef.current = true;
   }, [initialData]);
 
+  // Hydrate region selection from initialData (edit mode)
   useEffect(() => {
-    if (!initialData || !selectedRegionId || selectedProvinceId) return;
-    const ns = (initialData.incident_nonsensitive_details || {}) as Record<string, unknown>;
-    const provinceId = Number((ns as Record<string, unknown>).province_id || 0) || null;
-    if (provinceId) {
-      setSelectedProvinceId(provinceId);
-      return;
+    if (!initialData || selectedRegionId) return;
+    const regionId = initialData.region_id;
+    if (regionId && regionId > 0) {
+      setSelectedRegionId(regionId);
+      const r = PH_REGIONS.find((r) => r.regionId === regionId);
+      if (r) setFormState((prev) => ({ ...prev, region: r.regionName }));
     }
-    const cityId = Number(ns.city_id || 0) || null;
-    if (!cityId || provinces.length === 0) return;
+  }, [initialData]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    let active = true;
-    void fetchCitiesByProvinces(provinces.map((p) => p.province_id))
-      .then((allCities) => {
-        if (!active) return;
-        const matched = allCities.find((c) => c.city_id === cityId);
-        if (matched) {
-          setSelectedProvinceId(matched.province_id);
-        }
-      })
-      .catch(() => {
-        if (!active) return;
-      });
-    return () => {
-      active = false;
-    };
-  }, [initialData, selectedRegionId, selectedProvinceId, provinces]);
-
-  useEffect(() => {
-    if (!initialData || !selectedProvinceId || !cities.length) return;
-    const ns = (initialData.incident_nonsensitive_details || {}) as Record<string, unknown>;
-    const cityId = Number(ns.city_id || 0) || null;
-    if (!cityId) return;
-    const matched = cities.find((c) => c.city_id === cityId);
-    if (!matched) return;
-    setSelectedCityId(matched.city_id);
-    setFormState((prev) => ({ ...prev, city_municipality: matched.city_name }));
-  }, [initialData, selectedProvinceId, cities]);
+  // Derive effective region ID from selectedRegionId or by looking up formState.region
+  const getEffectiveRegionId = (): number => {
+    if (selectedRegionId && selectedRegionId > 0) return selectedRegionId;
+    if (formState.region) {
+      const found = PH_REGIONS.find((r) => r.regionName === formState.region);
+      return found?.regionId ?? 0;
+    }
+    return 0;
+  };
 
   // ── Event handlers ─────────────────────────────────────────────────────────
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormState((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleClassificationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setFormState((prev) => ({
+      ...prev,
+      classification_of_involved: e.target.value,
+      type_of_involved_general_category: '', // reset type when classification changes
+    }));
   };
 
   const handleRadioChange = (name: string, value: string) => {
@@ -637,8 +729,17 @@ export function IncidentForm({
     if (!formState.incident_address) errors.add('incident_address');
     if (!formState.alarm_level) errors.add('alarm_level');
     if (!formState.classification_of_involved) errors.add('classification_of_involved');
+    if (!formState.extent_of_damage) errors.add('extent_of_damage');
+    if (!formState.province_district) errors.add('province_district');
+    if (!formState.city_municipality) errors.add('city_municipality');
+    if (!formState.disposition_prepared_by) errors.add('disposition_prepared_by');
+    if (!formState.disposition_noted_by) errors.add('disposition_noted_by');
     if (!resolveRegionId()) errors.add('region');
     if (!existingIncidentId && (latitude === null || longitude === null)) errors.add('map_location');
+    // Reference number dependency: type is required when classification is selected
+    if (formState.classification_of_involved && !formState.type_of_involved_general_category) {
+      errors.add('type_of_involved_general_category');
+    }
     if (errors.size > 0) {
       setFieldErrors(errors);
       const FIELD_NAMES: Record<string, string> = {
@@ -649,7 +750,13 @@ export function IncidentForm({
         incident_address: 'Incident Address',
         alarm_level: 'Highest Alarm Level',
         classification_of_involved: 'Classification of Involved',
+        extent_of_damage: 'Extent of Damage',
+        type_of_involved_general_category: 'Type of Involved (required for reference number)',
         region: 'Region',
+        province_district: 'Province / District',
+        city_municipality: 'City / Municipality',
+        disposition_prepared_by: 'Prepared by (Officer)',
+        disposition_noted_by: 'Noted by (Officer)',
         map_location: 'Fire Scene Location on Map',
       };
       const firstKey = [...errors][0];
@@ -663,8 +770,12 @@ export function IncidentForm({
     setFieldErrors(new Set());
 
     const effectiveRegionId = resolveRegionId()!;
-    setLoading(true);
 
+    await doCreateIncident(effectiveRegionId);
+  };
+
+  const doCreateIncident = async (effectiveRegionId: number) => {
+    setLoading(true);
     const fs = formState as Record<string, unknown>;
     const alarmEntry = (key: string) => {
       const dt = fs[key] as string | undefined;
@@ -678,9 +789,7 @@ export function IncidentForm({
       longitude,
       region_id: effectiveRegionId,
       incident_nonsensitive_details: {
-        notification_dt: formState.notification_dt_date && formState.notification_dt_time
-          ? `${formState.notification_dt_date}T${formState.notification_dt_time}:00`
-          : new Date().toISOString(),
+        notification_dt: buildNotificationDateTime(formState.notification_dt_date, formState.notification_dt_time),
         region: formState.region,
         province_district: formState.province_district,
         city_municipality: formState.city_municipality,
@@ -705,6 +814,8 @@ export function IncidentForm({
         incident_type: formState.type_of_involved_general_category,
         classification_of_involved: formState.classification_of_involved,
         type_of_involved_general_category: formState.type_of_involved_general_category,
+        incident_type_code: incidentTypeCode || undefined,
+        station_code: formState.station_code || 'TBA',
         owner_name: formState.owner_name || 'N/A',
         establishment_name: formState.establishment_name || 'N/A',
         general_description_of_involved: formState.general_description_of_involved || 'N/A',
@@ -828,7 +939,6 @@ export function IncidentForm({
         sub_category: (incident.incident_nonsensitive_details as Record<string, unknown>).sub_category ?? incident.incident_nonsensitive_details.incident_type,
         responder_type: incident.incident_nonsensitive_details.responder_type,
         fire_station_name: incident.incident_nonsensitive_details.fire_station_name,
-        city_id: selectedCityId ?? undefined,
         city_municipality: formState.city_municipality,
         province_district: formState.province_district,
         region_label: formState.region,
@@ -861,6 +971,8 @@ export function IncidentForm({
         disposition: incident.incident_sensitive_details.disposition,
         latitude: latitude ?? undefined,
         longitude: longitude ?? undefined,
+        station_code: formState.station_code || 'TBA',
+        incident_type_code: incidentTypeCode || undefined,
       };
       try {
         await updateRegionalIncident(existingIncidentId, updatePayload);
@@ -890,7 +1002,19 @@ export function IncidentForm({
       }
     } catch (err: unknown) {
       console.error('Submission failed', err);
-      showToast(`Submission failed: ${(err as Error).message}`);
+      const isRegionMismatch =
+        (err instanceof ApiRequestError && err.status === 403) ||
+        (err instanceof Error && err.message.includes('REGION_MISMATCH'));
+      if (isRegionMismatch) {
+        setFieldErrors((prev) => new Set([...prev, 'region']));
+        showToast('Region mismatch — this incident\'s region doesn\'t match your assigned region. Contact your administrator if you believe this is an error.');
+        setTimeout(() => {
+          const regionEl = document.querySelector('[data-field-error="true"]');
+          regionEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      } else {
+        showToast(`Submission failed: ${(err as Error).message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -948,7 +1072,7 @@ export function IncidentForm({
       alarm_level: pick(['First Alarm', 'Second Alarm', 'Third Alarm', 'General Alarm']),
       time_returned_to_base: rtime(),
       total_gas_consumed_liters: String((Math.random() * 200 + 50).toFixed(1)),
-      classification_of_involved: pick(['STRUCTURAL', 'NON_STRUCTURAL', 'VEHICULAR']),
+      classification_of_involved: pick(['STRUCTURAL', 'NON_STRUCTURAL', 'TRANSPORTATION']),
       type_of_involved_general_category: pick(['Single-Family Residential', 'Multi-Storey Residential', 'Commercial Building', 'Warehouse', 'Factory']),
       owner_name: pick(['Juan Dela Cruz', 'Maria Santos', 'ABC Corporation', 'N/A']),
       establishment_name: pick(['Dela Cruz Residence', 'Santos Apartment', 'ABC Bodega', 'N/A']),
@@ -1098,6 +1222,19 @@ export function IncidentForm({
               <input name="fire_station_name" type="text" className={errCls('fire_station_name')} value={formState.fire_station_name} onChange={handleChange} />
             </div>
 
+            <div>
+              <label className={labelCls}>Station Code</label>
+              <input
+                name="station_code"
+                type="text"
+                className={inputCls}
+                placeholder="e.g. QC01 (leave as TBA if unknown)"
+                value={formState.station_code}
+                onChange={handleChange}
+              />
+              <p className="text-xs text-gray-500 mt-1">Used in the AFOR Reference Number. Defaults to TBA.</p>
+            </div>
+
             <div data-field-error={fieldErrors.has('notification_dt_date') ? 'true' : undefined}>
               <label className={labelCls}>Date Fire Notification Received{reqMark}</label>
               <input name="notification_dt_date" type="date" className={errCls('notification_dt_date')} value={formState.notification_dt_date} onChange={handleChange} />
@@ -1113,56 +1250,70 @@ export function IncidentForm({
               <select
                 className={fieldErrors.has('region') ? errCls('region') : inputCls}
                 value={selectedRegionId ?? ''}
+                disabled={isEncoder && !!assignedRegionId}
                 onChange={(e) => {
                   const rid = Number(e.target.value);
                   setSelectedRegionId(rid || null);
-                  setSelectedProvinceId(null);
-                  setSelectedCityId(null);
-                  const r = regions.find((r) => r.region_id === rid);
-                  setFormState((prev) => ({ ...prev, region: r?.region_name ?? '', province_district: '', city_municipality: '' }));
+                  const r = PH_REGIONS.find((r) => r.regionId === rid);
+                  setFormState((prev) => ({ ...prev, region: r?.regionName ?? '', province_district: '', city_municipality: '' }));
                 }}
               >
                 <option value="">Select Region</option>
-                {regions.map((r) => <option key={r.region_id} value={r.region_id}>{r.region_name}</option>)}
+                {(isEncoder && assignedRegionId
+                  ? PH_REGIONS.filter((r) => r.regionId === assignedRegionId)
+                  : PH_REGIONS
+                ).map((r) => (
+                  <option key={r.regionId} value={r.regionId}>{r.regionName}</option>
+                ))}
               </select>
+              {isEncoder && assignedRegionId && (
+                <p className="mt-1 text-xs text-gray-400">Region is set to your assigned area.</p>
+              )}
             </div>
 
-            <div>
-              <label className={labelCls}>Province / District</label>
+            <div data-field-error={fieldErrors.has('province_district') ? 'true' : undefined}>
+              <label className={labelCls}>Province / District{reqMark}</label>
               <select
-                className={inputCls}
-                value={selectedProvinceId ?? ''}
+                className={errCls('province_district')}
+                value={formState.province_district}
                 disabled={!selectedRegionId}
                 onChange={(e) => {
-                  const pid = Number(e.target.value);
-                  setSelectedProvinceId(pid || null);
-                  setSelectedCityId(null);
-                  const p = provinces.find((p) => p.province_id === pid);
-                  setFormState((prev) => ({ ...prev, province_district: p?.province_name ?? '', city_municipality: '' }));
+                  setFormState((prev) => ({ ...prev, province_district: e.target.value, city_municipality: '' }));
                 }}
               >
                 <option value="">{selectedRegionId ? 'Select Province' : 'Select region first'}</option>
-                {provinces.map((p) => <option key={p.province_id} value={p.province_id}>{p.province_name}</option>)}
+                {getProvincesForRegion(selectedRegionId ?? 0).map((p) => (
+                  <option key={p.provinceName} value={p.provinceName}>{p.provinceName}</option>
+                ))}
               </select>
             </div>
 
-            <div>
-              <label className={labelCls}>City / Municipality</label>
-              <input
-                list="city-municipality-options"
-                className={inputCls}
-                placeholder={selectedProvinceId ? 'Select or type City / Municipality' : 'Select province first or type manually'}
-                value={formState.city_municipality}
-                onChange={(e) => {
-                  const cityName = e.target.value;
-                  const matchedCity = cities.find((c) => c.city_name.toLowerCase() === cityName.trim().toLowerCase());
-                  setSelectedCityId(matchedCity?.city_id ?? null);
-                  setFormState((prev) => ({ ...prev, city_municipality: cityName }));
-                }}
-              />
-              <datalist id="city-municipality-options">
-                {cities.map((c) => <option key={c.city_id} value={c.city_name} />)}
-              </datalist>
+            <div data-field-error={fieldErrors.has('city_municipality') ? 'true' : undefined}>
+              <label className={labelCls}>City / Municipality{reqMark}</label>
+              {(() => {
+                const effectiveRegionId = getEffectiveRegionId();
+                const cities = getCitiesForProvince(effectiveRegionId, formState.province_district);
+                return cities.length > 0 ? (
+                  <select
+                    className={errCls('city_municipality')}
+                    value={formState.city_municipality}
+                    onChange={(e) => setFormState((prev) => ({ ...prev, city_municipality: e.target.value }))}
+                  >
+                    <option value="">Select City / Municipality</option>
+                    {cities.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    className={errCls('city_municipality')}
+                    placeholder="Type city or municipality name"
+                    value={formState.city_municipality}
+                    onChange={(e) => setFormState((prev) => ({ ...prev, city_municipality: e.target.value }))}
+                  />
+                );
+              })()}
             </div>
 
             <div className="md:col-span-2" data-field-error={fieldErrors.has('incident_address') ? 'true' : undefined}>
@@ -1240,6 +1391,17 @@ export function IncidentForm({
               <input name="total_gas_consumed_liters" type="number" min="0" step="0.1" className={inputCls} value={formState.total_gas_consumed_liters} onChange={handleChange} />
             </div>
 
+            {referenceNumberPreview && (
+              <div className="md:col-span-2">
+                <label className={labelCls}>Reference Number Preview</label>
+                <div className="flex items-center gap-2 bg-gray-50 border border-gray-300 rounded px-3 py-2">
+                  <span className="font-mono text-sm text-gray-800 tracking-wide">{referenceNumberPreview}</span>
+                  <span className="ml-2 text-xs text-gray-400 italic">(sequence XXXX assigned on save)</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Format: AFOR-[Region]-[Station]-[Type]-[Month]-[Year]-[Sequence]</p>
+              </div>
+            )}
+
           </div>
         </section>
 
@@ -1250,17 +1412,48 @@ export function IncidentForm({
 
             <div data-field-error={fieldErrors.has('classification_of_involved') ? 'true' : undefined}>
               <label className={labelCls}>Classification of Involved{reqMark}</label>
-              <select name="classification_of_involved" className={errCls('classification_of_involved')} value={formState.classification_of_involved} onChange={handleChange}>
+              <select
+                name="classification_of_involved"
+                className={errCls('classification_of_involved')}
+                value={formState.classification_of_involved}
+                onChange={handleClassificationChange}
+              >
                 <option value="">Select Classification</option>
                 <option value="STRUCTURAL">Structural</option>
                 <option value="NON_STRUCTURAL">Non-Structural</option>
-                <option value="VEHICULAR">Vehicular / Transportation</option>
+                <option value="WILDLAND">Wildland</option>
+                <option value="TRANSPORTATION">Transportation</option>
               </select>
             </div>
 
-            <div>
-              <label className={labelCls}>Specific Type (e.g. Commercial/Restaurant)</label>
-              <input name="type_of_involved_general_category" type="text" className={inputCls} placeholder="e.g. Residential, Commercial (Restaurant)" value={formState.type_of_involved_general_category} onChange={handleChange} />
+            <div data-field-error={fieldErrors.has('type_of_involved_general_category') ? 'true' : undefined}>
+              <label className={labelCls}>Type of Involved{reqMark}</label>
+              {formState.classification_of_involved ? (
+                <>
+                  <select
+                    name="type_of_involved_general_category"
+                    className={errCls('type_of_involved_general_category')}
+                    value={formState.type_of_involved_general_category}
+                    onChange={handleChange}
+                  >
+                    <option value="">Select Type</option>
+                    {getTypeOptionsForClassification(formState.classification_of_involved).map((opt) => (
+                      <option key={opt.code} value={opt.name}>
+                        {opt.name} ({opt.code})
+                      </option>
+                    ))}
+                  </select>
+                  {incidentTypeCode && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      AFOR code: <span className="font-mono font-semibold text-gray-700">{incidentTypeCode}</span>
+                    </p>
+                  )}
+                </>
+              ) : (
+                <select className={inputCls} disabled>
+                  <option>Select a classification first</option>
+                </select>
+              )}
             </div>
 
             <div>
@@ -1291,9 +1484,10 @@ export function IncidentForm({
               </select>
             </div>
 
-            <div className="md:col-span-2 space-y-2">
-              <label className={labelCls}>Extent of Damage (select one)</label>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+            <div className="md:col-span-2 space-y-2" data-field-error={fieldErrors.has('extent_of_damage') ? 'true' : undefined}>
+              <label className={labelCls}>Extent of Damage (select one){reqMark}</label>
+              {fieldErrors.has('extent_of_damage') && <p className="text-xs font-semibold text-red-600">Please select the extent of damage.</p>}
+              <div className={`grid grid-cols-1 md:grid-cols-3 gap-2 text-sm rounded p-2 ${fieldErrors.has('extent_of_damage') ? 'border-2 border-red-500 bg-red-50' : ''}`}>
                 {['None / Minor Damage', 'Confined to Object/Vehicle', 'Confined to Room', 'Confined to Structure or Property', 'Total Loss', 'Extended Beyond Structure or Property'].map((opt) => (
                   <label key={opt} className="flex items-center gap-2">
                     <input type="radio" name="extent_of_damage" value={opt} checked={formState.extent_of_damage === opt} onChange={() => handleRadioChange('extent_of_damage', opt)} className="h-4 w-4" />
@@ -1557,11 +1751,12 @@ export function IncidentForm({
         <section className="space-y-4 border-b pb-6">
           <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">J. Problems Encountered</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-            {ALL_PROBLEM_OPTIONS.filter((o) => o !== 'Others').map((prob, idx) => {
+            {ALL_PROBLEM_OPTIONS.map((prob, idx) => {
               // Normalize the label to ensure consistent comparison
               const normalizedProb = normalizeProblemLabel(prob);
               const isChecked = (formState.problems_encountered || []).some((p) => normalizeProblemLabel(p) === normalizedProb);
               const checkboxId = `problem-checkbox-${idx}`;
+              const isOthers = normalizedProb === normalizeProblemLabel('Others');
 
               return (
                 <label key={`${idx}-${prob}`} htmlFor={checkboxId} className="flex items-start gap-2 cursor-pointer">
@@ -1588,6 +1783,10 @@ export function IncidentForm({
                           updated = current.filter((p) => normalizeProblemLabel(p) !== normalizedProb);
                         }
 
+                        // M4 Bug 8-D: unchecking Others also clears the free-text input
+                        if (!checked && isOthers) {
+                          return { ...prev, problems_encountered: updated, problems_others: '' };
+                        }
                         return { ...prev, problems_encountered: updated };
                       });
                     }}
@@ -1599,7 +1798,15 @@ export function IncidentForm({
           </div>
           <div>
             <label className="block text-xs font-bold text-gray-900 mb-1">Others (specify, separate by comma)</label>
-            <input type="text" name="problems_others" className={inputCls} placeholder="e.g. Flooding in access road, Low visibility due to fog" value={formState.problems_others || ''} onChange={handleChange} />
+            <input
+              type="text"
+              name="problems_others"
+              className={inputCls}
+              placeholder="e.g. Flooding in access road, Low visibility due to fog"
+              value={formState.problems_others || ''}
+              onChange={handleChange}
+              disabled={(formState.problems_encountered || []).every((p) => normalizeProblemLabel(p) !== 'Others')}
+            />
           </div>
         </section>
 
@@ -1614,13 +1821,13 @@ export function IncidentForm({
           <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">L. Disposition</h3>
           <textarea name="disposition" rows={4} className={inputCls} placeholder="As of this date, no complaint has been filed..." value={formState.disposition} onChange={handleChange} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className={labelCls}>Prepared by (Shift-in-Charge)</label>
-              <input type="text" name="disposition_prepared_by" className={inputCls} value={formState.disposition_prepared_by} onChange={handleChange} />
+            <div data-field-error={fieldErrors.has('disposition_prepared_by') ? 'true' : undefined}>
+              <label className={labelCls}>Prepared by (Shift-in-Charge){reqMark}</label>
+              <input type="text" name="disposition_prepared_by" className={errCls('disposition_prepared_by')} value={formState.disposition_prepared_by} onChange={handleChange} />
             </div>
-            <div>
-              <label className={labelCls}>Noted by (Engine Company Commander)</label>
-              <input type="text" name="disposition_noted_by" className={inputCls} value={formState.disposition_noted_by} onChange={handleChange} />
+            <div data-field-error={fieldErrors.has('disposition_noted_by') ? 'true' : undefined}>
+              <label className={labelCls}>Noted by (Engine Company Commander){reqMark}</label>
+              <input type="text" name="disposition_noted_by" className={errCls('disposition_noted_by')} value={formState.disposition_noted_by} onChange={handleChange} />
             </div>
           </div>
         </section>
@@ -1631,6 +1838,140 @@ export function IncidentForm({
         </button>
 
       </form>
+
+      {/* ── Duplicate Incident Modal ── */}
+      {duplicateModalData && (
+        <DuplicateIncidentModal
+          duplicates={duplicateModalData.duplicates}
+          currentForm={{
+            region: formState.region || (PH_REGIONS.find((r) => r.regionId === selectedRegionId)?.regionName ?? ''),
+            classification: formatClassification(formState.classification_of_involved),
+            typeOfInvolved: formState.type_of_involved_general_category,
+            incidentTypeCode,
+            stationCode: formState.station_code || 'TBA',
+            stationName: formState.fire_station_name || formState.station_code || 'TBA',
+            fireDate: formState.notification_dt_date,
+            fireTime: formState.notification_dt_time,
+            alarmLevel: formState.alarm_level,
+            address: formState.incident_address,
+            referencePreview: referenceNumberPreview || '(incomplete — fill region, type, and date)',
+          }}
+          onKeepBoth={() => {
+            void duplicateModalData.proceedCallback();
+          }}
+          onReplace={(existingId) => {
+            const existingStatus = duplicateModalData?.duplicates.find((d) => d.incident_id === existingId)?.verification_status;
+            setDuplicateModalData(null);
+            const replacePayload: Record<string, unknown> = {
+              notification_dt: buildNotificationDateTime(formState.notification_dt_date, formState.notification_dt_time),
+              alarm_level: formState.alarm_level,
+              general_category: formState.classification_of_involved,
+              sub_category: formState.type_of_involved_general_category,
+              responder_type: formState.responder_type,
+              fire_station_name: formState.fire_station_name,
+              station_code: formState.station_code || 'TBA',
+              incident_type_code: incidentTypeCode || undefined,
+              city_municipality: formState.city_municipality,
+              province_district: formState.province_district,
+              fire_origin: formState.area_of_origin,
+              extent_of_damage: formState.extent_of_damage,
+              stage_of_fire: formState.stage_of_fire_upon_arrival,
+              structures_affected: parseInt(formState.structures_affected) || 0,
+              households_affected: parseInt(formState.households_affected) || 0,
+              families_affected: parseInt(formState.families_affected) || 0,
+              individuals_affected: parseInt(formState.individuals_affected) || 0,
+              recommendations: formState.recommendations || 'N/A',
+              street_address: formState.incident_address,
+              landmark: formState.nearest_landmark,
+              narrative_report: formState.narrative_report,
+              caller_name: formState.caller_name,
+              caller_number: formState.caller_number,
+              receiver_name: formState.receiver_name,
+              latitude: latitude ?? undefined,
+              longitude: longitude ?? undefined,
+            };
+            void (async () => {
+              setLoading(true);
+              try {
+                // PENDING incidents use force-replace (bypasses withdraw requirement, audited)
+                if (existingStatus === 'PENDING') {
+                  await forceReplaceIncident(existingId, replacePayload);
+                } else {
+                  await updateRegionalIncident(existingId, replacePayload);
+                }
+                showToast(`Incident #${existingId} updated with your data.`);
+                router.push(`/dashboard/regional/incidents/${existingId}`);
+              } catch (err: unknown) {
+                showToast(`Replace failed: ${(err as Error).message}`);
+              } finally {
+                setLoading(false);
+              }
+            })();
+          }}
+          onRequestUpdate={(existingId) => {
+            // Creates a new DRAFT incident with parent_incident_id pointing to the VERIFIED original.
+            // The encoder submits it for review from the detail page; the validator will then
+            // inherit the original's reference number and archive it on approval.
+            setDuplicateModalData(null);
+            const effectiveRegionId = resolveRegionId();
+            if (!effectiveRegionId) { showToast('Region not set — cannot save.'); return; }
+            const updateNote = `[UPDATE REQUEST for incident #${existingId}]\n`;
+            const currentNarrative = formState.narrative_report || '';
+            const narrativeWithNote = currentNarrative.startsWith('[UPDATE REQUEST')
+              ? currentNarrative
+              : updateNote + currentNarrative;
+            void (async () => {
+              setLoading(true);
+              try {
+                const result = await createRegionalIncident({
+                  latitude: latitude ?? 0,
+                  longitude: longitude ?? 0,
+                  region_id: effectiveRegionId,
+                  notification_dt: buildNotificationDateTime(formState.notification_dt_date, formState.notification_dt_time),
+                  alarm_level: formState.alarm_level,
+                  general_category: formState.classification_of_involved,
+                  sub_category: formState.type_of_involved_general_category,
+                  incident_type_code: incidentTypeCode || undefined,
+                  station_code: formState.station_code || 'TBA',
+                  fire_station_name: formState.fire_station_name,
+                  responder_type: formState.responder_type,
+                  structures_affected: parseInt(formState.structures_affected) || 0,
+                  households_affected: parseInt(formState.households_affected) || 0,
+                  families_affected: parseInt(formState.families_affected) || 0,
+                  individuals_affected: parseInt(formState.individuals_affected) || 0,
+                  province_district: formState.province_district,
+                  city_municipality: formState.city_municipality,
+                  fire_origin: formState.area_of_origin,
+                  extent_of_damage: formState.extent_of_damage,
+                  stage_of_fire: formState.stage_of_fire_upon_arrival,
+                  street_address: formState.incident_address,
+                  landmark: formState.nearest_landmark,
+                  narrative_report: narrativeWithNote,
+                  caller_name: formState.caller_name,
+                  caller_number: formState.caller_number,
+                  receiver_name: formState.receiver_name,
+                  recommendations: formState.recommendations || 'N/A',
+                  parent_incident_id: existingId,
+                }, { skipAuthRedirect: true });
+                // Navigate to detail page — encoder submits for review from there
+                showToast(`Update draft #${result.incident_id} saved. Open it to submit for review.`);
+                router.push(`/dashboard/regional/incidents/${result.incident_id}`);
+              } catch (err: unknown) {
+                const msg = (err as Error).message ?? 'Unknown error';
+                if (msg.toLowerCase().includes('session') || msg.includes('401')) {
+                  showToast('Session expired — please log in again. Your form data is still here.');
+                } else {
+                  showToast(`Save failed: ${msg}`);
+                }
+              } finally {
+                setLoading(false);
+              }
+            })();
+          }}
+          onEditCurrent={() => setDuplicateModalData(null)}
+        />
+      )}
+
     </div>
   );
 }

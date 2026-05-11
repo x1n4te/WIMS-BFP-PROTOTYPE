@@ -1,37 +1,42 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Pencil, Send } from 'lucide-react';
+import { ArrowLeft, Pencil, Send, Trash2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import {
   fetchRegionalIncident,
   submitIncidentForReview,
   unpendIncident,
+  deleteIncident,
+  forceReplaceIncident,
   apiFetch,
+  ApiRequestError,
   type RegionalIncidentDetailResponse,
 } from '@/lib/api';
 import dynamic from 'next/dynamic';
+import { UpdateRequestDiffPanel } from '@/components/UpdateRequestDiffPanel';
 import type { Incident } from '@/lib/edgeFunctions';
+import { getShortRegionName } from '@/lib/ph-regions';
 
-// Read-only map zoomed in on the pinned coordinates
+// Read-only map zoomed in on the pinned coordinates (M4 Bug 8-B/8-C)
 const IncidentLocationMap = dynamic(
   () => import('@/components/MapPickerInner').then((mod) => {
     const ReadOnlyMap = (props: { latitude: number; longitude: number }) => (
-      <div style={{ height: '300px', width: '100%', overflow: 'hidden' }}>
+      <div style={{ height: '320px', width: '100%', overflow: 'hidden' }}>
         <mod.MapPickerInner
           value={{ lat: props.latitude, lng: props.longitude }}
           center={[props.latitude, props.longitude]}
-          zoom={16}
-          mapHeight="300px"
+          zoom={mod.DETAIL_INCIDENT_MAP_ZOOM}
+          mapHeight={mod.DETAIL_INCIDENT_MAP_HEIGHT}
         />
       </div>
     );
     ReadOnlyMap.displayName = 'ReadOnlyIncidentMap';
     return ReadOnlyMap;
   }),
-  { ssr: false, loading: () => <div className="h-[300px] bg-gray-100 animate-pulse rounded" /> },
+  { ssr: false, loading: () => <div className="h-[320px] bg-gray-100 animate-pulse rounded" /> },
 );
 
 // Full AFOR form used for editing
@@ -45,6 +50,7 @@ import {
   displayValue,
   ALL_PROBLEM_OPTIONS,
   normalizeProblemLabel,
+  formatClassification,
 } from '@/lib/afor-utils';
 
 // ── FIX 4: Narrative as ordered bullets ──────────────────────────────────────
@@ -229,6 +235,14 @@ export default function RegionalIncidentDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [saveNotification, setSaveNotification] = useState<string | null>(null);
+  const [showWithdrawPopup, setShowWithdrawPopup] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [duplicateFound, setDuplicateFound] = useState<{ matchedIncidentId: number } | null>(null);
+  const [pendingDuplicateFound, setPendingDuplicateFound] = useState<{ matchedIncidentId: number } | null>(null);
+  const [staleAlert, setStaleAlert] = useState(false);
+  const [showMissingFieldsModal, setShowMissingFieldsModal] = useState(false);
+  const [missingFieldsList, setMissingFieldsList] = useState<string[]>([]);
 
   const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
   const isValidator = role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR';
@@ -238,6 +252,8 @@ export default function RegionalIncidentDetailPage() {
   const [validatorNotes, setValidatorNotes] = useState('');
   const [validatorLoading, setValidatorLoading] = useState(false);
   const [validatorError, setValidatorError] = useState<string | null>(null);
+  const [validatorDupMatchedId, setValidatorDupMatchedId] = useState<number | null>(null);
+  const dupAutoShownRef = useRef(false);
 
   useEffect(() => {
     if (!authLoading && !canAccessRegional) {
@@ -270,6 +286,33 @@ export default function RegionalIncidentDetailPage() {
     load();
   }, [authLoading, canAccessRegional, load]);
 
+  // Poll every 30 s while the incident is PENDING — alert the encoder if the validator acts.
+  useEffect(() => {
+    if (!isEncoder || !detail || detail.verification_status !== 'PENDING') return;
+    const trackedUpdatedAt = detail.updated_at;
+    const interval = setInterval(async () => {
+      try {
+        const fresh = await fetchRegionalIncident(incidentId);
+        if (fresh.verification_status !== 'PENDING' || fresh.updated_at !== trackedUpdatedAt) {
+          setStaleAlert(true);
+          clearInterval(interval);
+        }
+      } catch {
+        // non-critical — silently skip failed polls
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [isEncoder, detail, incidentId]);
+
+  // Auto-show the duplicate comparison once when a validator opens a duplicate-flagged incident.
+  useEffect(() => {
+    if (!isValidator || !detail || dupAutoShownRef.current) return;
+    if (detail.is_duplicate && detail.duplicate_of) {
+      dupAutoShownRef.current = true;
+      setValidatorDupMatchedId(detail.duplicate_of);
+    }
+  }, [isValidator, detail]);
+
   // Memoized: only recompute when detail changes so IncidentForm's hydration runs once
   const incidentFormData = useMemo<Incident | undefined>(() => {
     if (!detail) return undefined;
@@ -283,17 +326,52 @@ export default function RegionalIncidentDetailPage() {
     };
   }, [detail]);
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (options: { ackDuplicate?: boolean; force?: boolean } = {}) => {
     setActionLoading(true);
     setActionError(null);
     try {
-      await submitIncidentForReview(incidentId);
+      await submitIncidentForReview(incidentId, options);
+      setDuplicateFound(null);
+      setPendingDuplicateFound(null);
       await load();
     } catch (e) {
+      if (e instanceof ApiRequestError && e.status === 409) {
+        const detail = e.detail as { code?: string; matched_incident_id?: number; matched_status?: string } | null;
+        if (detail?.code === 'DUPLICATE_DETECTED' && detail.matched_incident_id) {
+          if (detail.matched_status === 'PENDING') {
+            setPendingDuplicateFound({ matchedIncidentId: detail.matched_incident_id });
+          } else {
+            setDuplicateFound({ matchedIncidentId: detail.matched_incident_id });
+          }
+          return;
+        }
+      }
       setActionError(e instanceof Error ? e.message : 'Failed to submit incident.');
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleSubmitClick = () => {
+    if (!detail) return;
+    const ns = (detail.nonsensitive as Record<string, unknown>) ?? {};
+    const sen = (detail.sensitive as Record<string, unknown>) ?? {};
+    const missing: string[] = [];
+    if (!ns.notification_dt) missing.push('Date and Time of Fire Notification Received');
+    if (!ns.general_category) missing.push('Classification of Involved');
+    if (ns.general_category && !detail.incident_type_code) missing.push('Type of Involved (e.g. APT, Daycare)');
+    if (!detail.region_id) missing.push('Region');
+    if (!ns.province_district) missing.push('Province / District');
+    if (!ns.city_municipality) missing.push('City / Municipality');
+    if (!ns.extent_of_damage) missing.push('Extent of Damage');
+    if (!sen.prepared_by_officer && !sen.disposition_prepared_by) missing.push('Prepared by (Officer)');
+    if (!sen.noted_by_officer && !sen.disposition_noted_by) missing.push('Noted by (Officer)');
+    if (missing.length > 0) {
+      setMissingFieldsList(missing);
+      setShowMissingFieldsModal(true);
+      return;
+    }
+    void handleSubmit({});
   };
 
   const handleUnpend = async () => {
@@ -309,19 +387,77 @@ export default function RegionalIncidentDetailPage() {
     }
   };
 
-  const submitValidatorAction = async () => {
-    if (!validatorAction) return;
+  const handleUnpendAndEdit = async () => {
+    setShowWithdrawPopup(false);
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await unpendIncident(incidentId);
+      await load();
+      setIsEditing(true);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to withdraw submission.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setShowDeleteConfirm(false);
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await deleteIncident(incidentId);
+      router.push('/dashboard/regional');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to delete incident.');
+      setActionLoading(false);
+    }
+  };
+
+  const handleEditClick = () => {
+    if (!detail) return;
+    const status = detail.verification_status;
+    if (status === 'PENDING') {
+      setShowWithdrawPopup(true);
+    } else if (status === 'DRAFT' || status === 'REJECTED') {
+      setIsEditing(true);
+      setActionError(null);
+    } else {
+      setActionError(`Cannot edit an incident with status "${status}".`);
+    }
+  };
+
+  const submitValidatorAction = async (opts?: { force?: boolean; action?: string; originalIncidentId?: number }) => {
+    const action = opts?.action ?? validatorAction;
+    if (!action) return;
     setValidatorLoading(true);
     setValidatorError(null);
+    const url = opts?.force
+      ? `/regional/incidents/${incidentId}/verification?force=true`
+      : `/regional/incidents/${incidentId}/verification`;
     try {
-      await apiFetch(`/regional/incidents/${incidentId}/verification`, {
+      await apiFetch(url, {
         method: 'PATCH',
-        body: JSON.stringify({ action: validatorAction, notes: validatorNotes.trim() || null }),
+        body: JSON.stringify({
+          action,
+          notes: validatorNotes.trim() || null,
+          ...(opts?.originalIncidentId ? { original_incident_id: opts.originalIncidentId } : {}),
+        }),
       });
       await load();
       setValidatorAction(null);
       setValidatorNotes('');
+      setValidatorDupMatchedId(null);
     } catch (e) {
+      if (e instanceof ApiRequestError && e.status === 409) {
+        const d = e.detail as { code?: string; matched_incident_id?: number } | null;
+        if (d?.code === 'DUPLICATE_DETECTED' && d.matched_incident_id) {
+          setValidatorAction(null);
+          setValidatorDupMatchedId(d.matched_incident_id);
+          return;
+        }
+      }
       setValidatorError(e instanceof Error ? e.message : 'Action failed.');
     } finally {
       setValidatorLoading(false);
@@ -337,6 +473,51 @@ export default function RegionalIncidentDetailPage() {
   const pod = (sens?.personnel_on_duty ?? {}) as PersonnelOnDuty;
   const others = (sens?.other_personnel ?? []) as OtherPerson[];
   const alarmTimeline = (ns?.alarm_timeline ?? {}) as AlarmTimeline;
+
+  const buildPendingReplacePayload = (): Record<string, unknown> => ({
+    notification_dt: ns?.notification_dt ?? null,
+    alarm_level: ns?.alarm_level ?? null,
+    general_category: ns?.general_category ?? ns?.classification_of_involved ?? null,
+    sub_category: ns?.sub_category ?? ns?.type_of_involved_general_category ?? null,
+    specific_type: ns?.specific_type ?? null,
+    occupancy_type: ns?.occupancy_type ?? null,
+    city_id: ns?.city_id ?? null,
+    barangay_id: ns?.barangay_id ?? null,
+    distance_from_station_km: ns?.distance_from_station_km ?? ns?.distance_to_fire_scene_km ?? null,
+    estimated_damage_php: ns?.estimated_damage_php ?? null,
+    civilian_injured: ns?.civilian_injured ?? null,
+    civilian_deaths: ns?.civilian_deaths ?? null,
+    firefighter_injured: ns?.firefighter_injured ?? null,
+    firefighter_deaths: ns?.firefighter_deaths ?? null,
+    families_affected: ns?.families_affected ?? null,
+    structures_affected: ns?.structures_affected ?? null,
+    households_affected: ns?.households_affected ?? null,
+    individuals_affected: ns?.individuals_affected ?? null,
+    responder_type: ns?.responder_type ?? null,
+    fire_origin: ns?.fire_origin ?? ns?.area_of_origin ?? null,
+    extent_of_damage: ns?.extent_of_damage ?? null,
+    stage_of_fire: ns?.stage_of_fire ?? ns?.stage_of_fire_upon_arrival ?? null,
+    fire_station_name: ns?.fire_station_name ?? null,
+    total_response_time_minutes: ns?.total_response_time_minutes ?? null,
+    recommendations: ns?.recommendations ?? null,
+    province_district: ns?.province_district ?? null,
+    city_municipality: ns?.city_municipality ?? null,
+    station_code: ns?.station_code ?? null,
+    street_address: sens?.street_address ?? ns?.incident_address ?? null,
+    landmark: sens?.landmark ?? ns?.nearest_landmark ?? null,
+    caller_name: sens?.caller_name ?? null,
+    caller_number: sens?.caller_number ?? null,
+    narrative_report: sens?.narrative_report ?? null,
+    owner_name: sens?.owner_name ?? null,
+    occupant_name: sens?.occupant_name ?? null,
+    establishment_name: sens?.establishment_name ?? null,
+    receiver_name: sens?.receiver_name ?? ns?.receiver_name ?? null,
+    prepared_by_officer: sens?.prepared_by_officer ?? null,
+    noted_by_officer: sens?.noted_by_officer ?? null,
+    remarks: sens?.remarks ?? null,
+    latitude: detail?.latitude ?? null,
+    longitude: detail?.longitude ?? null,
+  });
 
   // Defensive: problems_encountered may come back as a JSON array or (rarely) a string
   const rawProblems = ns?.problems_encountered;
@@ -356,7 +537,7 @@ export default function RegionalIncidentDetailPage() {
   const timeArrivedAtScene = String(ns?.time_arrived_at_scene ?? responseFields.time_arrived_at_scene ?? '').trim() || null;
   const timeReturnedToBase = String(ns?.time_returned_to_base ?? responseFields.time_returned_to_base ?? '').trim() || null;
 
-  const canEditOrSubmit = isEncoder && detail &&
+  const canSubmitOrDelete = isEncoder && detail &&
     (detail.verification_status === 'DRAFT' ||
      detail.verification_status === 'PENDING' ||
      detail.verification_status === 'REJECTED');
@@ -367,10 +548,237 @@ export default function RegionalIncidentDetailPage() {
     PENDING_VALIDATION: 'bg-blue-100 text-blue-800',
     VERIFIED: 'bg-green-100 text-green-800',
     REJECTED: 'bg-red-100 text-red-800',
+    REPLACED: 'bg-purple-100 text-purple-800',
   };
 
   return (
     <div className="space-y-6">
+      {/* Duplicate detected — modal with side-by-side comparison */}
+      {duplicateFound && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-amber-800">Possible Duplicate Detected</h2>
+            <p className="text-sm text-gray-700">
+              A verified incident (#{duplicateFound.matchedIncidentId}) already exists with the same
+              region, type, and fire date. Review the comparison below before deciding.
+            </p>
+            <UpdateRequestDiffPanel
+              updateIncidentId={incidentId}
+              originalIncidentId={duplicateFound.matchedIncidentId}
+            />
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => { setDuplicateFound(null); void handleSubmit({ force: true }); }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm font-semibold text-white bg-red-800 rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {actionLoading ? 'Submitting…' : 'Submit Anyway'}
+              </button>
+              <button
+                onClick={() => { setDuplicateFound(null); setIsEditing(true); }}
+                className="px-4 py-2 text-sm font-semibold text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Continue Editing
+              </button>
+              <button
+                onClick={() => setDuplicateFound(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pending duplicate detected — with side-by-side comparison */}
+      {pendingDuplicateFound && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-blue-800">Duplicate Pending Incident Found</h2>
+            <p className="text-sm text-gray-700">
+              A similar incident (#{pendingDuplicateFound.matchedIncidentId}) is already pending review.
+              Review the comparison below before deciding.
+            </p>
+            <UpdateRequestDiffPanel
+              updateIncidentId={incidentId}
+              originalIncidentId={pendingDuplicateFound.matchedIncidentId}
+            />
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => { setPendingDuplicateFound(null); void handleSubmit({ force: true }); }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm font-semibold text-white bg-red-800 rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {actionLoading ? 'Submitting…' : 'Submit Anyway'}
+              </button>
+              <button
+                onClick={() => { setPendingDuplicateFound(null); setIsEditing(true); }}
+                className="px-4 py-2 text-sm font-semibold text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Continue Editing
+              </button>
+              <button
+                onClick={() => setPendingDuplicateFound(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Validator duplicate resolution modal — shown on Accept 409 or auto-show on view */}
+      {validatorDupMatchedId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-amber-800">Duplicate Incident Detected</h2>
+            <p className="text-sm text-gray-700">
+              Incident #{incidentId} matches an existing record (#{validatorDupMatchedId}).
+              Review the side-by-side comparison before deciding.
+            </p>
+            <UpdateRequestDiffPanel
+              updateIncidentId={incidentId}
+              originalIncidentId={validatorDupMatchedId}
+            />
+            {validatorError && (
+              <p className="text-sm text-red-600">{validatorError}</p>
+            )}
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+              <button
+                onClick={() => setValidatorDupMatchedId(null)}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setValidatorDupMatchedId(null);
+                  setValidatorAction('reject');
+                }}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => {
+                  const mid = validatorDupMatchedId;
+                  setValidatorDupMatchedId(null);
+                  void submitValidatorAction({ force: true, action: 'accept_replace', originalIncidentId: mid });
+                }}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {validatorLoading ? 'Saving…' : 'Replace Existing'}
+              </button>
+              <button
+                onClick={() => {
+                  setValidatorDupMatchedId(null);
+                  void submitValidatorAction({ force: true, action: 'accept' });
+                }}
+                disabled={validatorLoading}
+                className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                {validatorLoading ? 'Saving…' : 'Verify as New'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Withdraw-to-edit confirmation popup */}
+      {showWithdrawPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <h2 className="text-lg font-bold text-gray-900">Withdraw to Edit?</h2>
+            <p className="text-sm text-gray-600">
+              This incident is currently <strong>Pending Review</strong>. You can only edit incidents in Draft status.
+              Would you like to withdraw it from review so you can make changes? It will be set back to Draft.
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowWithdrawPopup(false)}
+                className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUnpendAndEdit}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm font-semibold text-white bg-yellow-600 rounded-lg hover:bg-yellow-700 disabled:opacity-50"
+              >
+                Withdraw &amp; Edit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation popup */}
+      {showDeleteConfirm && detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <h2 className="text-lg font-bold text-red-900">Delete Incident?</h2>
+            <p className="text-sm text-gray-600">
+              This will permanently remove incident <strong>#{incidentId}</strong> ({detail.verification_status}).
+              This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm font-semibold text-white bg-red-700 rounded-lg hover:bg-red-800 disabled:opacity-50"
+              >
+                Delete Incident
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Missing required fields modal — shown when encoder tries to submit an incomplete draft */}
+      {showMissingFieldsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <h2 className="text-lg font-bold text-red-900">Incomplete Incident Report</h2>
+            <p className="text-sm text-gray-600">
+              The following required fields are missing. Please fill them in before submitting.
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-sm text-gray-800">
+              {missingFieldsList.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowMissingFieldsModal(false)}
+                className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  setShowMissingFieldsModal(false);
+                  setIsEditing(true);
+                }}
+                className="px-4 py-2 text-sm font-semibold text-white bg-red-800 rounded-lg hover:bg-red-700"
+              >
+                Continue Editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <Link
           href={isValidator ? '/dashboard/validator' : '/dashboard/regional'}
@@ -379,28 +787,47 @@ export default function RegionalIncidentDetailPage() {
           <ArrowLeft className="h-4 w-4" aria-hidden />
           {isValidator ? 'Back to validator dashboard' : 'Back to regional dashboard'}
         </Link>
-        {detail && canEditOrSubmit && (
-          <div className="flex items-center gap-2">
+        {detail && isEncoder && (
+          <div className="flex items-center gap-2 flex-wrap">
             {!isEditing && (
               <>
+                {/* Delete button — always visible for DRAFT/PENDING/REJECTED */}
+                {canSubmitOrDelete && (
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    disabled={actionLoading}
+                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                )}
+
+                {/* Withdraw button — standalone action for PENDING, no edit required */}
+                {detail.verification_status === 'PENDING' && (
+                  <button
+                    onClick={handleUnpend}
+                    disabled={actionLoading}
+                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-yellow-400 text-yellow-800 bg-yellow-50 hover:bg-yellow-100 disabled:opacity-50"
+                  >
+                    Withdraw
+                  </button>
+                )}
+
+                {/* Edit button — DRAFT/REJECTED: opens edit directly; PENDING: shows withdraw-first popup */}
                 <button
-                  onClick={() => { setIsEditing(true); setActionError(null); }}
-                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-gray-300 bg-white hover:bg-gray-50 text-gray-700"
+                  onClick={handleEditClick}
+                  disabled={actionLoading}
+                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-50"
                 >
                   <Pencil className="h-3.5 w-3.5" />
                   Edit
                 </button>
-                {detail.verification_status === 'PENDING' ? (
+
+                {/* Submit / Resubmit — only for DRAFT or REJECTED */}
+                {(detail.verification_status === 'DRAFT' || detail.verification_status === 'REJECTED') && (
                   <button
-                    onClick={handleUnpend}
-                    disabled={actionLoading}
-                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium bg-yellow-600 text-white hover:bg-yellow-700 disabled:opacity-50"
-                  >
-                    Withdraw from Review
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleSubmit}
+                    onClick={handleSubmitClick}
                     disabled={actionLoading}
                     className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium bg-red-800 text-white hover:bg-red-700 disabled:opacity-50"
                   >
@@ -428,6 +855,12 @@ export default function RegionalIncidentDetailPage() {
         </div>
       )}
 
+      {saveNotification && (
+        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800" role="status">
+          ✅ {saveNotification}
+        </div>
+      )}
+
       {detail && detail.verification_status === 'REJECTED' && (
         <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900" role="alert">
           <p className="font-semibold">This incident was rejected by a validator.</p>
@@ -451,7 +884,12 @@ export default function RegionalIncidentDetailPage() {
         <IncidentForm
           initialData={incidentFormData}
           existingIncidentId={detail.incident_id}
-          onSaved={() => { setIsEditing(false); void load(); }}
+          onSaved={() => {
+            setSaveNotification('Incident saved successfully!');
+            setTimeout(() => setSaveNotification(null), 5000);
+            setIsEditing(false);
+            void load();
+          }}
         />
       )}
 
@@ -470,12 +908,29 @@ export default function RegionalIncidentDetailPage() {
 
       {!loading && !error && detail && !isEditing && (
         <>
+          {/* Stale data alert — shown when a validator has acted while encoder is viewing */}
+          {staleAlert && (
+            <div className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-3 flex items-center justify-between gap-3" role="alert">
+              <span className="text-sm text-blue-900 font-medium">
+                This incident was updated by a validator. Refresh to see the latest status.
+              </span>
+              <button
+                onClick={() => { setStaleAlert(false); void load(); }}
+                className="shrink-0 rounded px-3 py-1.5 text-sm font-semibold bg-blue-700 text-white hover:bg-blue-800"
+              >
+                Refresh
+              </button>
+            </div>
+          )}
+
           {/* Header */}
           <div className="flex flex-wrap items-start gap-3">
             <div>
               <div className="flex items-center gap-3 flex-wrap">
-                <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                  Incident #{detail.incident_id}
+                <h1 className="text-2xl font-bold font-mono" style={{ color: 'var(--text-primary)' }}>
+                  {detail.verification_status === 'VERIFIED' && detail.reference_number
+                    ? detail.reference_number
+                    : `Incident #${detail.incident_id}`}
                 </h1>
                 {detail.is_wildland && (
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-sm font-semibold text-orange-800 border border-orange-200">
@@ -484,7 +939,10 @@ export default function RegionalIncidentDetailPage() {
                 )}
               </div>
               <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                Region {detail.region_id}
+                {detail.verification_status !== 'VERIFIED' || !detail.reference_number
+                  ? `Incident #${detail.incident_id} · `
+                  : ''}
+                {getShortRegionName(detail.region_id)}
                 {detail.created_at && <>{' · '}Created {new Date(detail.created_at).toLocaleString()}</>}
               </p>
             </div>
@@ -516,7 +974,7 @@ export default function RegionalIncidentDetailPage() {
 
           {/* B. Nature & Classification */}
           <Section title="B. Nature and Classification of Involved" sectionId="sec-class">
-            <FieldRow label={FIELD_LABELS.general_category} value={ns?.general_category ?? ns?.classification_of_involved} />
+            <FieldRow label={FIELD_LABELS.general_category} value={formatClassification(String(ns?.general_category ?? ns?.classification_of_involved ?? ''))} />
             <FieldRow label={FIELD_LABELS.sub_category} value={ns?.sub_category ?? ns?.type_of_involved_general_category} />
             <FieldRow label="Owner / Occupant Name" value={sens?.owner_name ?? ns?.owner_name} />
             <FieldRow label="Establishment Name" value={sens?.establishment_name ?? ns?.establishment_name} />
@@ -756,22 +1214,15 @@ export default function RegionalIncidentDetailPage() {
                 )}
                 <div className="flex flex-wrap gap-2 items-center">
                   <button
-                    onClick={() => setValidatorAction('accept')}
-                    disabled={validatorLoading || detail?.verification_status === 'VERIFIED'}
+                    onClick={() => void submitValidatorAction({ action: 'accept' })}
+                    disabled={validatorLoading || detail?.verification_status === 'VERIFIED' || detail?.verification_status === 'REJECTED'}
                     className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    Accept
-                  </button>
-                  <button
-                    onClick={() => setValidatorAction('pending')}
-                    disabled={validatorLoading || detail?.verification_status === 'PENDING'}
-                    className="px-4 py-2 text-sm rounded bg-yellow-500 text-white hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    Return to Pending
+                    {validatorLoading && validatorAction === null ? 'Checking…' : 'Accept'}
                   </button>
                   <button
                     onClick={() => setValidatorAction('reject')}
-                    disabled={validatorLoading || detail?.verification_status === 'REJECTED'}
+                    disabled={validatorLoading || detail?.verification_status === 'REJECTED' || detail?.verification_status === 'VERIFIED'}
                     className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Reject
@@ -783,27 +1234,17 @@ export default function RegionalIncidentDetailPage() {
                     Back to Dashboard
                   </Link>
                 </div>
-                {validatorAction && (
+                {validatorAction === 'reject' && (
                   <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
                     <span className="text-sm text-gray-600">
-                      Confirm:{' '}
-                      <strong>
-                        {validatorAction === 'accept' ? 'Accept' : validatorAction === 'reject' ? 'Reject' : 'Return to Pending'}
-                      </strong>
-                      {' '}this incident?
+                      Confirm: <strong>Reject</strong> this incident?
                     </span>
                     <button
-                      onClick={submitValidatorAction}
-                      disabled={validatorLoading || (validatorAction === 'reject' && !validatorNotes.trim())}
-                      className={`px-4 py-1.5 text-sm rounded text-white disabled:opacity-50 ${
-                        validatorAction === 'accept'
-                          ? 'bg-green-600 hover:bg-green-700'
-                          : validatorAction === 'reject'
-                          ? 'bg-red-600 hover:bg-red-700'
-                          : 'bg-yellow-500 hover:bg-yellow-600'
-                      }`}
+                      onClick={() => void submitValidatorAction()}
+                      disabled={validatorLoading || !validatorNotes.trim()}
+                      className="px-4 py-1.5 text-sm rounded text-white disabled:opacity-50 bg-red-600 hover:bg-red-700"
                     >
-                      {validatorLoading ? 'Saving…' : 'Confirm'}
+                      {validatorLoading ? 'Saving…' : 'Confirm Reject'}
                     </button>
                     <button
                       onClick={() => { setValidatorAction(null); setValidatorError(null); }}

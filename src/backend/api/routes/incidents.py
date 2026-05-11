@@ -55,16 +55,38 @@ def upload_incident_bundle(
     if not isinstance(incidents, list) or len(incidents) == 0:
         raise HTTPException(status_code=400, detail="No incidents provided")
 
-    region_id_raw = body.get("region_id") or user.get("assigned_region_id")
+    user_id = user["user_id"]
+    user_role = user.get("role", "")
+
+    # Resolve the user's assigned region from the DB (not available in the base JWT payload)
+    assigned_row = db.execute(
+        text("SELECT assigned_region_id FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
+        {"uid": user_id},
+    ).fetchone()
+    assigned_region_id = assigned_row[0] if assigned_row else None
+
+    region_id_raw = body.get("region_id")
     try:
         region_id = int(region_id_raw)
     except (TypeError, ValueError):
-        region_row = db.execute(text("SELECT region_id FROM wims.ref_regions LIMIT 1")).fetchone()
-        if not region_row:
-            raise HTTPException(status_code=500, detail="No region available")
-        region_id = int(region_row[0])
+# Fall back to assigned region (encoder) or first available region
+        if assigned_region_id:
+            region_id = int(assigned_region_id)
+        else:
+            region_row = db.execute(
+                text("SELECT region_id FROM wims.ref_regions LIMIT 1")
+            ).fetchone()
+            if not region_row:
+                raise HTTPException(status_code=500, detail="No region available")
+            region_id = int(region_row[0])
 
-    user_id = user["user_id"]
+    # Enforce REGIONAL_ENCODER can only submit for their assigned region
+    if user_role in ("REGIONAL_ENCODER", "ENCODER") and assigned_region_id is not None:
+        if region_id != int(assigned_region_id):
+            raise HTTPException(
+                status_code=403,
+                detail="REGION_MISMATCH: You can only submit incidents for your assigned region.",
+            )
 
     batch_row = db.execute(
         text(
@@ -109,6 +131,9 @@ def upload_incident_bundle(
         lon = _safe_float(item.get("longitude"), 0.0)
         lat = _safe_float(item.get("latitude"), 0.0)
 
+        incident_type_code_val = (ns.get("incident_type_code") or "").strip().upper() or None
+        station_code_val = (ns.get("station_code") or "TBA").strip() or "TBA"
+
         city_id: int | None = None
         city_id_raw = ns.get("city_id")
         try:
@@ -126,11 +151,12 @@ def upload_incident_bundle(
             text(
                 """
                 INSERT INTO wims.fire_incidents
-                    (import_batch_id, encoder_id, region_id, location, verification_status)
+                    (import_batch_id, encoder_id, region_id, location, verification_status,
+                     incident_type_code, reference_number)
                 VALUES
                     (:batch_id, CAST(:uid AS uuid), :region_id,
                      ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
-                     'DRAFT')
+                     'DRAFT', :incident_type_code, NULL)
                 RETURNING incident_id
                 """
             ),
@@ -140,6 +166,7 @@ def upload_incident_bundle(
                 "region_id": region_id,
                 "lon": lon,
                 "lat": lat,
+                "incident_type_code": incident_type_code_val,
             },
         ).fetchone()
 
@@ -162,7 +189,8 @@ def upload_incident_bundle(
                     resources_deployed, alarm_timeline, problems_encountered,
                     recommendations, fire_station_name, stage_of_fire,
                     extent_total_floor_area_sqm, extent_total_land_area_hectares,
-                    distance_from_station_km
+                    distance_from_station_km, station_code,
+                    city_municipality, province_district
                 ) VALUES (
                     :incident_id, :city_id,
                     CAST(:notification_dt AS timestamptz), :alarm_level, :general_category, :sub_category,
@@ -173,7 +201,8 @@ def upload_incident_bundle(
                     CAST(:resources_deployed AS jsonb), CAST(:alarm_timeline AS jsonb), CAST(:problems_encountered AS jsonb),
                     :recommendations, :fire_station_name, :stage_of_fire,
                     :floor_area, :land_area,
-                    :distance_from_station_km
+                    :distance_from_station_km, :station_code,
+                    :city_municipality, :province_district
                 )
                 """
             ),
@@ -207,6 +236,9 @@ def upload_incident_bundle(
                 "distance_from_station_km": _safe_float(
                     ns.get("distance_to_fire_scene_km") or ns.get("distance_from_station_km")
                 ),
+                "station_code": station_code_val,
+                "city_municipality": ns.get("city_municipality") or "",
+                "province_district": ns.get("province_district") or "",
             },
         )
 

@@ -2,20 +2,15 @@
 
 /**
  * /dashboard/validator — NATIONAL_VALIDATOR incident queue.
- *
- * Mirrors the patterns in /dashboard/regional (encoder dashboard):
- *  - Calls its own backend endpoint  GET /regional/validator/incidents
- *  - Sends decisions via             PATCH /regional/incidents/:id/verification
- *  - Uses the same apiFetch helper from src/lib/api.ts
- *  - Owns its own loading / error / empty states
- *
- * Region isolation is enforced server-side; this page never leaks
- * incidents from other regions.
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { apiFetch, fetchValidatorStats } from "@/lib/api";
+import { apiFetch, ApiRequestError, fetchValidatorStats } from "@/lib/api";
+import { IncidentDiffPanel } from "@/components/IncidentDiffPanel";
+import { UpdateRequestDiffPanel } from "@/components/UpdateRequestDiffPanel";
+import { formatClassification } from "@/lib/afor-utils";
+import { getShortRegionName } from "@/lib/ph-regions";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +22,8 @@ interface ValidatorIncident {
   encoder_id: string | null;
   region_id: number;
   created_at: string | null;
+  submitted_at: string | null;
+  updated_at: string | null;
   notification_dt: string | null;
   general_category: string | null;
   alarm_level: string | null;
@@ -36,6 +33,10 @@ interface ValidatorIncident {
   responder_type: string | null;
   fire_origin: string | null;
   extent_of_damage: string | null;
+  parent_incident_id: number | null;
+  is_duplicate: boolean;
+  duplicate_of: number | null;
+  reference_number: string | null;
 }
 
 interface QueueResponse {
@@ -45,17 +46,20 @@ interface QueueResponse {
   offset: number;
 }
 
-type ActionType = "accept" | "pending" | "reject";
+// accept | reject are the only standard actions; accept_replace for duplicate replacement;
+// accept_new is used only inside the bulk/modal flow to force accept-as-new for duplicates.
+type ActionType = "accept" | "accept_replace" | "reject";
 
 const STATUS_FILTER_QUEUE = "__QUEUE__";
 const STATUS_FILTER_ALL = "__ALL__";
 
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: "Draft",
-  PENDING: "Pending Review",
+  PENDING: "Pending",
   PENDING_VALIDATION: "Awaiting Validation",
   VERIFIED: "Verified",
   REJECTED: "Rejected",
+  REPLACED: "Replaced",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -64,7 +68,28 @@ const STATUS_COLORS: Record<string, string> = {
   PENDING_VALIDATION: "bg-blue-100 text-blue-800",
   VERIFIED: "bg-green-100 text-green-800",
   REJECTED: "bg-red-100 text-red-800",
+  REPLACED: "bg-purple-100 text-purple-800",
 };
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const regionDisplay = getShortRegionName;
+
+function formatCallReceived(dt: string | null): string {
+  if (!dt) return "—";
+  const d = new Date(dt);
+  return d.toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -76,14 +101,18 @@ export default function ValidatorDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Filters — default to pending queue
-  const [statusFilter, setStatusFilter] = useState<string>(STATUS_FILTER_QUEUE);
+  // Filters — default to all incidents so validators can see the full workflow
+  const [statusFilter, setStatusFilter] = useState<string>(STATUS_FILTER_ALL);
   const [encoderFilter, setEncoderFilter] = useState<string>("");
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
 
   // Stats
-  const [stats, setStats] = useState<{ total_verified: number; pending_validation: number; by_category: { category: string; count: number }[] } | null>(null);
+  const [stats, setStats] = useState<{
+    total_verified: number;
+    pending_validation: number;
+    by_category: { category: string; count: number }[];
+  } | null>(null);
 
   // Action modal state
   const [actionTarget, setActionTarget] = useState<ValidatorIncident | null>(null);
@@ -91,6 +120,186 @@ export default function ValidatorDashboard() {
   const [actionNotes, setActionNotes] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Bulk approve state (Phase 1.4)
+  // ---------------------------------------------------------------------------
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
+  // When a duplicate is found during bulk processing, pause here for user decision.
+  const [bulkDupTarget, setBulkDupTarget] = useState<ValidatorIncident | null>(null);
+  // Resolve function: call with "accept" | "accept_replace" | "reject" | "skip"
+  const bulkDupResolve = useRef<((decision: string) => void) | null>(null);
+  const [showBulkConfirmModal, setShowBulkConfirmModal] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  // Per-incident loading state for direct-accept (no confirm step)
+  const [acceptingId, setAcceptingId] = useState<number | null>(null);
+  // Validator duplicate resolution state
+  const [validatorDupTarget, setValidatorDupTarget] = useState<ValidatorIncident | null>(null);
+  const [validatorDupMatchedId, setValidatorDupMatchedId] = useState<number | null>(null);
+  const [newIncidentBanner, setNewIncidentBanner] = useState(false);
+  const lastKnownTotal = useRef<number | null>(null);
+
+  const togglePending = (inc: ValidatorIncident, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(inc.incident_id);
+      else next.delete(inc.incident_id);
+      return next;
+    });
+  };
+
+  const allPendingSelected =
+    incidents.filter((i) => i.verification_status === "PENDING").length > 0 &&
+    incidents
+      .filter((i) => i.verification_status === "PENDING")
+      .every((i) => selectedIds.has(i.incident_id));
+
+  const toggleSelectAllPending = (checked: boolean) => {
+    if (checked) {
+      setSelectedIds(
+        new Set(
+          incidents
+            .filter((i) => i.verification_status === "PENDING")
+            .map((i) => i.incident_id)
+        )
+      );
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Batch duplicate check helpers (Phase 1.4 — in-memory check)
+  // ---------------------------------------------------------------------------
+  function isBatchDuplicate(
+    candidate: ValidatorIncident,
+    acceptedSoFar: ValidatorIncident[]
+  ): boolean {
+    return acceptedSoFar.some(
+      (a) =>
+        a.region_id === candidate.region_id &&
+        a.general_category === candidate.general_category &&
+        a.notification_dt &&
+        candidate.notification_dt &&
+        a.notification_dt.slice(0, 10) === candidate.notification_dt.slice(0, 10)
+    );
+  }
+
+  // Returns a Promise that resolves when the user makes a bulk-dup decision.
+  function waitForBulkDupDecision(inc: ValidatorIncident): Promise<string> {
+    return new Promise((resolve) => {
+      setBulkDupTarget(inc);
+      bulkDupResolve.current = resolve;
+    });
+  }
+
+  const doArchive = async (inc: ValidatorIncident) => {
+    setArchiveError(null);
+    try {
+      await apiFetch(`/regional/validator/incidents/${inc.incident_id}/archive`, { method: "PATCH" });
+      await fetchQueue();
+    } catch (err: unknown) {
+      setArchiveError(err instanceof Error ? err.message : "Archive failed");
+    }
+  };
+
+  // Accept a single incident directly — no confirm step.
+  // If the backend finds a duplicate it returns 409 DUPLICATE_DETECTED and
+  // we immediately show the side-by-side resolution modal.
+  const handleDirectAccept = async (inc: ValidatorIncident) => {
+    setAcceptingId(inc.incident_id);
+    setActionError(null);
+    try {
+      await apiFetch(`/regional/incidents/${inc.incident_id}/verification`, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "accept", notes: null }),
+      });
+      await fetchQueue();
+    } catch (err: unknown) {
+      if (err instanceof ApiRequestError && err.status === 409) {
+        const detail = err.detail as { code?: string; matched_incident_id?: number } | null;
+        if (detail?.code === "DUPLICATE_DETECTED" && detail.matched_incident_id) {
+          setValidatorDupTarget(inc);
+          setValidatorDupMatchedId(detail.matched_incident_id);
+          return;
+        }
+      }
+      setActionError(err instanceof Error ? err.message : "Accept failed.");
+    } finally {
+      setAcceptingId(null);
+    }
+  };
+
+  const submitBulkApprove = async () => {
+    if (selectedIds.size === 0) return;
+    setShowBulkConfirmModal(false);
+
+    setBulkLoading(true);
+    setBulkError(null);
+    setBulkProgress(null);
+
+    // Collect selected incidents in chronological order (they're already sorted).
+    const toProcess = incidents
+      .filter((i) => selectedIds.has(i.incident_id))
+      .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+
+    const acceptedSoFar: ValidatorIncident[] = [];
+    let processedCount = 0;
+
+    try {
+      for (const inc of toProcess) {
+        processedCount++;
+        setBulkProgress(`Processing ${processedCount} / ${toProcess.length}…`);
+
+        // Check: flagged as duplicate of a verified incident (stored at submission time)
+        const hasDup =
+          inc.is_duplicate || isBatchDuplicate(inc, acceptedSoFar);
+
+        if (hasDup) {
+          const decision = await waitForBulkDupDecision(inc);
+          setBulkDupTarget(null);
+
+          if (decision === "skip") continue;
+          if (decision === "reject") {
+            await apiFetch(`/regional/incidents/${inc.incident_id}/verification`, {
+              method: "PATCH",
+              body: JSON.stringify({ action: "reject", notes: "Rejected during bulk approve (duplicate)" }),
+            });
+            continue;
+          }
+          // "accept" or "accept_replace"
+          const action = decision === "accept_replace" ? "accept_replace" : "accept";
+          await apiFetch(`/regional/incidents/${inc.incident_id}/verification`, {
+            method: "PATCH",
+            body: JSON.stringify({ action, notes: "Bulk approve" }),
+          });
+          if (action === "accept" || action === "accept_replace") {
+            acceptedSoFar.push(inc);
+          }
+        } else {
+          await apiFetch(`/regional/incidents/${inc.incident_id}/verification`, {
+            method: "PATCH",
+            body: JSON.stringify({ action: "accept", notes: "Bulk approve" }),
+          });
+          acceptedSoFar.push(inc);
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Bulk approve failed";
+      setBulkError(msg);
+    } finally {
+      setBulkLoading(false);
+      setBulkProgress(null);
+      setBulkDupTarget(null);
+      bulkDupResolve.current = null;
+      setSelectedIds(new Set());
+      await fetchQueue();
+    }
+  };
 
   // ---------------------------------------------------------------------------
   // Fetch queue
@@ -104,7 +313,9 @@ export default function ValidatorDashboard() {
       limit: String(PAGE_SIZE),
       offset: String(page * PAGE_SIZE),
     });
-    if (statusFilter === STATUS_FILTER_ALL) {
+    if (statusFilter === "__ARCHIVED__") {
+      params.set("archived", "true");
+    } else if (statusFilter === STATUS_FILTER_ALL) {
       params.set("show_all", "true");
     } else if (statusFilter && statusFilter !== STATUS_FILTER_QUEUE) {
       params.set("status", statusFilter);
@@ -117,6 +328,8 @@ export default function ValidatorDashboard() {
       );
       setIncidents(data.items);
       setTotal(data.total);
+      lastKnownTotal.current = data.total;
+      setNewIncidentBanner(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load queue");
     } finally {
@@ -129,51 +342,71 @@ export default function ValidatorDashboard() {
   }, [fetchQueue]);
 
   useEffect(() => {
-    fetchValidatorStats().then(setStats).catch(() => {/* non-critical */});
+    fetchValidatorStats()
+      .then(setStats)
+      .catch(() => {
+        /* non-critical */
+      });
+  }, []);
+
+  // Background poll: check for new pending incidents every 30 seconds
+  useEffect(() => {
+    const checkForNewIncidents = async () => {
+      try {
+        const data: QueueResponse = await apiFetch(
+          `/regional/validator/incidents?limit=1&offset=0`
+        );
+        if (lastKnownTotal.current !== null && data.total > lastKnownTotal.current) {
+          setNewIncidentBanner(true);
+        }
+        lastKnownTotal.current = data.total;
+      } catch {
+        /* non-critical */
+      }
+    };
+    const intervalId = setInterval(checkForNewIncidents, 30_000);
+    return () => clearInterval(intervalId);
   }, []);
 
   // ---------------------------------------------------------------------------
   // Submit validator decision
   // ---------------------------------------------------------------------------
 
-  const submitAction = async () => {
+  const submitAction = async (force = false) => {
     if (!actionTarget || !actionType) return;
     setActionLoading(true);
     setActionError(null);
 
+    const url = force
+      ? `/regional/incidents/${actionTarget.incident_id}/verification?force=true`
+      : `/regional/incidents/${actionTarget.incident_id}/verification`;
+
     try {
-      await apiFetch(
-        `/regional/incidents/${actionTarget.incident_id}/verification`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            action: actionType,
-            notes: actionNotes.trim() || null,
-          }),
-        }
-      );
+      await apiFetch(url, {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: actionType,
+          notes: actionNotes.trim() || null,
+        }),
+      });
 
-      // Optimistic update — replace just this row's status in local state
-      const nextStatus =
-        actionType === "accept"
-          ? "VERIFIED"
-          : actionType === "reject"
-          ? "REJECTED"
-          : "PENDING";
+      await fetchQueue();
 
-      setIncidents((prev) =>
-        prev.map((inc) =>
-          inc.incident_id === actionTarget.incident_id
-            ? { ...inc, verification_status: nextStatus }
-            : inc
-        )
-      );
-
-      // Close modal
       setActionTarget(null);
       setActionType(null);
       setActionNotes("");
+      setValidatorDupTarget(null);
+      setValidatorDupMatchedId(null);
     } catch (err: unknown) {
+      if (err instanceof ApiRequestError && err.status === 409) {
+        const detail = err.detail as { code?: string; matched_incident_id?: number } | null;
+        if (detail?.code === "DUPLICATE_DETECTED" && detail.matched_incident_id) {
+          setValidatorDupTarget(actionTarget);
+          setValidatorDupMatchedId(detail.matched_incident_id);
+          setActionTarget(null);
+          return;
+        }
+      }
       setActionError(err instanceof Error ? err.message : "Action failed");
     } finally {
       setActionLoading(false);
@@ -189,6 +422,7 @@ export default function ValidatorDashboard() {
     setActionType(type);
     setActionNotes("");
     setActionError(null);
+    setShowDiff(false);
   };
 
   const closeModal = () => {
@@ -197,9 +431,14 @@ export default function ValidatorDashboard() {
     setActionType(null);
     setActionNotes("");
     setActionError(null);
+    setShowDiff(false);
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // Determine if the modal target is an update request or duplicate that needs diff
+  const isUpdateRequest = !!(actionTarget?.parent_incident_id);
+  const isDuplicateIncident = !!(actionTarget?.is_duplicate && actionTarget?.duplicate_of);
 
   // ---------------------------------------------------------------------------
   // JSX
@@ -207,32 +446,66 @@ export default function ValidatorDashboard() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold mb-1">Validator Queue</h1>
+      <div className="flex items-baseline justify-between mb-1">
+        <h1 className="text-2xl font-bold">Validator Queue</h1>
+        <Link
+          href="/dashboard/validator/audit"
+          className="text-sm font-medium text-blue-700 hover:text-blue-900"
+        >
+          Audit Trail →
+        </Link>
+      </div>
       <p className="text-gray-500 text-sm mb-6">
-        Encoder-submitted incidents in your assigned region awaiting review.
+        Encoder-submitted incidents from all regions awaiting review.
       </p>
+
+      {newIncidentBanner && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-blue-300 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <span>New incidents have been submitted. Refresh to see the latest queue.</span>
+          <button
+            onClick={fetchQueue}
+            className="ml-4 rounded bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-700"
+          >
+            Refresh now
+          </button>
+        </div>
+      )}
 
       {/* ── Summary cards ── */}
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
           <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
             <p className="text-xs text-gray-500">Awaiting Validation</p>
-            <p className="text-2xl font-bold text-blue-700">{stats.pending_validation}</p>
+            <p className="text-2xl font-bold text-blue-700">
+              {stats.pending_validation}
+            </p>
           </div>
           <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
             <p className="text-xs text-gray-500">Total Verified</p>
-            <p className="text-2xl font-bold text-green-700">{stats.total_verified}</p>
+            <p className="text-2xl font-bold text-green-700">
+              {stats.total_verified}
+            </p>
           </div>
-          {(['STRUCTURAL', 'NON_STRUCTURAL', 'VEHICULAR'] as const).map((cat) => {
-            const entry = stats.by_category.find((c) => c.category === cat);
-            const label = cat === 'NON_STRUCTURAL' ? 'Non-Structural' : cat.charAt(0) + cat.slice(1).toLowerCase();
-            return (
-              <div key={cat} className="rounded-lg border border-gray-200 bg-white px-4 py-3">
-                <p className="text-xs text-gray-500">{label}</p>
-                <p className="text-2xl font-bold text-gray-800">{entry?.count ?? 0}</p>
-              </div>
-            );
-          })}
+          {(["STRUCTURAL", "NON_STRUCTURAL", "TRANSPORTATION"] as const).map(
+            (cat) => {
+              const entry = stats.by_category.find(
+                (c) => c.category === cat || (cat === "TRANSPORTATION" && c.category === "VEHICULAR")
+              );
+              return (
+                <div
+                  key={cat}
+                  className="rounded-lg border border-gray-200 bg-white px-4 py-3"
+                >
+                  <p className="text-xs text-gray-500">
+                    {formatClassification(cat)}
+                  </p>
+                  <p className="text-2xl font-bold text-gray-800">
+                    {entry?.count ?? 0}
+                  </p>
+                </div>
+              );
+            }
+          )}
         </div>
       )}
 
@@ -241,11 +514,16 @@ export default function ValidatorDashboard() {
         <select
           className="border rounded px-3 py-2 text-sm"
           value={statusFilter}
-          onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(0);
+          }}
         >
           <option value={STATUS_FILTER_QUEUE}>Pending</option>
           <option value="REJECTED">Rejected</option>
           <option value="VERIFIED">Accepted</option>
+          <option value={STATUS_FILTER_ALL}>All</option>
+          <option value="__ARCHIVED__">Archived</option>
         </select>
 
         <input
@@ -253,7 +531,10 @@ export default function ValidatorDashboard() {
           placeholder="Filter by Encoder UUID…"
           className="border rounded px-3 py-2 text-sm w-72"
           value={encoderFilter}
-          onChange={(e) => { setEncoderFilter(e.target.value); setPage(0); }}
+          onChange={(e) => {
+            setEncoderFilter(e.target.value);
+            setPage(0);
+          }}
         />
 
         <button
@@ -262,7 +543,29 @@ export default function ValidatorDashboard() {
         >
           ↺ Refresh
         </button>
+
+        {selectedIds.size > 0 && (
+          <button
+            onClick={() => setShowBulkConfirmModal(true)}
+            disabled={bulkLoading}
+            className="ml-auto bg-green-600 hover:bg-green-700 text-white rounded px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {bulkLoading
+              ? bulkProgress ?? "Processing…"
+              : `Bulk Approve (${selectedIds.size})`}
+          </button>
+        )}
       </div>
+      {bulkError && (
+        <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700 mb-4">
+          {bulkError}
+        </div>
+      )}
+      {archiveError && (
+        <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700 mb-4">
+          Archive failed: {archiveError}
+        </div>
+      )}
 
       {/* ── States ── */}
       {loading && (
@@ -285,74 +588,108 @@ export default function ValidatorDashboard() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-4 py-3 font-medium">ID</th>
+                <th className="text-left px-3 py-3 font-medium w-8">
+                  <input
+                    type="checkbox"
+                    checked={allPendingSelected}
+                    onChange={(e) => toggleSelectAllPending(e.target.checked)}
+                    title="Select all PENDING"
+                  />
+                </th>
+                <th className="text-left px-4 py-3 font-medium">Submitted</th>
                 <th className="text-left px-4 py-3 font-medium">Status</th>
+                <th className="text-left px-4 py-3 font-medium">Region</th>
                 <th className="text-left px-4 py-3 font-medium">Station</th>
+                <th className="text-left px-4 py-3 font-medium">Call Received</th>
                 <th className="text-left px-4 py-3 font-medium">Category</th>
                 <th className="text-left px-4 py-3 font-medium">Alarm</th>
-                <th className="text-left px-4 py-3 font-medium">Structures</th>
-                <th className="text-left px-4 py-3 font-medium">Notification</th>
-                <th className="text-left px-4 py-3 font-medium">Region</th>
-                <th className="text-left px-4 py-3 font-medium">Details</th>
                 <th className="text-left px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {incidents.map((inc) => (
                 <tr key={inc.incident_id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-xs">{inc.incident_id}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                        STATUS_COLORS[inc.verification_status] ?? "bg-gray-100 text-gray-600"
-                      }`}
-                    >
-                      {STATUS_LABELS[inc.verification_status] ?? inc.verification_status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">{inc.fire_station_name ?? "—"}</td>
-                  <td className="px-4 py-3">{inc.general_category ?? "—"}</td>
-                  <td className="px-4 py-3">{inc.alarm_level ?? "—"}</td>
-                  <td className="px-4 py-3">{inc.structures_affected ?? "—"}</td>
-                  <td className="px-4 py-3 text-xs text-gray-500">
-                    {inc.notification_dt
-                      ? new Date(inc.notification_dt).toLocaleString()
-                      : "—"}
+                  <td className="px-3 py-3">
+                    {inc.verification_status === "PENDING" ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(inc.incident_id)}
+                        onChange={(e) => togglePending(inc, e.target.checked)}
+                      />
+                    ) : null}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-600">
-                    {inc.region_id ? `Region ${inc.region_id}` : "—"}
+                    {formatCallReceived(inc.submitted_at ?? inc.created_at)}
                   </td>
                   <td className="px-4 py-3">
-                    <Link
-                      href={`/dashboard/regional/incidents/${inc.incident_id}`}
-                      className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                    >
-                      View
-                    </Link>
+                    <div className="flex flex-col gap-1">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                          STATUS_COLORS[inc.verification_status] ??
+                          "bg-gray-100 text-gray-600"
+                        }`}
+                      >
+                        {STATUS_LABELS[inc.verification_status] ??
+                          inc.verification_status}
+                      </span>
+                      {inc.parent_incident_id && (
+                        <span className="inline-block px-1.5 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          UPDATE
+                        </span>
+                      )}
+                      {inc.is_duplicate && !inc.parent_incident_id && !["VERIFIED", "REJECTED", "REPLACED"].includes(inc.verification_status) && (
+                        <span className="inline-block px-1.5 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-800 border border-orange-300">
+                          DUPLICATE
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {regionDisplay(inc.region_id)}
+                  </td>
+                  <td className="px-4 py-3">{inc.fire_station_name ?? "—"}</td>
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {formatCallReceived(inc.notification_dt)}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => openAction(inc, "accept")}
-                        disabled={inc.verification_status === "VERIFIED"}
-                        className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    {formatClassification(inc.general_category)}
+                  </td>
+                  <td className="px-4 py-3">{inc.alarm_level ?? "—"}</td>
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    <div className="flex gap-1 items-center">
+                      <Link
+                        href={`/dashboard/regional/incidents/${inc.incident_id}`}
+                        className="px-2 py-1 text-xs rounded border border-blue-400 text-blue-700 hover:bg-blue-50"
+                        title={inc.reference_number ?? `Incident #${inc.incident_id}`}
                       >
-                        Accept
-                      </button>
-                      <button
-                        onClick={() => openAction(inc, "pending")}
-                        disabled={inc.verification_status === "PENDING"}
-                        className="px-2 py-1 text-xs rounded bg-yellow-500 text-white hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Pend
-                      </button>
-                      <button
-                        onClick={() => openAction(inc, "reject")}
-                        disabled={inc.verification_status === "REJECTED"}
-                        className="px-2 py-1 text-xs rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Reject
-                      </button>
+                        View
+                      </Link>
+                      {statusFilter === "__ARCHIVED__" ? null : (
+                        ["VERIFIED", "REJECTED", "REPLACED"].includes(inc.verification_status) ? (
+                          <button
+                            onClick={() => void doArchive(inc)}
+                            className="px-2 py-1 text-xs rounded bg-gray-600 text-white hover:bg-gray-700"
+                          >
+                            Archive
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => void handleDirectAccept(inc)}
+                              disabled={acceptingId === inc.incident_id}
+                              className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                            >
+                              {acceptingId === inc.incident_id ? "…" : "Accept"}
+                            </button>
+                            <button
+                              onClick={() => openAction(inc, "reject")}
+                              className="px-2 py-1 text-xs rounded bg-red-600 text-white hover:bg-red-700"
+                            >
+                              Reject
+                            </button>
+                          </>
+                        )
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -385,26 +722,246 @@ export default function ValidatorDashboard() {
         </div>
       )}
 
+      {/* ── Validator duplicate resolution modal ── */}
+      {validatorDupTarget && validatorDupMatchedId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-semibold mb-1 text-amber-800">Duplicate Incident Detected</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Incident #{validatorDupTarget.incident_id} matches a verified record (#{validatorDupMatchedId})
+              from within the past 7 days. Review the records side by side before deciding.
+            </p>
+            <div className="mb-4">
+              <UpdateRequestDiffPanel
+                updateIncidentId={validatorDupTarget.incident_id}
+                originalIncidentId={validatorDupMatchedId}
+              />
+            </div>
+            {actionError && <p className="text-sm text-red-600 mb-2">{actionError}</p>}
+            <div className="flex flex-wrap gap-2 justify-end mt-4">
+              <button
+                onClick={() => { setValidatorDupTarget(null); setValidatorDupMatchedId(null); setActionError(null); }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const inc = validatorDupTarget;
+                  setValidatorDupTarget(null);
+                  setValidatorDupMatchedId(null);
+                  openAction(inc, "reject");
+                }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => {
+                  const inc = validatorDupTarget;
+                  const originalId = validatorDupMatchedId;
+                  setValidatorDupTarget(null);
+                  setValidatorDupMatchedId(null);
+                  setActionLoading(true);
+                  setActionError(null);
+                  // accept_replace: new incident inherits the old reference number; old one is archived as REPLACED
+                  void apiFetch(`/regional/incidents/${inc.incident_id}/verification?force=true`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ action: "accept_replace", original_incident_id: originalId }),
+                  }).then(() => fetchQueue()).catch((e: unknown) => {
+                    setActionError(e instanceof Error ? e.message : "Failed to replace existing");
+                  }).finally(() => setActionLoading(false));
+                }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {actionLoading ? "Saving…" : "Replace Existing"}
+              </button>
+              <button
+                onClick={() => {
+                  const inc = validatorDupTarget;
+                  setValidatorDupTarget(null);
+                  setValidatorDupMatchedId(null);
+                  setActionLoading(true);
+                  setActionError(null);
+                  // force=true: bypass dup check and generate a brand-new reference number
+                  void apiFetch(`/regional/incidents/${inc.incident_id}/verification?force=true`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ action: "accept" }),
+                  }).then(() => fetchQueue()).catch((e: unknown) => {
+                    setActionError(e instanceof Error ? e.message : "Failed to verify as new");
+                  }).finally(() => setActionLoading(false));
+                }}
+                disabled={actionLoading}
+                className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                {actionLoading ? "Saving…" : "Verify as New"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk approve confirm modal ── */}
+      {showBulkConfirmModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-lg font-semibold mb-2">Confirm Bulk Approve</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              Approve {selectedIds.size} incident{selectedIds.size !== 1 ? "s" : ""}? This will set them to VERIFIED and cannot be undone without an explicit rejection.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowBulkConfirmModal(false)}
+                className="px-4 py-2 text-sm border rounded hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void submitBulkApprove()}
+                className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700"
+              >
+                Confirm ({selectedIds.size})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk duplicate resolution modal (Phase 1.4) ── */}
+      {bulkDupTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-semibold mb-1">Duplicate Detected in Batch</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Incident #{bulkDupTarget.incident_id} · {bulkDupTarget.fire_station_name ?? "Unknown station"} ·{" "}
+              {regionDisplay(bulkDupTarget.region_id)}
+            </p>
+            <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded text-sm text-orange-800">
+              This incident may be a duplicate of a verified record. Choose how to proceed.
+            </div>
+            {bulkDupTarget.is_duplicate && bulkDupTarget.duplicate_of && (
+              <div className="mb-4">
+                <UpdateRequestDiffPanel
+                  updateIncidentId={bulkDupTarget.incident_id}
+                  originalIncidentId={bulkDupTarget.duplicate_of}
+                />
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2 justify-end mt-4">
+              <button
+                onClick={() => bulkDupResolve.current?.("skip")}
+                className="px-4 py-2 text-sm border rounded hover:bg-gray-50"
+              >
+                Skip (Leave Pending)
+              </button>
+              <button
+                onClick={() => bulkDupResolve.current?.("reject")}
+                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => bulkDupResolve.current?.("accept_replace")}
+                className="px-4 py-2 text-sm rounded bg-amber-600 text-white hover:bg-amber-700"
+              >
+                Replace Original
+              </button>
+              <button
+                onClick={() => bulkDupResolve.current?.("accept")}
+                className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700"
+              >
+                Accept as New
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Action confirmation modal ── */}
       {actionTarget && actionType && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            {/* Back button at top for duplicate/update incidents (Phase 1.3) */}
+            {(isUpdateRequest || isDuplicateIncident) && (
+              <button
+                onClick={closeModal}
+                className="mb-3 text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+              >
+                ← Back
+              </button>
+            )}
+
             <h2 className="text-lg font-semibold mb-1">
-              {actionType === "accept"
-                ? "Accept Incident"
-                : actionType === "reject"
-                ? "Reject Incident"
-                : "Return to Pending"}
+              {actionType === "accept" || actionType === "accept_replace"
+                ? isDuplicateIncident
+                  ? "Review Duplicate Incident"
+                  : "Accept Incident"
+                : "Reject Incident"}
             </h2>
             <p className="text-sm text-gray-500 mb-4">
               Incident #{actionTarget.incident_id} ·{" "}
               {actionTarget.fire_station_name ?? "Unknown station"}
             </p>
 
+            {/* Diff view */}
+            <div className="mb-4">
+              {isUpdateRequest ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                      UPDATE REQUEST
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      Encoder submitted this as an update to incident #
+                      {actionTarget.parent_incident_id}
+                    </span>
+                  </div>
+                  <UpdateRequestDiffPanel
+                    updateIncidentId={actionTarget.incident_id}
+                    originalIncidentId={actionTarget.parent_incident_id!}
+                  />
+                </div>
+              ) : isDuplicateIncident ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-800 border border-orange-300">
+                      FLAGGED DUPLICATE
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      Matches verified incident #{actionTarget.duplicate_of}
+                    </span>
+                  </div>
+                  <UpdateRequestDiffPanel
+                    updateIncidentId={actionTarget.incident_id}
+                    originalIncidentId={actionTarget.duplicate_of!}
+                  />
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowDiff((s) => !s)}
+                    className="text-xs font-medium text-blue-700 hover:text-blue-900 underline"
+                  >
+                    {showDiff ? "Hide" : "View"} changes since submission
+                  </button>
+                  {showDiff && (
+                    <div className="mt-2">
+                      <IncidentDiffPanel incidentId={actionTarget.incident_id} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             {actionType === "reject" && (
               <>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Reason for rejection <span className="text-red-600">*</span>
+                  Reason for rejection{" "}
+                  <span className="text-red-600">*</span>
                 </label>
                 <textarea
                   className="w-full border rounded px-3 py-2 text-sm h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -420,28 +977,63 @@ export default function ValidatorDashboard() {
               <p className="mt-2 text-sm text-red-600">{actionError}</p>
             )}
 
-            <div className="flex justify-end gap-3 mt-4">
-              <button
-                onClick={closeModal}
-                disabled={actionLoading}
-                className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitAction}
-                disabled={actionLoading || (actionType === "reject" && !actionNotes.trim())}
-                className={`px-4 py-2 text-sm rounded text-white disabled:opacity-50 ${
-                  actionType === "accept"
-                    ? "bg-green-600 hover:bg-green-700"
-                    : actionType === "reject"
-                    ? "bg-red-600 hover:bg-red-700"
-                    : "bg-yellow-500 hover:bg-yellow-600"
-                }`}
-              >
-                {actionLoading ? "Saving…" : "Confirm"}
-              </button>
-            </div>
+            {/* Action buttons — duplicate incidents get 3-button layout (Phase 1.3) */}
+            {isDuplicateIncident && (actionType === "accept" || actionType === "accept_replace") ? (
+              <div className="flex flex-wrap gap-2 justify-end mt-4">
+                <button
+                  onClick={closeModal}
+                  disabled={actionLoading}
+                  className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => { setActionType("reject"); }}
+                  disabled={actionLoading}
+                  className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  Reject
+                </button>
+                <button
+                  onClick={() => { setActionType("accept_replace"); void submitAction(); }}
+                  disabled={actionLoading}
+                  className="px-4 py-2 text-sm rounded bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {actionLoading ? "Saving…" : "Replace Original"}
+                </button>
+                <button
+                  onClick={() => { setActionType("accept"); void submitAction(true); }}
+                  disabled={actionLoading}
+                  className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                >
+                  {actionLoading ? "Saving…" : "Accept as New"}
+                </button>
+              </div>
+            ) : (
+              <div className="flex justify-end gap-3 mt-4">
+                <button
+                  onClick={closeModal}
+                  disabled={actionLoading}
+                  className="px-4 py-2 text-sm border rounded hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void submitAction()}
+                  disabled={
+                    actionLoading ||
+                    (actionType === "reject" && !actionNotes.trim())
+                  }
+                  className={`px-4 py-2 text-sm rounded text-white disabled:opacity-50 ${
+                    actionType === "accept" || actionType === "accept_replace"
+                      ? "bg-green-600 hover:bg-green-700"
+                      : "bg-red-600 hover:bg-red-700"
+                  }`}
+                >
+                  {actionLoading ? "Saving…" : "Confirm"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

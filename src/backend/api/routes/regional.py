@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from services.analytics_read_model import (
     sync_incident_to_analytics,
     sync_incidents_batch,
 )
+from services.duplicate_detection import check_for_duplicate
 from utils.crypto import SecurityProvider, SecurityProviderError
 from utils.audit import log_system_audit
 
@@ -69,6 +71,17 @@ class AforParseResponse(BaseModel):
     requires_location: bool = True
 
 
+DuplicateAction = Literal["skip", "merge", "force"]
+
+
+class RowResolution(BaseModel):
+    """Encoder decision for one duplicate row, returned on second commit call."""
+
+    row_index: int
+    action: DuplicateAction
+    existing_incident_id: int | None = None  # required when action == "merge"
+
+
 class AforCommitRequest(BaseModel):
     form_kind: AforFormKind
     rows: list[dict[str, Any]]
@@ -77,6 +90,10 @@ class AforCommitRequest(BaseModel):
     # WGS84 (SRID 4326). PostGIS stores POINT(longitude latitude) — not GeoJSON [lat, lon].
     latitude: float | None = None
     longitude: float | None = None
+    # M4-D: per-row duplicate resolutions on second commit call.
+    # When None, the backend runs the duplicate scan and returns DUPLICATE_CHECK_REQUIRED.
+    # When provided, the backend applies each row's chosen action.
+    resolutions: list[RowResolution] | None = None
 
 
 class AforCommitResponse(BaseModel):
@@ -84,6 +101,11 @@ class AforCommitResponse(BaseModel):
     batch_id: int
     incident_ids: list[int]
     total_committed: int
+
+
+# M4-D duplicate detection thresholds
+DUPLICATE_RADIUS_METERS = 1000  # 1 km
+DUPLICATE_MIN_MATCHING_FIELDS = 3
 
 
 class RegionalStatsResponse(BaseModel):
@@ -181,27 +203,51 @@ def _insert_incident_verification_history(
     previous_status: str,
     new_status: str,
     notes: str,
+    action_label: str | None = None,
 ) -> None:
     """Insert IVH row with compatibility for both legacy and migrated schemas."""
+    has_action_label = _incident_verification_history_has_column(db, "action_label")
+
     if _incident_verification_history_uses_target_columns(db):
-        db.execute(
-            text("""
-                INSERT INTO wims.incident_verification_history (
-                    target_type, target_id, action_by_user_id,
-                    previous_status, new_status, notes
-                ) VALUES (
-                    'OFFICIAL', :iid, CAST(:uid AS uuid),
-                    :prev_status, :new_status, :notes
-                )
-            """),
-            {
-                "iid": incident_id,
-                "uid": actor_user_id,
-                "prev_status": previous_status,
-                "new_status": new_status,
-                "notes": notes,
-            },
-        )
+        if has_action_label:
+            db.execute(
+                text("""
+                    INSERT INTO wims.incident_verification_history (
+                        target_type, target_id, action_by_user_id,
+                        previous_status, new_status, notes, action_label
+                    ) VALUES (
+                        'OFFICIAL', :iid, CAST(:uid AS uuid),
+                        :prev_status, :new_status, :notes, :action_label
+                    )
+                """),
+                {
+                    "iid": incident_id,
+                    "uid": actor_user_id,
+                    "prev_status": previous_status,
+                    "new_status": new_status,
+                    "notes": notes,
+                    "action_label": action_label,
+                },
+            )
+        else:
+            db.execute(
+                text("""
+                    INSERT INTO wims.incident_verification_history (
+                        target_type, target_id, action_by_user_id,
+                        previous_status, new_status, notes
+                    ) VALUES (
+                        'OFFICIAL', :iid, CAST(:uid AS uuid),
+                        :prev_status, :new_status, :notes
+                    )
+                """),
+                {
+                    "iid": incident_id,
+                    "uid": actor_user_id,
+                    "prev_status": previous_status,
+                    "new_status": new_status,
+                    "notes": notes,
+                },
+            )
         return
 
     db.execute(
@@ -1544,7 +1590,113 @@ def _commit_wildland_afor_row(
         )
 
 
-@router.post("/afor/commit", response_model=AforCommitResponse)
+def _extract_row_match_fields(
+    row_data: dict[str, Any], form_kind: AforFormKind
+) -> dict[str, Any]:
+    """Extract the fields used for duplicate matching from one parsed row.
+
+    Returns a dict with: alarm_level, general_category, notification_dt (date), fire_station_name.
+    Missing values are returned as None — only present fields participate in match counting.
+    """
+    if form_kind == "WILDLAND_AFOR":
+        wl = row_data.get("wildland") or {}
+        notification_dt = wl.get("call_received_at") or wl.get("incident_date")
+        return {
+            "alarm_level": wl.get("alarm_level"),
+            "general_category": "WILDLAND",
+            "notification_dt": str(notification_dt)[:10] if notification_dt else None,
+            "fire_station_name": wl.get("fire_station_name") or wl.get("station_name"),
+        }
+    ns = row_data.get("incident_nonsensitive_details") or {}
+    notification_dt = ns.get("notification_dt")
+    return {
+        "alarm_level": (ns.get("alarm_level") or "").strip() or None,
+        "general_category": _normalize_general_category(ns.get("general_category", "") or "")
+        or None,
+        "notification_dt": str(notification_dt)[:10] if notification_dt else None,
+        "fire_station_name": (ns.get("fire_station_name") or "").strip() or None,
+    }
+
+
+def _find_duplicates(
+    db: Session,
+    rows: list[dict[str, Any]],
+    region_id: int,
+    lon: float,
+    lat: float,
+    form_kind: AforFormKind,
+) -> list[dict[str, Any]]:
+    """M4-D: For each incoming row, find existing fire_incidents within 1km that
+    match on at least DUPLICATE_MIN_MATCHING_FIELDS fields. Returns one entry per
+    duplicate row with the matched incident_id, distance, and matched fields.
+    """
+    duplicates: list[dict[str, Any]] = []
+
+    candidates = db.execute(
+        text("""
+            SELECT
+                fi.incident_id,
+                ST_Distance(
+                    fi.location::geography,
+                    ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+                ) AS distance_m,
+                nd.alarm_level,
+                nd.general_category,
+                nd.notification_dt,
+                nd.fire_station_name
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+            WHERE fi.region_id = :region_id
+              AND fi.is_archived = FALSE
+              AND fi.verification_status != 'REJECTED'
+              AND ST_DWithin(
+                  fi.location::geography,
+                  ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+                  :radius
+              )
+        """),
+        {"lon": lon, "lat": lat, "region_id": region_id, "radius": DUPLICATE_RADIUS_METERS},
+    ).fetchall()
+
+    if not candidates:
+        return duplicates
+
+    for row_index, row_data in enumerate(rows):
+        incoming = _extract_row_match_fields(row_data, form_kind)
+        best_match: dict[str, Any] | None = None
+        for cand in candidates:
+            cand_existing = {
+                "alarm_level": cand[2],
+                "general_category": cand[3],
+                "notification_dt": str(cand[4])[:10] if cand[4] else None,
+                "fire_station_name": cand[5],
+            }
+            matched_fields: list[str] = []
+            for key, incoming_val in incoming.items():
+                cand_val = cand_existing.get(key)
+                if (
+                    incoming_val is not None
+                    and cand_val is not None
+                    and str(incoming_val).strip().lower() == str(cand_val).strip().lower()
+                ):
+                    matched_fields.append(key)
+            if len(matched_fields) >= DUPLICATE_MIN_MATCHING_FIELDS:
+                if best_match is None or len(matched_fields) > len(best_match["matched_fields"]):
+                    best_match = {
+                        "row_index": row_index,
+                        "existing_incident_id": cand[0],
+                        "distance_m": float(cand[1]) if cand[1] is not None else 0.0,
+                        "matched_fields": matched_fields,
+                        "incoming_values": incoming,
+                        "existing_values": cand_existing,
+                    }
+        if best_match is not None:
+            duplicates.append(best_match)
+
+    return duplicates
+
+
+@router.post("/afor/commit")
 async def commit_afor_import(
     request: Request,
     user: Annotated[dict, Depends(get_regional_encoder)],
@@ -1591,6 +1743,25 @@ async def commit_afor_import(
         if wildland_errors:
             raise HTTPException(status_code=400, detail=" ".join(wildland_errors))
 
+    # ── M4-D: Multi-factor duplicate pre-check ───────────────────────────────
+    # First call (resolutions=None): scan; if duplicates found, return without inserting.
+    # Second call (resolutions=[...]): apply per-row decisions (skip/merge/force).
+    if body.resolutions is None:
+        duplicates = _find_duplicates(db, body.rows, region_id, lon, lat, body.form_kind)
+        if duplicates:
+            return {
+                "status": "DUPLICATE_CHECK_REQUIRED",
+                "duplicates": duplicates,
+                "radius_meters": DUPLICATE_RADIUS_METERS,
+                "min_matching_fields": DUPLICATE_MIN_MATCHING_FIELDS,
+            }
+
+    # Build the resolution map keyed by row_index for fast lookup.
+    resolution_map: dict[int, RowResolution] = {}
+    if body.resolutions:
+        for r in body.resolutions:
+            resolution_map[r.row_index] = r
+
     # Create import batch
     batch_row = db.execute(
         text("""
@@ -1616,6 +1787,11 @@ async def commit_afor_import(
         return _safe_int(bucket.get("m")) + _safe_int(bucket.get("f"))
 
     for idx, row_data in enumerate(body.rows):
+        # M4-D: skip rows the encoder explicitly chose to skip
+        resolution = resolution_map.get(idx)
+        if resolution is not None and resolution.action == "skip":
+            continue
+
         if body.form_kind == "WILDLAND_AFOR":
             assert validated_wildland_rows is not None
             _commit_wildland_afor_row(
@@ -1629,6 +1805,53 @@ async def commit_afor_import(
                 lat,
                 source=wildland_source,
             )
+            continue
+
+        # M4-D: merge into existing incident — UPDATE rather than INSERT
+        if resolution is not None and resolution.action == "merge":
+            if resolution.existing_incident_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Row {idx}: merge action requires existing_incident_id",
+                )
+            existing_id = resolution.existing_incident_id
+            ns_merge = row_data.get("incident_nonsensitive_details", {}) or {}
+            db.execute(
+                text("""
+                    UPDATE wims.incident_nonsensitive_details SET
+                        notification_dt = COALESCE(CAST(:notification_dt AS timestamptz), notification_dt),
+                        alarm_level = COALESCE(NULLIF(:alarm_level, ''), alarm_level),
+                        general_category = COALESCE(NULLIF(:general_category, ''), general_category),
+                        sub_category = COALESCE(NULLIF(:sub_category, ''), sub_category),
+                        fire_station_name = COALESCE(NULLIF(:fire_station_name, ''), fire_station_name),
+                        structures_affected = COALESCE(:structures_affected, structures_affected),
+                        households_affected = COALESCE(:households_affected, households_affected),
+                        individuals_affected = COALESCE(:individuals_affected, individuals_affected),
+                        families_affected = COALESCE(:families_affected, families_affected)
+                    WHERE incident_id = :iid
+                """),
+                {
+                    "iid": existing_id,
+                    "notification_dt": ns_merge.get("notification_dt"),
+                    "alarm_level": ns_merge.get("alarm_level", "") or "",
+                    "general_category": _normalize_general_category(
+                        ns_merge.get("general_category", "") or ""
+                    ) or "",
+                    "sub_category": ns_merge.get("sub_category", "") or "",
+                    "fire_station_name": ns_merge.get("fire_station_name", "") or "",
+                    "structures_affected": ns_merge.get("structures_affected"),
+                    "households_affected": ns_merge.get("households_affected"),
+                    "individuals_affected": ns_merge.get("individuals_affected"),
+                    "families_affected": ns_merge.get("families_affected"),
+                },
+            )
+            db.execute(
+                text(
+                    "UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"
+                ),
+                {"iid": existing_id},
+            )
+            incident_ids.append(existing_id)
             continue
 
         ns = row_data.get("incident_nonsensitive_details", {})
@@ -1932,13 +2155,18 @@ def get_regional_incidents(
                    nd.households_affected, nd.individuals_affected,
                    nd.responder_type, nd.fire_origin, nd.extent_of_damage,
                    sd.owner_name, sd.establishment_name, sd.caller_name,
-                   CASE WHEN iwa.incident_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_wildland
+                   CASE WHEN iwa.incident_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_wildland,
+                   fi.updated_at,
+                   c.city_name, p.province_name, rr.region_name
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_wildland_afor iwa ON iwa.incident_id = fi.incident_id
+            LEFT JOIN wims.ref_cities c ON c.city_id = nd.city_id
+            LEFT JOIN wims.ref_provinces p ON p.province_id = c.province_id
+            LEFT JOIN wims.ref_regions rr ON rr.region_id = fi.region_id
             WHERE {where_sql}
-            ORDER BY fi.created_at DESC
+            ORDER BY fi.updated_at DESC NULLS LAST, fi.created_at DESC
             LIMIT :limit OFFSET :offset
         """),
         params,
@@ -1955,6 +2183,10 @@ def get_regional_incidents(
         ).scalar()
         or 0
     )
+
+    def _location_display(city: str | None, province: str | None, region: str | None) -> str | None:
+        parts = [p for p in (region, province, city) if p]
+        return ", ".join(parts) if parts else None
 
     return {
         "items": [
@@ -1976,12 +2208,206 @@ def get_regional_incidents(
                 "establishment_name": r[14],
                 "caller_name": r[15],
                 "is_wildland": bool(r[16]),
+                "updated_at": r[17].isoformat() if r[17] else None,
+                "location_display": _location_display(r[18], r[19], r[20]),
             }
             for r in rows
         ],
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+# ---------------------------------------------------------------------------
+# M4-E: Dedicated Draft Management Endpoints
+#
+# IMPORTANT: These routes must be registered BEFORE /incidents/{incident_id}
+# so that "drafts" / "draft/{id}" are not matched as the {incident_id} param.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/incidents/drafts")
+def list_encoder_drafts(
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    """List the current encoder's DRAFT incidents (most-recently-updated first)."""
+    encoder_id = user["user_id"]
+    rows = db.execute(
+        text(
+            """
+            SELECT
+                fi.incident_id, fi.region_id, fi.created_at, fi.updated_at,
+                nd.notification_dt, nd.general_category, nd.alarm_level,
+                nd.fire_station_name
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd
+                   ON nd.incident_id = fi.incident_id
+            WHERE fi.encoder_id = CAST(:eid AS uuid)
+              AND fi.verification_status = 'DRAFT'
+              AND fi.is_archived = FALSE
+            ORDER BY fi.updated_at DESC NULLS LAST, fi.created_at DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {"eid": str(encoder_id), "limit": limit, "offset": offset},
+    ).fetchall()
+    total = db.execute(
+        text(
+            """
+            SELECT COUNT(*) FROM wims.fire_incidents
+            WHERE encoder_id = CAST(:eid AS uuid)
+              AND verification_status = 'DRAFT'
+              AND is_archived = FALSE
+            """
+        ),
+        {"eid": str(encoder_id)},
+    ).scalar() or 0
+    return {
+        "items": [
+            {
+                "incident_id": r[0],
+                "region_id": r[1],
+                "created_at": r[2].isoformat() if r[2] else None,
+                "updated_at": r[3].isoformat() if r[3] else None,
+                "notification_dt": r[4].isoformat() if r[4] else None,
+                "general_category": r[5],
+                "alarm_level": r[6],
+                "fire_station_name": r[7],
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/incidents/check-duplicate")
+def check_incident_duplicate(
+    region_id: int,
+    fire_date: str,
+    incident_type_code: Optional[str] = None,
+    general_category: Optional[str] = None,
+    user: Annotated[dict, Depends(get_regional_encoder)] = None,
+    db: Annotated[Session, Depends(get_db_with_rls)] = None,
+):
+    """Return existing non-archived incidents that could be duplicates.
+
+    Detection criteria (OR logic — any match triggers a warning):
+      1. Same region + type_code + same calendar month + year (reference number space collision)
+      2. Same region + type_code + exact fire date
+      3. Same region + general_category + exact fire date (when no type_code available)
+    """
+    try:
+        fire_dt = datetime.fromisoformat(str(fire_date))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="fire_date must be a valid YYYY-MM-DD date")
+
+    fire_month = fire_dt.month
+    fire_year = fire_dt.year
+
+    # Build WHERE conditions with explicit Python-side checks to avoid NULL pitfalls
+    where_conditions = [
+        "fi.region_id = :rid",
+        "fi.is_archived = FALSE",
+        "fi.verification_status = 'VERIFIED'",
+    ]
+
+    # Build OR sub-conditions
+    or_parts: list[str] = []
+    params: dict[str, Any] = {
+        "rid": region_id,
+        "fire_date": fire_date,
+        "fire_month": fire_month,
+        "fire_year": fire_year,
+    }
+
+    if incident_type_code:
+        params["type_code"] = incident_type_code
+        # Same reference number space (same type + same month + year)
+        or_parts.append(
+            "(fi.incident_type_code = :type_code"
+            " AND EXTRACT(MONTH FROM nd.notification_dt AT TIME ZONE 'Asia/Manila') = :fire_month"
+            " AND EXTRACT(YEAR FROM nd.notification_dt AT TIME ZONE 'Asia/Manila') = :fire_year)"
+        )
+        # Exact date + type (catches same day, different month edge case from above)
+        or_parts.append(
+            "(fi.incident_type_code = :type_code"
+            " AND DATE(nd.notification_dt AT TIME ZONE 'Asia/Manila') = CAST(:fire_date AS DATE))"
+        )
+
+    if general_category:
+        params["general_category"] = general_category
+        # Same category + exact date (fallback when no type code)
+        or_parts.append(
+            "(nd.general_category = :general_category"
+            " AND DATE(nd.notification_dt AT TIME ZONE 'Asia/Manila') = CAST(:fire_date AS DATE))"
+        )
+
+    if not or_parts:
+        # Nothing to match on — can't run a useful check
+        return {"duplicates": []}
+
+    where_conditions.append(f"({' OR '.join(or_parts)})")
+    where_sql = " AND ".join(where_conditions)
+
+    rows = db.execute(
+        text(f"""
+            SELECT
+                fi.incident_id,
+                fi.reference_number,
+                fi.verification_status,
+                fi.incident_type_code,
+                nd.notification_dt,
+                nd.alarm_level,
+                nd.general_category,
+                nd.sub_category,
+                nd.fire_station_name,
+                nd.station_code,
+                c.city_name,
+                p.province_name,
+                rr.region_name,
+                sd.street_address
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd
+                ON nd.incident_id = fi.incident_id
+            LEFT JOIN wims.ref_cities c ON c.city_id = nd.city_id
+            LEFT JOIN wims.ref_provinces p ON p.province_id = c.province_id
+            LEFT JOIN wims.ref_regions rr ON rr.region_id = fi.region_id
+            LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
+            WHERE {where_sql}
+            ORDER BY
+                fi.verification_status DESC,  -- VERIFIED first, then PENDING
+                fi.created_at DESC
+            LIMIT 10
+        """),
+        params,
+    ).fetchall()
+
+    return {
+        "duplicates": [
+            {
+                "incident_id": r[0],
+                "reference_number": r[1],
+                "verification_status": r[2],
+                "incident_type_code": r[3],
+                "notification_dt": str(r[4]) if r[4] else None,
+                "alarm_level": r[5],
+                "general_category": r[6],
+                "type_of_involved": r[7],
+                "fire_station_name": r[8],
+                "station_code": r[9],
+                "city_municipality": r[10],
+                "province_district": r[11],
+                "region_name": r[12],
+                "street_address": r[13],
+            }
+            for r in rows
+        ]
     }
 
 
@@ -2001,7 +2427,10 @@ def get_regional_incident_detail(
                 SELECT fi.incident_id, fi.verification_status, fi.created_at,
                        fi.region_id, fi.encoder_id,
                        ST_Y(fi.location::geometry) AS latitude,
-                       ST_X(fi.location::geometry) AS longitude
+                       ST_X(fi.location::geometry) AS longitude,
+                       fi.reference_number, fi.incident_type_code,
+                       fi.parent_incident_id,
+                       fi.is_duplicate, fi.duplicate_of, fi.updated_at
                 FROM wims.fire_incidents fi
                 WHERE fi.incident_id = :iid
                   AND fi.is_archived = FALSE
@@ -2015,7 +2444,10 @@ def get_regional_incident_detail(
                 SELECT fi.incident_id, fi.verification_status, fi.created_at,
                        fi.region_id, fi.encoder_id,
                        ST_Y(fi.location::geometry) AS latitude,
-                       ST_X(fi.location::geometry) AS longitude
+                       ST_X(fi.location::geometry) AS longitude,
+                       fi.reference_number, fi.incident_type_code,
+                       fi.parent_incident_id,
+                       fi.is_duplicate, fi.duplicate_of, fi.updated_at
                 FROM wims.fire_incidents fi
                 WHERE fi.incident_id = :iid
                   AND fi.encoder_id = CAST(:encoder_id AS uuid)
@@ -2089,13 +2521,14 @@ def get_regional_incident_detail(
     sd_dict.pop("encryption_iv", None)
 
     nonsensitive = row_to_dict(ns)
+    # Prefer the stored text columns; fall back to the ref-table JOIN for old rows
     if loc_row:
-        if loc_row[0]:
+        if not nonsensitive.get("city_municipality") and loc_row[0]:
             nonsensitive["city_municipality"] = loc_row[0]
-            nonsensitive["_city_text"] = loc_row[0]
-        if loc_row[1]:
+        if not nonsensitive.get("province_district") and loc_row[1]:
             nonsensitive["province_district"] = loc_row[1]
-            nonsensitive["_province_text"] = loc_row[1]
+    nonsensitive["_city_text"] = nonsensitive.get("city_municipality") or ""
+    nonsensitive["_province_text"] = nonsensitive.get("province_district") or ""
 
     # Fetch the most recent rejection reason with compatibility across IVH schemas.
     ivh_has_notes = _incident_verification_history_has_column(db, "notes")
@@ -2156,6 +2589,12 @@ def get_regional_incident_detail(
         "region_id": row[3],
         "latitude": float(row[5]) if row[5] is not None else None,
         "longitude": float(row[6]) if row[6] is not None else None,
+        "reference_number": row[7],
+        "incident_type_code": row[8],
+        "parent_incident_id": row[9],
+        "is_duplicate": bool(row[10]) if row[10] is not None else False,
+        "duplicate_of": row[11],
+        "updated_at": row[12].isoformat() if row[12] else None,
         "is_wildland": is_wildland,
         "wildland_fire_type": wildland_fire_type,
         "wildland_area_hectares": wildland_area_hectares,
@@ -2295,6 +2734,75 @@ def get_regional_stats(
 # CRUD — Direct Incident Create / Update / Delete
 # ---------------------------------------------------------------------------
 
+_AFOR_MONTH_CODES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+
+_REGION_CODE_TO_AFOR: dict[str, str] = {
+    "NCR": "RGN-NCR",
+    "CAR": "RGN-CAR",
+    "NIR": "RGN-NIR",
+    "BARMM": "RGN-BARMM",
+    "I": "RGN-1",
+    "II": "RGN-2",
+    "III": "RGN-3",
+    "IV-A": "RGN-4A",
+    "IV-B": "RGN-4B",
+    "V": "RGN-5",
+    "VI": "RGN-6",
+    "VII": "RGN-7",
+    "VIII": "RGN-8",
+    "IX": "RGN-9",
+    "X": "RGN-10",
+    "XI": "RGN-11",
+    "XII": "RGN-12",
+    "XIII": "RGN-13",
+}
+
+
+def _generate_reference_number(
+    db: Session,
+    region_id: int,
+    incident_type_code: str,
+    station_code: str,
+    notification_dt: str | None,
+) -> str:
+    """Generate AFOR-{RGN-CODE}-{station}-{type}-{MMM}-{YYYY}-{NNNN}.
+
+    The sequence number is globally unique across all incidents — not per-region
+    or per-type — so no two incidents share the same trailing number.
+    """
+    region_row = db.execute(
+        text("SELECT region_code FROM wims.ref_regions WHERE region_id = :rid"),
+        {"rid": region_id},
+    ).fetchone()
+    raw_code = region_row[0] if region_row else "UNK"
+    rgn_code = _REGION_CODE_TO_AFOR.get(raw_code, f"RGN-{raw_code}")
+
+    try:
+        dt = datetime.fromisoformat(str(notification_dt).replace("Z", "+00:00")) if notification_dt else datetime.now()
+    except (ValueError, TypeError):
+        dt = datetime.now()
+
+    month = _AFOR_MONTH_CODES[dt.month - 1]
+    year = dt.year
+    station = (station_code or "TBA").strip() or "TBA"
+
+    # Atomic monotonic counter — persists across archive/replace flows.
+    # Fails loudly if the sequence row is missing, preventing duplicate risk.
+    seq_row = db.execute(
+        text("""
+            UPDATE wims.reference_sequence
+            SET current_value = current_value + 1
+            WHERE id = 0
+            RETURNING current_value
+        """),
+    ).fetchone()
+    if not seq_row:
+        raise RuntimeError("reference_sequence row id=0 is missing — cannot generate reference number")
+    seq = int(seq_row[0])
+    return f"AFOR-{rgn_code}-{station}-{incident_type_code}-{month}-{year}-{seq:04d}"
+
 
 class IncidentCreateRequest(BaseModel):
     """Create a new fire incident with nonsensitive + optional sensitive details."""
@@ -2328,6 +2836,14 @@ class IncidentCreateRequest(BaseModel):
     fire_station_name: str | None = None
     total_response_time_minutes: int | None = None
     recommendations: str | None = None
+    # Location text (free-text, replaces city_id/province join for display)
+    province_district: str | None = None
+    city_municipality: str | None = None
+    # Reference number fields
+    station_code: str | None = "TBA"
+    incident_type_code: str | None = None
+    # Update-request tracking
+    parent_incident_id: int | None = None
     # Sensitive details (optional — PII fields)
     street_address: str | None = None
     landmark: str | None = None
@@ -2372,6 +2888,12 @@ class IncidentUpdateRequest(BaseModel):
     fire_station_name: str | None = None
     total_response_time_minutes: int | None = None
     recommendations: str | None = None
+    # Location text (free-text, replaces city_id/province join for display)
+    province_district: str | None = None
+    city_municipality: str | None = None
+    # Reference number fields
+    station_code: str | None = None
+    incident_type_code: str | None = None
     # Sensitive fields
     street_address: str | None = None
     landmark: str | None = None
@@ -2410,13 +2932,27 @@ def create_incident(
             status_code=400,
             detail="region_id is required when no assigned region is set",
         )
+    assigned_region_id = user.get("assigned_region_id")
+    if assigned_region_id and region_id != assigned_region_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "REGION_MISMATCH",
+                "message": "You can only create incidents in your assigned region.",
+            },
+        )
     encoder_id = user["user_id"]
+
+    # Reference number is assigned only at validator approval — not at create time
+    type_code = (body.incident_type_code or "").strip().upper() or None
+    station_code = (body.station_code or "TBA").strip() or "TBA"
 
     # Insert fire_incidents core row
     incident_row = db.execute(
         text("""
-            INSERT INTO wims.fire_incidents (encoder_id, region_id, location, verification_status)
-            VALUES (:eid, :rid, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), 'DRAFT')
+            INSERT INTO wims.fire_incidents
+                (encoder_id, region_id, location, verification_status, incident_type_code, parent_incident_id)
+            VALUES (:eid, :rid, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), 'DRAFT', :type_code, :parent_id)
             RETURNING incident_id
         """),
         {
@@ -2424,6 +2960,8 @@ def create_incident(
             "rid": region_id,
             "lon": body.longitude,
             "lat": body.latitude,
+            "type_code": type_code,
+            "parent_id": body.parent_incident_id,
         },
     ).fetchone()
     incident_id = incident_row[0]
@@ -2438,6 +2976,8 @@ def create_incident(
         "occupancy_type",
         "city_id",
         "barangay_id",
+        "province_district",
+        "city_municipality",
         "distance_from_station_km",
         "estimated_damage_php",
         "civilian_injured",
@@ -2455,6 +2995,7 @@ def create_incident(
         "fire_station_name",
         "total_response_time_minutes",
         "recommendations",
+        "station_code",
     }
     ns_params = {"iid": incident_id}
     ns_cols = ["incident_id"]
@@ -2526,6 +3067,15 @@ def create_incident(
             sd_params,
         )
 
+    _insert_incident_verification_history(
+        db,
+        incident_id=incident_id,
+        actor_user_id=str(encoder_id),
+        previous_status="DRAFT",
+        new_status="DRAFT",
+        notes="Encoder created new draft",
+        action_label="CREATED_DRAFT",
+    )
     db.commit()
     logger.info(
         "Created incident %s in region %s by encoder %s",
@@ -2537,7 +3087,200 @@ def create_incident(
         "status": "created",
         "incident_id": incident_id,
         "verification_status": "DRAFT",
+        "incident_type_code": type_code,
+        "parent_incident_id": body.parent_incident_id,
     }
+
+
+def _apply_incident_field_updates(
+    db: Session, incident_id: int, body: "IncidentUpdateRequest"
+) -> None:
+    """Apply nonsensitive/sensitive/JSONB/coords field updates from an
+    IncidentUpdateRequest to the given incident_id. Caller is responsible
+    for status checks, audit-trail writes, and committing the transaction.
+    """
+    # Ensure child rows exist so UPDATE statements never silently affect 0 rows.
+    db.execute(
+        text(
+            """
+            INSERT INTO wims.incident_nonsensitive_details (incident_id)
+            SELECT :iid
+            WHERE NOT EXISTS (
+                SELECT 1 FROM wims.incident_nonsensitive_details WHERE incident_id = :iid
+            )
+            """
+        ),
+        {"iid": incident_id},
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO wims.incident_sensitive_details (incident_id)
+            SELECT :iid
+            WHERE NOT EXISTS (
+                SELECT 1 FROM wims.incident_sensitive_details WHERE incident_id = :iid
+            )
+            """
+        ),
+        {"iid": incident_id},
+    )
+
+    ns_fields = {
+        "notification_dt", "alarm_level", "general_category", "sub_category",
+        "specific_type", "occupancy_type", "city_id", "barangay_id",
+        "province_district", "city_municipality",
+        "distance_from_station_km", "estimated_damage_php",
+        "civilian_injured", "civilian_deaths", "firefighter_injured", "firefighter_deaths",
+        "families_affected", "structures_affected", "households_affected", "individuals_affected",
+        "responder_type", "fire_origin", "extent_of_damage", "stage_of_fire",
+        "fire_station_name", "total_response_time_minutes", "recommendations",
+        "station_code",
+    }
+    ns_updates: list[str] = []
+    ns_params: dict[str, Any] = {"iid": incident_id}
+    for field in ns_fields:
+        val = getattr(body, field, None)
+        if val is not None:
+            if field == "alarm_level" and isinstance(val, str):
+                val = ALARM_LEVEL_MAP.get(val.upper().strip(), val)
+            elif field == "general_category" and isinstance(val, str):
+                val = _normalize_general_category(val)
+            ns_updates.append(f"{field} = :{field}")
+            ns_params[field] = val
+    if ns_updates:
+        db.execute(
+            text(
+                f"UPDATE wims.incident_nonsensitive_details SET {', '.join(ns_updates)} WHERE incident_id = :iid"
+            ),
+            ns_params,
+        )
+
+    # Update incident_type_code on the fire_incidents core row if provided
+    new_type_code = (getattr(body, "incident_type_code", None) or "").strip().upper() or None
+    if new_type_code:
+        db.execute(
+            text("UPDATE wims.fire_incidents SET incident_type_code = :tc WHERE incident_id = :iid"),
+            {"tc": new_type_code, "iid": incident_id},
+        )
+
+    sd_fields = {
+        "street_address", "landmark", "narrative_report", "establishment_name",
+        "receiver_name", "prepared_by_officer", "noted_by_officer", "remarks",
+    }
+    pii_fields = ["caller_name", "caller_number", "owner_name", "occupant_name"]
+    sd_updates: list[str] = []
+    sd_params: dict[str, Any] = {"iid": incident_id}
+    has_pii_update = False
+    for field in sd_fields | set(pii_fields):
+        val = getattr(body, field, None)
+        if val is not None:
+            if field in pii_fields:
+                has_pii_update = True
+            else:
+                sd_updates.append(f"{field} = :{field}")
+                sd_params[field] = val
+    if has_pii_update:
+        existing = db.execute(
+            text(
+                "SELECT pii_blob_enc, encryption_iv FROM wims.incident_sensitive_details WHERE incident_id = :iid"
+            ),
+            {"iid": incident_id},
+        ).fetchone()
+        existing_pii: dict[str, Any] = {}
+        if existing and existing[0] and existing[1]:
+            try:
+                sp = _get_security_provider()
+                existing_pii = sp.decrypt_json(
+                    existing[1], existing[0], f"incident_id:{incident_id}".encode()
+                )
+            except SecurityProviderError:
+                logger.warning(
+                    "Failed to decrypt existing PII for incident %s — overwriting",
+                    incident_id,
+                )
+        for field in pii_fields:
+            val = getattr(body, field, None)
+            if val is not None:
+                existing_pii[field] = val
+        try:
+            sp = _get_security_provider()
+            nonce_b64, ct_b64 = sp.encrypt_json(
+                existing_pii, f"incident_id:{incident_id}".encode()
+            )
+            sd_updates.extend(["pii_blob_enc = :pii_blob", "encryption_iv = :enc_iv"])
+            sd_params["pii_blob"] = ct_b64
+            sd_params["enc_iv"] = nonce_b64
+        except SecurityProviderError:
+            logger.warning("PII re-encryption failed for incident %s", incident_id)
+    if sd_updates:
+        db.execute(
+            text(
+                f"UPDATE wims.incident_sensitive_details SET {', '.join(sd_updates)} WHERE incident_id = :iid"
+            ),
+            sd_params,
+        )
+
+    jsonb_ns = {
+        "alarm_timeline": body.alarm_timeline,
+        "resources_deployed": body.resources_deployed,
+        "problems_encountered": body.problems_encountered,
+    }
+    jsonb_ns_updates: list[str] = []
+    jsonb_ns_params: dict[str, Any] = {"iid": incident_id}
+    for field, val in jsonb_ns.items():
+        if val is not None:
+            jsonb_ns_updates.append(f"{field} = CAST(:{field} AS jsonb)")
+            jsonb_ns_params[field] = json.dumps(val)
+    if jsonb_ns_updates:
+        db.execute(
+            text(
+                f"UPDATE wims.incident_nonsensitive_details SET {', '.join(jsonb_ns_updates)} WHERE incident_id = :iid"
+            ),
+            jsonb_ns_params,
+        )
+
+    jsonb_sd = {
+        "personnel_on_duty": body.personnel_on_duty,
+        "other_personnel": body.other_personnel,
+        "casualty_details": body.casualty_details,
+        "disposition": body.disposition,
+    }
+    jsonb_sd_updates: list[str] = []
+    jsonb_sd_params: dict[str, Any] = {"iid": incident_id}
+    for field, val in jsonb_sd.items():
+        if val is not None:
+            if field == "disposition":
+                jsonb_sd_updates.append(f"{field} = :{field}")
+            else:
+                jsonb_sd_updates.append(f"{field} = CAST(:{field} AS jsonb)")
+            jsonb_sd_params[field] = json.dumps(val) if field != "disposition" else val
+    if jsonb_sd_updates:
+        db.execute(
+            text(
+                f"UPDATE wims.incident_sensitive_details SET {', '.join(jsonb_sd_updates)} WHERE incident_id = :iid"
+            ),
+            jsonb_sd_params,
+        )
+
+    if body.latitude is not None and body.longitude is not None:
+        db.execute(
+            text(
+                """
+                UPDATE wims.fire_incidents
+                SET updated_at = now(),
+                    location = ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)
+                WHERE incident_id = :iid
+                """
+            ),
+            {"lon": body.longitude, "lat": body.latitude, "iid": incident_id},
+        )
+    else:
+        db.execute(
+            text(
+                "UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"
+            ),
+            {"iid": incident_id},
+        )
 
 
 @router.put("/incidents/{incident_id}")
@@ -2547,7 +3290,11 @@ def update_incident(
     user: Annotated[dict, Depends(get_regional_encoder)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
-    """Update a DRAFT/PENDING/REJECTED incident owned by the current encoder."""
+    """Update a DRAFT or REJECTED incident owned by the current encoder.
+
+    PENDING incidents cannot be edited directly — the encoder must withdraw
+    them first (PATCH /incidents/{id}/unpend) which transitions PENDING → DRAFT.
+    """
     encoder_id = user["user_id"]
 
     # Verify ownership + editable status
@@ -2565,221 +3312,31 @@ def update_incident(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
 
-    if incident[1] not in ("DRAFT", "PENDING", "REJECTED"):
+    if incident[1] == "PENDING":
         raise HTTPException(
             status_code=403,
-            detail=f"Cannot edit incident with status '{incident[1]}'. Only DRAFT, PENDING, or REJECTED incidents can be edited.",
+            detail="This incident is PENDING review. Withdraw it first to edit.",
+        )
+    if incident[1] not in ("DRAFT", "REJECTED"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot edit incident with status '{incident[1]}'. Only DRAFT or REJECTED incidents can be edited.",
         )
 
-    # Ensure child rows exist so UPDATE statements never silently affect 0 rows.
-    # incident_nonsensitive_details and incident_sensitive_details have no UNIQUE
-    # constraint on incident_id (PK is a separate SERIAL detail_id / sensitive_id),
-    # so ON CONFLICT cannot be used. The WHERE NOT EXISTS guard is correct: RLS
-    # SELECT on these tables passes for the owning encoder, so existing rows are
-    # visible and the INSERT is correctly skipped when a row already exists.
-    db.execute(
-        text("""
-            INSERT INTO wims.incident_nonsensitive_details (incident_id)
-            SELECT :iid
-            WHERE NOT EXISTS (
-                SELECT 1 FROM wims.incident_nonsensitive_details WHERE incident_id = :iid
-            )
-        """),
-        {"iid": incident_id},
-    )
-    db.execute(
-        text("""
-            INSERT INTO wims.incident_sensitive_details (incident_id)
-            SELECT :iid
-            WHERE NOT EXISTS (
-                SELECT 1 FROM wims.incident_sensitive_details WHERE incident_id = :iid
-            )
-        """),
-        {"iid": incident_id},
-    )
+# Apply field updates (extracted helper — shared with /incidents/draft/{id})
+    _apply_incident_field_updates(db, incident_id, body)
 
-    # Update nonsensitive details
-    ns_fields = {
-        "notification_dt",
-        "alarm_level",
-        "general_category",
-        "sub_category",
-        "specific_type",
-        "occupancy_type",
-        "city_id",
-        "barangay_id",
-        "distance_from_station_km",
-        "estimated_damage_php",
-        "civilian_injured",
-        "civilian_deaths",
-        "firefighter_injured",
-        "firefighter_deaths",
-        "families_affected",
-        "structures_affected",
-        "households_affected",
-        "individuals_affected",
-        "responder_type",
-        "fire_origin",
-        "extent_of_damage",
-        "stage_of_fire",
-        "fire_station_name",
-        "total_response_time_minutes",
-        "recommendations",
-    }
-    ns_updates = []
-    ns_params = {"iid": incident_id}
-    for field in ns_fields:
-        val = getattr(body, field, None)
-        if val is not None:
-            if field == "alarm_level" and isinstance(val, str):
-                val = ALARM_LEVEL_MAP.get(val.upper().strip(), val)
-            elif field == "general_category" and isinstance(val, str):
-                val = _normalize_general_category(val)
-            ns_updates.append(f"{field} = :{field}")
-            ns_params[field] = val
-
-    if ns_updates:
-        db.execute(
-            text(
-                f"UPDATE wims.incident_nonsensitive_details SET {', '.join(ns_updates)} WHERE incident_id = :iid"
-            ),
-            ns_params,
-        )
-
-    # Update sensitive details
-    sd_fields = {
-        "street_address",
-        "landmark",
-        "narrative_report",
-        "establishment_name",
-        "receiver_name",
-        "prepared_by_officer",
-        "noted_by_officer",
-        "remarks",
-    }
-    pii_fields = ["caller_name", "caller_number", "owner_name", "occupant_name"]
-    sd_updates = []
-    sd_params = {"iid": incident_id}
-    has_pii_update = False
-
-    for field in sd_fields | set(pii_fields):
-        val = getattr(body, field, None)
-        if val is not None:
-            if field in pii_fields:
-                has_pii_update = True
-            else:
-                sd_updates.append(f"{field} = :{field}")
-                sd_params[field] = val
-
-    # Re-encrypt PII if any PII field updated
-    if has_pii_update:
-        # Fetch existing PII blob and merge
-        existing = db.execute(
-            text(
-                "SELECT pii_blob_enc, encryption_iv FROM wims.incident_sensitive_details WHERE incident_id = :iid"
-            ),
-            {"iid": incident_id},
-        ).fetchone()
-
-        existing_pii = {}
-        if existing and existing[0] and existing[1]:
-            try:
-                sp = _get_security_provider()
-                existing_pii = sp.decrypt_json(
-                    existing[1], existing[0], f"incident_id:{incident_id}".encode()
-                )
-            except SecurityProviderError:
-                logger.warning(
-                    "Failed to decrypt existing PII for incident %s — overwriting",
-                    incident_id,
-                )
-
-        # Merge updates
-        for field in pii_fields:
-            val = getattr(body, field, None)
-            if val is not None:
-                existing_pii[field] = val
-
-        # Re-encrypt
-        try:
-            sp = _get_security_provider()
-            nonce_b64, ct_b64 = sp.encrypt_json(existing_pii, f"incident_id:{incident_id}".encode())
-            sd_updates.extend(["pii_blob_enc = :pii_blob", "encryption_iv = :enc_iv"])
-            sd_params["pii_blob"] = ct_b64
-            sd_params["enc_iv"] = nonce_b64
-        except SecurityProviderError:
-            logger.warning("PII re-encryption failed for incident %s", incident_id)
-
-    if sd_updates:
-        db.execute(
-            text(
-                f"UPDATE wims.incident_sensitive_details SET {', '.join(sd_updates)} WHERE incident_id = :iid"
-            ),
-            sd_params,
-        )
-
-    # Update JSONB nonsensitive fields
-    jsonb_ns = {
-        "alarm_timeline": body.alarm_timeline,
-        "resources_deployed": body.resources_deployed,
-        "problems_encountered": body.problems_encountered,
-    }
-    jsonb_ns_updates = []
-    jsonb_ns_params = {"iid": incident_id}
-    for field, val in jsonb_ns.items():
-        if val is not None:
-            jsonb_ns_updates.append(f"{field} = CAST(:{field} AS jsonb)")
-            jsonb_ns_params[field] = json.dumps(val)
-    if jsonb_ns_updates:
-        db.execute(
-            text(
-                f"UPDATE wims.incident_nonsensitive_details SET {', '.join(jsonb_ns_updates)} WHERE incident_id = :iid"
-            ),
-            jsonb_ns_params,
-        )
-
-    # Update JSONB sensitive fields
-    jsonb_sd = {
-        "personnel_on_duty": body.personnel_on_duty,
-        "other_personnel": body.other_personnel,
-        "casualty_details": body.casualty_details,
-        "disposition": body.disposition,
-    }
-    jsonb_sd_updates = []
-    jsonb_sd_params = {"iid": incident_id}
-    for field, val in jsonb_sd.items():
-        if val is not None:
-            if field == "disposition":
-                jsonb_sd_updates.append(f"{field} = :{field}")
-            else:
-                jsonb_sd_updates.append(f"{field} = CAST(:{field} AS jsonb)")
-            jsonb_sd_params[field] = json.dumps(val) if field != "disposition" else val
-    if jsonb_sd_updates:
-        db.execute(
-            text(
-                f"UPDATE wims.incident_sensitive_details SET {', '.join(jsonb_sd_updates)} WHERE incident_id = :iid"
-            ),
-            jsonb_sd_params,
-        )
-
-    # Update timestamp (and optionally coordinates)
-    if body.latitude is not None and body.longitude is not None:
-        db.execute(
-            text("""
-                UPDATE wims.fire_incidents
-                SET updated_at = now(),
-                    location = ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)
-                WHERE incident_id = :iid
-            """),
-            {"lon": body.longitude, "lat": body.latitude, "iid": incident_id},
-        )
-    else:
-        db.execute(
-            text("UPDATE wims.fire_incidents SET updated_at = now() WHERE incident_id = :iid"),
-            {"iid": incident_id},
-        )
-
+    # M4-B Issue #4: log every encoder edit to the audit trail
     try:
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(encoder_id),
+            previous_status=incident[1],
+            new_status=incident[1],
+            notes="Encoder edit — fields updated",
+            action_label="EDITED",
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -2787,6 +3344,169 @@ def update_incident(
         raise HTTPException(status_code=500, detail="Failed to save incident draft update")
     logger.info("Updated incident %s by encoder %s", incident_id, encoder_id)
     return {"status": "updated", "incident_id": incident_id}
+
+
+@router.post("/incidents/{incident_id}/force-replace")
+def force_replace_incident(
+    incident_id: int,
+    body: IncidentUpdateRequest,
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Replace a PENDING incident's data without requiring withdraw first.
+
+    Used when duplicate detection identifies a PENDING incident that the encoder
+    wants to overwrite with the current form data.  The PENDING incident remains
+    in PENDING status so the validator sees the updated data.  Every call is
+    audited in incident_verification_history.
+    """
+    encoder_id = user["user_id"]
+
+    incident = db.execute(
+        text("""
+            SELECT incident_id, verification_status
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid
+              AND encoder_id = CAST(:eid AS uuid)
+              AND is_archived = FALSE
+        """),
+        {"iid": incident_id, "eid": str(encoder_id)},
+    ).fetchone()
+
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
+    if incident[1] != "PENDING":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Force-replace only applies to PENDING incidents. Current status: {incident[1]}",
+        )
+
+    _apply_incident_field_updates(db, incident_id, body)
+
+    try:
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(encoder_id),
+            previous_status="PENDING",
+            new_status="PENDING",
+            notes="Encoder force-replaced PENDING incident data (duplicate resolution)",
+            action_label="EDITED",
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to force-replace incident_id=%s", incident_id)
+        raise HTTPException(status_code=500, detail="Failed to replace incident data")
+
+    logger.info("Force-replaced PENDING incident %s by encoder %s", incident_id, encoder_id)
+    return {"status": "replaced", "incident_id": incident_id}
+
+
+# ---------------------------------------------------------------------------
+# M4-E: Dedicated draft management endpoints (PATCH/DELETE).
+# These have 3-segment paths so they do not conflict with /incidents/{id}.
+# The list endpoint (GET /incidents/drafts) is registered separately above.
+# ---------------------------------------------------------------------------
+
+
+@router.patch("/incidents/draft/{incident_id}")
+def update_draft(
+    incident_id: int,
+    body: IncidentUpdateRequest,
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Update a DRAFT incident owned by the current encoder.
+
+    Mirrors update_incident() but enforces verification_status = 'DRAFT'.
+    Drafts do NOT get an audit trail entry — they are not under review.
+    """
+    encoder_id = user["user_id"]
+    incident = db.execute(
+        text(
+            """
+            SELECT incident_id, verification_status
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid
+              AND encoder_id = CAST(:eid AS uuid)
+              AND is_archived = FALSE
+            """
+        ),
+        {"iid": incident_id, "eid": str(encoder_id)},
+    ).fetchone()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Draft not found or not owned by you")
+    if incident[1] != "DRAFT":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Endpoint accepts DRAFT only. Current status: {incident[1]}",
+        )
+    _apply_incident_field_updates(db, incident_id, body)
+    try:
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(encoder_id),
+            previous_status="DRAFT",
+            new_status="DRAFT",
+            notes="Encoder updated draft fields",
+            action_label="EDITED",
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to update draft incident_id=%s", incident_id)
+        raise HTTPException(status_code=500, detail="Failed to save draft")
+    logger.info("Draft updated for incident %s by encoder %s", incident_id, encoder_id)
+    return {"status": "draft_updated", "incident_id": incident_id}
+
+
+@router.delete("/incidents/draft/{incident_id}", status_code=200)
+def delete_draft(
+    incident_id: int,
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Soft-archive a DRAFT incident (sets is_archived = TRUE)."""
+    encoder_id = user["user_id"]
+    incident = db.execute(
+        text(
+            """
+            SELECT incident_id, verification_status
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid
+              AND encoder_id = CAST(:eid AS uuid)
+              AND is_archived = FALSE
+            """
+        ),
+        {"iid": incident_id, "eid": str(encoder_id)},
+    ).fetchone()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Draft not found or not owned by you")
+    if incident[1] != "DRAFT":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Endpoint accepts DRAFT only. Current status: {incident[1]}",
+        )
+    db.execute(
+        text(
+            "UPDATE wims.fire_incidents SET is_archived = TRUE, updated_at = now() WHERE incident_id = :iid"
+        ),
+        {"iid": incident_id},
+    )
+    _insert_incident_verification_history(
+        db,
+        incident_id=incident_id,
+        actor_user_id=str(encoder_id),
+        previous_status="DRAFT",
+        new_status="DRAFT",
+        notes="Encoder deleted draft",
+        action_label="DELETED_DRAFT",
+    )
+    db.commit()
+    logger.info("Draft deleted (archived) incident %s by encoder %s", incident_id, encoder_id)
+    return {"status": "deleted", "incident_id": incident_id}
 
 
 @router.patch("/incidents/{incident_id}/unpend")
@@ -2815,15 +3535,29 @@ def unpend_incident(
     if row[1] != "PENDING":
         raise HTTPException(status_code=400, detail=f"Incident is {row[1]}, not PENDING")
 
-    db.execute(
-        text(
-            "UPDATE wims.fire_incidents SET verification_status = 'DRAFT', updated_at = now() WHERE incident_id = :iid"
-        ),
-        {"iid": incident_id},
-    )
-    db.commit()
+    try:
+        db.execute(
+            text(
+                "UPDATE wims.fire_incidents SET verification_status = 'DRAFT', updated_at = now() WHERE incident_id = :iid"
+            ),
+            {"iid": incident_id},
+        )
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(encoder_id),
+            previous_status="PENDING",
+            new_status="DRAFT",
+            notes="Encoder withdrew incident for editing",
+            action_label="WITHDRAWN",
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to unpend incident_id=%s", incident_id)
+        raise HTTPException(status_code=500, detail="Failed to withdraw incident")
     logger.info("Unpended incident %s by encoder %s", incident_id, encoder_id)
-    return {"status": "unpended", "incident_id": incident_id}
+    return {"status": "unpended", "incident_id": incident_id, "new_status": "DRAFT"}
 
 
 @router.delete("/incidents/{incident_id}")
@@ -2849,10 +3583,10 @@ def delete_incident(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
 
-    if incident[1] != "DRAFT":
+    if incident[1] not in ("DRAFT", "PENDING", "REJECTED"):
         raise HTTPException(
             status_code=403,
-            detail=f"Cannot delete incident with status '{incident[1]}'. Only DRAFT incidents can be deleted.",
+            detail=f"Cannot delete incident with status '{incident[1]}'. Only DRAFT, PENDING, or REJECTED incidents can be deleted.",
         )
 
     db.execute(
@@ -2860,6 +3594,15 @@ def delete_incident(
             "UPDATE wims.fire_incidents SET is_archived = TRUE, updated_at = now() WHERE incident_id = :iid"
         ),
         {"iid": incident_id},
+    )
+    _insert_incident_verification_history(
+        db,
+        incident_id=incident_id,
+        actor_user_id=str(encoder_id),
+        previous_status=incident[1],
+        new_status=incident[1],
+        notes="Encoder deleted incident",
+        action_label="DELETED_DRAFT",
     )
     db.commit()
     logger.info("Soft-deleted incident %s by encoder %s", incident_id, encoder_id)
@@ -2871,8 +3614,21 @@ def submit_incident_for_review(
     incident_id: int,
     user: Annotated[dict, Depends(get_regional_encoder)],
     db: Annotated[Session, Depends(get_db_with_rls)],
+    ack_duplicate: bool = False,
+    force: bool = False,
 ):
-    """Submit a DRAFT or REJECTED incident for validator review (DRAFT/REJECTED → PENDING)."""
+    """Submit a DRAFT or REJECTED incident for validator review (DRAFT/REJECTED → PENDING).
+
+    Duplicate check
+    ---------------
+    On first call (ack_duplicate=False, force=False), if a PENDING or VERIFIED incident
+    with the same region + location + fire date exists, returns HTTP 409 with
+    {code: "DUPLICATE_DETECTED", matched_incident_id, matched_status} without submitting.
+
+    The caller may:
+    - Re-call with ack_duplicate=True: sets is_duplicate=TRUE + duplicate_of before PENDING.
+    - Re-call with force=True: bypasses detection entirely, submits without flagging.
+    """
     encoder_id = user["user_id"]
 
     incident = db.execute(
@@ -2901,7 +3657,130 @@ def submit_incident_for_review(
             detail=f"Cannot submit incident with status '{current_status}'. Only DRAFT or REJECTED incidents can be submitted.",
         )
 
+    # Required-field gate — province/district and city/municipality must be set before PENDING
+    required_check = db.execute(
+        text("""
+            SELECT notification_dt, general_category, province_district, city_municipality
+            FROM wims.incident_nonsensitive_details
+            WHERE incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    missing_fields = []
+    if required_check:
+        if not required_check[0]:
+            missing_fields.append("notification_dt (Date of Notification)")
+        if not required_check[1]:
+            missing_fields.append("general_category (Classification)")
+        if not required_check[2]:
+            missing_fields.append("province_district (Province / District)")
+        if not required_check[3]:
+            missing_fields.append("city_municipality (City / Municipality)")
+
+    if missing_fields:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot submit: required fields are missing — {', '.join(missing_fields)}",
+        )
+
+    # Duplicate detection — skip when force=True or already acknowledged.
+    matched_duplicate_id: int | None = None
+    already_flagged = db.execute(
+        text("SELECT is_duplicate FROM wims.fire_incidents WHERE incident_id = :iid"),
+        {"iid": incident_id},
+    ).scalar()
+
+    if not force and not already_flagged and not ack_duplicate:
+        geo_meta = db.execute(
+            text("""
+                SELECT nd.notification_dt, nd.general_category, fi.incident_type_code,
+                       fi.region_id, nd.alarm_level,
+                       ST_Y(fi.location::geometry) AS lat,
+                       ST_X(fi.location::geometry) AS lon
+                FROM wims.fire_incidents fi
+                LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+                WHERE fi.incident_id = :iid
+            """),
+            {"iid": incident_id},
+        ).fetchone()
+
+        if geo_meta:
+            # Use the incident's fire date when available; None skips date filter (spatial-only).
+            fire_date_str: str | None = None
+            if geo_meta[0]:
+                notif_dt = geo_meta[0]
+                fire_date_str = str(notif_dt.date()) if hasattr(notif_dt, "date") else str(notif_dt)[:10]
+
+            # Check against VERIFIED incidents
+            verified_dup = check_for_duplicate(
+                db,
+                incident_id=incident_id,
+                region_id=geo_meta[3],
+                alarm_level=geo_meta[4],
+                incident_date=fire_date_str,
+                lat=geo_meta[5],
+                lon=geo_meta[6],
+                general_category=geo_meta[1],
+                incident_type_code=geo_meta[2],
+                exclude_statuses=("DRAFT", "REJECTED", "REPLACED"),
+            )
+            if verified_dup:
+                matched_status = db.execute(
+                    text("SELECT verification_status FROM wims.fire_incidents WHERE incident_id = :iid"),
+                    {"iid": verified_dup},
+                ).scalar() or "UNKNOWN"
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "DUPLICATE_DETECTED",
+                        "incident_id": incident_id,
+                        "matched_incident_id": verified_dup,
+                        "matched_status": matched_status,
+                    },
+                )
+
     try:
+        # If acknowledged duplicate: flag the incident and resolve duplicate_of before submitting
+        if ack_duplicate and not already_flagged:
+            geo_meta = db.execute(
+                text("""
+                    SELECT nd.notification_dt, nd.general_category, fi.incident_type_code,
+                           fi.region_id, nd.alarm_level,
+                           ST_Y(fi.location::geometry) AS lat,
+                           ST_X(fi.location::geometry) AS lon
+                    FROM wims.fire_incidents fi
+                    LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+                    WHERE fi.incident_id = :iid
+                """),
+                {"iid": incident_id},
+            ).fetchone()
+            if geo_meta:
+                ack_date_str: str | None = None
+                if geo_meta[0]:
+                    ack_date_str = str(geo_meta[0].date()) if hasattr(geo_meta[0], "date") else str(geo_meta[0])[:10]
+                matched_duplicate_id = check_for_duplicate(
+                    db,
+                    incident_id=incident_id,
+                    region_id=geo_meta[3],
+                    alarm_level=geo_meta[4],
+                    incident_date=ack_date_str,
+                    lat=geo_meta[5],
+                    lon=geo_meta[6],
+                    general_category=geo_meta[1],
+                    incident_type_code=geo_meta[2],
+                    exclude_statuses=("DRAFT", "REJECTED", "REPLACED"),
+                )
+                if matched_duplicate_id:
+                    db.execute(
+                        text("""
+                            UPDATE wims.fire_incidents
+                            SET is_duplicate = TRUE, duplicate_of = :did
+                            WHERE incident_id = :iid
+                        """),
+                        {"did": matched_duplicate_id, "iid": incident_id},
+                    )
+
         update_result = db.execute(
             text(
                 "UPDATE wims.fire_incidents SET verification_status = 'PENDING', updated_at = now() WHERE incident_id = :iid"
@@ -2910,6 +3789,24 @@ def submit_incident_for_review(
         )
         if update_result.rowcount != 1:
             raise HTTPException(status_code=409, detail="Incident status update failed")
+        # M4-G: Snapshot the nonsensitive details on first PENDING transition only.
+        # WHERE submitted_snapshot IS NULL ensures we never overwrite the original
+        # submission state — re-submissions after rejection keep the first snapshot.
+        db.execute(
+            text(
+                """
+                UPDATE wims.fire_incidents fi
+                SET submitted_snapshot = (
+                    SELECT to_jsonb(nd) - 'detail_id'
+                    FROM wims.incident_nonsensitive_details nd
+                    WHERE nd.incident_id = fi.incident_id
+                )
+                WHERE fi.incident_id = :iid
+                  AND fi.submitted_snapshot IS NULL
+                """
+            ),
+            {"iid": incident_id},
+        )
         _insert_incident_verification_history(
             db,
             incident_id=incident_id,
@@ -2917,6 +3814,7 @@ def submit_incident_for_review(
             previous_status=current_status,
             new_status="PENDING",
             notes="Submitted for review",
+            action_label="SUBMITTED",
         )
         db.commit()
     except HTTPException:
@@ -2940,6 +3838,8 @@ def submit_incident_for_review(
         "status": "submitted",
         "incident_id": incident_id,
         "verification_status": "PENDING",
+        "is_duplicate": ack_duplicate and matched_duplicate_id is not None,
+        "duplicate_of": matched_duplicate_id,
     }
 
 
@@ -2948,8 +3848,10 @@ def submit_incident_for_review(
 # ---------------------------------------------------------------------------
 
 # Allowed actions a NATIONAL_VALIDATOR can submit and their target DB status.
+# accept_replace: approve a duplicate by inheriting the matched incident's ref_num and archiving it.
 _VALIDATOR_ACTION_MAP: dict[str, str] = {
     "accept": "VERIFIED",
+    "accept_replace": "VERIFIED",
     "pending": "PENDING",
     "reject": "REJECTED",
 }
@@ -2964,8 +3866,11 @@ _VALIDATOR_DEFAULT_QUEUE_STATUSES = ("PENDING", "PENDING_VALIDATION")
 class VerificationActionRequest(BaseModel):
     """Body for PATCH /api/regional/incidents/{incident_id}/verification."""
 
-    action: str  # "accept" | "pending" | "reject"
+    action: str  # "accept" | "accept_replace" | "pending" | "reject"
     notes: str | None = None  # Optional reason / validator notes
+    # When the validator chooses "Replace Existing" from the duplicate modal, pass the ID
+    # of the incident to supersede. Takes priority over the stored duplicate_of value.
+    original_incident_id: int | None = None
 
 
 @router.get("/validator/incidents")
@@ -2975,6 +3880,7 @@ def get_validator_incident_queue(
     status: Optional[str] = None,
     show_all: bool = Query(default=False),
     encoder_id: Optional[str] = None,
+    archived: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
@@ -2989,31 +3895,31 @@ def get_validator_incident_queue(
     status      — filter to a single verification_status value.
                   Defaults to PENDING and PENDING_VALIDATION when omitted.
     show_all    — when true and status is omitted, include all statuses
-                  (DRAFT/PENDING/PENDING_VALIDATION/VERIFIED/REJECTED)
+                  (DRAFT/PENDING/PENDING_VALIDATION/VERIFIED/REJECTED/REPLACED)
                   for encoder-submitted incidents across all regions.
     encoder_id  — filter to incidents submitted by one specific encoder UUID.
+    archived    — when true, return only archived incidents. Default: active only.
     limit/offset — pagination.
 
     """
-    region_id = user.get("assigned_region_id")
+    # M4-F: NATIONAL_VALIDATOR has cross-region authority; no region gate here.
+    # The role check is enforced by get_national_validator dependency.
 
+    archive_clause = "fi.is_archived = TRUE" if archived else "fi.is_archived = FALSE"
     where_clauses = [
-        "fi.is_archived = FALSE",
+        archive_clause,
         "fi.encoder_id IS NOT NULL",  # encoder-submitted only — never public DMZ rows
+        "fi.verification_status != 'DRAFT'",  # validators never see drafts
     ]
     params: dict[str, Any] = {
         "limit": limit,
         "offset": offset,
     }
 
-    if region_id is not None:
-        where_clauses.append("fi.region_id = :region_id")
-        params["region_id"] = region_id
-
     if status:
         where_clauses.append("fi.verification_status = :status")
         params["status"] = status
-    elif not show_all:
+    elif not show_all and not archived:
         # Default: show the two awaiting-review statuses
         where_clauses.append("fi.verification_status = ANY(:default_statuses)")
         params["default_statuses"] = list(_VALIDATOR_DEFAULT_QUEUE_STATUSES)
@@ -3040,12 +3946,17 @@ def get_validator_incident_queue(
                 nd.households_affected,
                 nd.responder_type,
                 nd.fire_origin,
-                nd.extent_of_damage
+                nd.extent_of_damage,
+                fi.parent_incident_id,
+                fi.is_duplicate,
+                fi.duplicate_of,
+                fi.updated_at,
+                fi.reference_number
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd
                    ON nd.incident_id = fi.incident_id
             WHERE {where_sql}
-            ORDER BY fi.created_at ASC
+            ORDER BY fi.created_at DESC
             LIMIT :limit OFFSET :offset
         """),
         params,
@@ -3071,6 +3982,7 @@ def get_validator_incident_queue(
                 "encoder_id": str(r[2]) if r[2] else None,
                 "region_id": r[3],
                 "created_at": r[4].isoformat() if r[4] else None,
+                "submitted_at": r[4].isoformat() if r[4] else None,
                 "notification_dt": r[5].isoformat() if r[5] else None,
                 "general_category": r[6],
                 "alarm_level": r[7],
@@ -3080,6 +3992,11 @@ def get_validator_incident_queue(
                 "responder_type": r[11],
                 "fire_origin": r[12],
                 "extent_of_damage": r[13],
+                "parent_incident_id": r[14],
+                "is_duplicate": bool(r[15]) if r[15] is not None else False,
+                "duplicate_of": r[16],
+                "updated_at": r[17].isoformat() if r[17] else None,
+                "reference_number": r[18],
             }
             for r in rows
         ],
@@ -3096,6 +4013,7 @@ def verify_incident(
     request: Request,
     user: Annotated[dict, Depends(get_national_validator)],
     db: Annotated[Session, Depends(get_db_with_rls)],
+    force: bool = Query(default=False),
 ):
     """Apply a validator decision to one encoder-submitted incident.
 
@@ -3120,7 +4038,7 @@ def verify_incident(
     409 — incident already has the requested target status (idempotency guard)
     """
     validator_user_id = user["user_id"]
-    region_id = user.get("assigned_region_id")
+    # M4-F: NATIONAL_VALIDATOR has cross-region authority; no region gate.
 
     # --- 1. Validate action value before touching the DB ---
     action = (body.action or "").strip().lower()
@@ -3160,33 +4078,86 @@ def verify_incident(
     inc_created_at = incident_row[5]
     current_status = incident_row[1]
 
-    # --- 3. Region isolation — strict, no fall-through ---
-    if region_id is not None and inc_region_id != region_id:
-        # Return 403, not 404, so the caller knows this is a permission boundary
-        # and not a missing record.  Do NOT leak the actual region in the message.
-        raise HTTPException(
-            status_code=403,
-            detail="You do not have permission to act on incidents outside your assigned region",
-        )
-
-    # --- 4. Encoder linkage — reject public/DMZ rows ---
+    # --- 3. Encoder linkage — reject public/DMZ rows ---
     if inc_encoder_id is None:
         raise HTTPException(
             status_code=403,
             detail="This incident was submitted via public DMZ (no encoder) and cannot be processed through the validator workflow",
         )
 
-    # --- 4. Idempotency guard — avoid pointless writes ---
+    # --- 4. Idempotency guard ---
     if current_status == target_status:
         raise HTTPException(
             status_code=409,
             detail=f"Incident is already in status '{current_status}'",
         )
 
-    # --- 5. Apply update + audit in one transaction ---
-    # M6-D: compute SHA-256 hash of canonical incident data at VERIFIED transition
+# --- 4a. Prevent invalid state transitions ---
+    if current_status == "VERIFIED" and action == "reject":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot reject an incident that is already verified",
+        )
+    if current_status == "REJECTED" and action == "accept":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot accept an incident that has been rejected. It must be resubmitted by the encoder.",
+        )
+    if current_status in ("VERIFIED", "REJECTED") and action in ("accept", "reject"):
+        if current_status == "VERIFIED" and action == "accept":
+            pass
+        elif current_status == "REJECTED" and action == "reject":
+            pass
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot transition incident from '{current_status}' via action '{action}'. Only Archive is available for finalized incidents.",
+            )
+
+    # --- 4b. Duplicate check on plain accept (skipped when force=True) ---
+    if action == "accept" and not force:
+        geo_row = db.execute(
+            text("""
+                SELECT ST_Y(fi.location::geometry), ST_X(fi.location::geometry),
+                       nd.notification_dt, nd.general_category, fi.incident_type_code,
+                       fi.region_id, nd.alarm_level, fi.parent_incident_id
+                FROM wims.fire_incidents fi
+                LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
+                WHERE fi.incident_id = :iid
+            """),
+            {"iid": incident_id},
+        ).fetchone()
+        if geo_row and geo_row[7] is None:
+            verify_date_str: str | None = None
+            if geo_row[2]:
+                verify_date_str = str(geo_row[2].date()) if hasattr(geo_row[2], "date") else str(geo_row[2])[:10]
+            dup_id = check_for_duplicate(
+                db,
+                incident_id=incident_id,
+                region_id=geo_row[5],
+                alarm_level=geo_row[6],
+                incident_date=verify_date_str,
+                lat=geo_row[0],
+                lon=geo_row[1],
+                general_category=geo_row[3],
+                incident_type_code=geo_row[4],
+                exclude_statuses=("DRAFT", "REJECTED", "REPLACED"),
+            )
+            if dup_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "DUPLICATE_DETECTED",
+                        "matched_incident_id": dup_id,
+                    },
+                )
+
+    # --- 5. Compute verification hash + prepare reference number ---
     data_hash = None
+    ref_num: str | None = None
+    parent_to_archive: int | None = None
     if target_status == "VERIFIED":
+        # M6-D: compute immutable SHA-256 verification hash
         canonical = {
             "encoder_id": str(inc_encoder_id),
             "keycloak_id": str(inc_keycloak_id),
@@ -3197,6 +4168,49 @@ def verify_incident(
         }
         data_hash = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
 
+        meta_row = db.execute(
+            text("""
+                SELECT fi.incident_type_code, fi.parent_incident_id, fi.duplicate_of
+                FROM wims.fire_incidents fi
+                WHERE fi.incident_id = :iid
+            """),
+            {"iid": incident_id},
+        ).fetchone()
+        type_code = meta_row[0] if meta_row else None
+        parent_incident_id_val = meta_row[1] if meta_row else None
+        duplicate_of_val = meta_row[2] if meta_row else None
+
+        effective_original_id = body.original_incident_id or duplicate_of_val
+        if action == "accept_replace" and effective_original_id:
+            orig_ref_row = db.execute(
+                text("SELECT reference_number FROM wims.fire_incidents WHERE incident_id = :pid"),
+                {"pid": effective_original_id},
+            ).fetchone()
+            ref_num = orig_ref_row[0] if orig_ref_row else None
+            parent_to_archive = effective_original_id
+        elif parent_incident_id_val:
+            orig_ref_row = db.execute(
+                text("SELECT reference_number FROM wims.fire_incidents WHERE incident_id = :pid"),
+                {"pid": parent_incident_id_val},
+            ).fetchone()
+            ref_num = orig_ref_row[0] if orig_ref_row else None
+            parent_to_archive = parent_incident_id_val
+        elif type_code:
+            ns_meta = db.execute(
+                text("""
+                    SELECT notification_dt, station_code
+                    FROM wims.incident_nonsensitive_details
+                    WHERE incident_id = :iid
+                """),
+                {"iid": incident_id},
+            ).fetchone()
+            notification_dt = str(ns_meta[0]) if ns_meta and ns_meta[0] else None
+            station_code = (ns_meta[1] if ns_meta else None) or "TBA"
+            ref_num = _generate_reference_number(
+                db, inc_region_id, type_code, station_code, notification_dt
+            )
+
+    # --- 6. Apply update + audit in one transaction ---
     try:
         db.execute(
             text("""
@@ -3209,6 +4223,60 @@ def verify_incident(
             {"new_status": target_status, "iid": incident_id, "data_hash": data_hash},
         )
 
+        if parent_to_archive:
+            # Archive original first AND clear its reference_number so the unique
+            # constraint is released before we assign that ref_num to the update incident.
+            # Also set status to REPLACED so it appears correctly in the archive view.
+            db.execute(
+                text("""
+                    UPDATE wims.fire_incidents
+                    SET is_archived = TRUE,
+                        verification_status = 'REPLACED',
+                        reference_number = NULL,
+                        archived_at = now(),
+                        updated_at = now()
+                    WHERE incident_id = :pid
+                """),
+                {"pid": parent_to_archive},
+            )
+            _insert_incident_verification_history(
+                db,
+                incident_id=parent_to_archive,
+                actor_user_id=str(validator_user_id),
+                previous_status="VERIFIED",
+                new_status="REPLACED",
+                notes=f"Archived — superseded by replacement incident #{incident_id}",
+                action_label="REPLACED_EXISTING",
+            )
+
+        if action == "accept_replace" and effective_original_id:
+            db.execute(
+                text("""
+                    UPDATE wims.fire_incidents
+                    SET is_duplicate = FALSE,
+                        duplicate_of = NULL,
+                        updated_at = now()
+                    WHERE incident_id = :iid
+                """),
+                {"iid": incident_id},
+            )
+
+        if ref_num:
+            db.execute(
+                text("""
+                    UPDATE wims.fire_incidents
+                    SET reference_number = :ref
+                    WHERE incident_id = :iid
+                """),
+                {"ref": ref_num, "iid": incident_id},
+            )
+
+        _action_label_map = {
+            "accept": "APPROVED",
+            "accept_replace": "ACCEPTED_AS_NEW",
+            "reject": "REJECTED",
+            "pending": "RETURNED_TO_PENDING",
+        }
         _insert_incident_verification_history(
             db,
             incident_id=incident_id,
@@ -3216,15 +4284,7 @@ def verify_incident(
             previous_status=current_status,
             new_status=target_status,
             notes=body.notes or "Validator action",
-        )
-
-        log_system_audit(
-            db=db,
-            user_id=validator_user_id,
-            action_type=f"VERIFY_{action.upper()}",
-            table_affected="fire_incidents",
-            record_id=incident_id,
-            request=request,
+            action_label=_action_label_map.get(body.action, body.action.upper()),
         )
 
         db.commit()
@@ -3236,9 +4296,25 @@ def verify_incident(
             detail="Failed to apply verification action — transaction rolled back",
         )
 
-    # ADR-009: sync verified incident to analytics facts (#84 fix)
+    # analytics sync after primary commit
     sync_incident_to_analytics(db, incident_id)
+    if parent_to_archive:
+        sync_incident_to_analytics(db, parent_to_archive)
     db.commit()
+
+    # non-critical audit after primary state is durable
+    log_system_audit(
+        db=db,
+        user_id=validator_user_id,
+        action_type=f"VERIFY_{action.upper()}",
+        table_affected="fire_incidents",
+        record_id=incident_id,
+        request=request,
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
 
     logger.info(
         "Validator user_id=%s applied action='%s' to incident_id=%s (region_id=%s, %s → %s)",
@@ -3257,4 +4333,548 @@ def verify_incident(
         "action": action,
         "encoder_id": str(inc_encoder_id),
         "region_id": inc_region_id,
+        "reference_number": ref_num,
+        "parent_archived": parent_to_archive,
     }
+
+
+# ---------------------------------------------------------------------------
+# M4-H: Bulk approve
+# ---------------------------------------------------------------------------
+
+
+class BulkApproveRequest(BaseModel):
+    incident_ids: list[int]
+    notes: str | None = None
+
+
+@router.post("/validator/incidents/bulk-approve")
+def bulk_approve_incidents(
+    body: BulkApproveRequest,
+    user: Annotated[dict, Depends(get_national_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Atomically approve multiple PENDING incidents.
+
+    All-or-nothing: if any incident is missing, archived, or not in PENDING status,
+    the entire batch is rejected (422) and no incidents are modified.
+    """
+    validator_user_id = user["user_id"]
+
+    if not body.incident_ids:
+        raise HTTPException(status_code=400, detail="incident_ids must not be empty")
+
+    rows = db.execute(
+        text(
+            """
+            SELECT incident_id, verification_status, encoder_id, created_at,
+                   nd.notification_dt, nd.general_category, fi2.incident_type_code,
+                   fi2.region_id, nd.alarm_level,
+                   ST_Y(fi2.location::geometry), ST_X(fi2.location::geometry)
+            FROM wims.fire_incidents fi2
+            LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi2.incident_id
+            WHERE fi2.incident_id = ANY(:ids) AND fi2.is_archived = FALSE
+            """
+        ),
+        {"ids": body.incident_ids},
+    ).fetchall()
+
+    found_ids = {r[0] for r in rows}
+    missing = sorted(set(body.incident_ids) - found_ids)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Some incidents were not found or are archived. Transaction aborted.",
+                "missing_ids": missing,
+            },
+        )
+
+    not_pending = [r[0] for r in rows if r[1] != "PENDING"]
+    no_encoder = [r[0] for r in rows if r[2] is None]
+    if not_pending or no_encoder:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "All incidents must be PENDING and encoder-submitted. Transaction aborted.",
+                "failed_ids": sorted(set(not_pending) | set(no_encoder)),
+            },
+        )
+
+    # Sort by created_at ASC so oldest incidents are approved first (FIFO).
+    rows = sorted(rows, key=lambda r: r[3] or datetime.min.replace(tzinfo=None))
+
+    approved: list[int] = []
+    held_for_review: list[dict] = []
+
+    try:
+        for row in rows:
+            iid, prev_status, _, created_at, notif_dt, gen_cat, type_code, region_id, alarm, lat, lon = row
+
+            # Check for duplicates including recently-VERIFIED in the last 60 seconds.
+            # fire_date_str may be None — check_for_duplicate handles that with spatial-only match.
+            fire_date_str = (
+                str(notif_dt.date()) if notif_dt and hasattr(notif_dt, "date") else None
+            )
+            dup_id = check_for_duplicate(
+                db,
+                incident_id=iid,
+                region_id=region_id,
+                alarm_level=alarm,
+                incident_date=fire_date_str,
+                lat=lat,
+                lon=lon,
+                general_category=gen_cat,
+                incident_type_code=type_code,
+                exclude_statuses=("DRAFT", "REJECTED", "REPLACED"),
+                verified_window_seconds=60,
+            )
+            if dup_id:
+                held_for_review.append({"id": iid, "matching_incident_id": dup_id})
+                continue
+
+            db.execute(
+                text(
+                    """
+                    UPDATE wims.fire_incidents
+                    SET verification_status = 'VERIFIED', updated_at = now()
+                    WHERE incident_id = :iid
+                    """
+                ),
+                {"iid": iid},
+            )
+            _insert_incident_verification_history(
+                db,
+                incident_id=iid,
+                actor_user_id=str(validator_user_id),
+                previous_status=prev_status,
+                new_status="VERIFIED",
+                notes=body.notes or "Bulk approve",
+                action_label="BULK_APPROVED",
+            )
+            approved.append(iid)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Bulk approve failed")
+        raise HTTPException(
+            status_code=500, detail="Bulk approve failed — transaction rolled back"
+        )
+
+    logger.info(
+        "Validator user_id=%s bulk-approved %d incidents: %s; held: %d",
+        validator_user_id,
+        len(approved),
+        sorted(approved),
+        len(held_for_review),
+    )
+    return {
+        "approved": len(approved),
+        "incident_ids": sorted(approved),
+        "held_for_review": held_for_review,
+    }
+
+
+# ---------------------------------------------------------------------------
+# B4: Archive endpoint for validators
+# ---------------------------------------------------------------------------
+
+
+@router.patch("/validator/incidents/{incident_id}/archive")
+def archive_incident(
+    incident_id: int,
+    user: Annotated[dict, Depends(get_national_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Archive a finalized (VERIFIED, REJECTED, or REPLACED) incident.
+
+    Sets is_archived=TRUE, archived_at=NOW(), verification_status unchanged.
+    Returns 400 if the incident is in DRAFT or PENDING status.
+    """
+    validator_user_id = user["user_id"]
+
+    incident = db.execute(
+        text("""
+            SELECT incident_id, verification_status
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid
+              AND is_archived = FALSE
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if incident is None:
+        raise HTTPException(
+            status_code=404, detail="Incident not found or already archived"
+        )
+
+    current_status = incident[1]
+    archivable_statuses = ("VERIFIED", "REJECTED", "REPLACED")
+    if current_status not in archivable_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Only {', '.join(archivable_statuses)} incidents can be archived. "
+                f"Current status: '{current_status}'."
+            ),
+        )
+
+    try:
+        db.execute(
+            text("""
+                UPDATE wims.fire_incidents
+                SET is_archived = TRUE,
+                    archived_at  = now(),
+                    updated_at   = now()
+                WHERE incident_id = :iid
+            """),
+            {"iid": incident_id},
+        )
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(validator_user_id),
+            previous_status=current_status,
+            new_status="ARCHIVED",
+            notes="Archived by validator",
+            action_label="ARCHIVED",
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to archive incident_id=%s", incident_id)
+        raise HTTPException(status_code=500, detail="Archive failed — transaction rolled back")
+
+    return {"status": "archived", "incident_id": incident_id}
+
+
+# ---------------------------------------------------------------------------
+# M4-G: Side-by-side diff for validators
+# ---------------------------------------------------------------------------
+
+
+# Field keys included in the diff. PII fields from incident_sensitive_details
+# are intentionally excluded — only nonsensitive operational details are diffed.
+_DIFF_FIELDS = (
+    "notification_dt", "alarm_level", "general_category", "sub_category",
+    "specific_type", "occupancy_type", "city_id", "barangay_id",
+    "distance_from_station_km", "estimated_damage_php",
+    "civilian_injured", "civilian_deaths", "firefighter_injured", "firefighter_deaths",
+    "families_affected", "structures_affected", "households_affected", "individuals_affected",
+    "responder_type", "fire_origin", "extent_of_damage", "stage_of_fire",
+    "fire_station_name", "total_response_time_minutes", "recommendations",
+    "vehicles_affected", "extent_total_floor_area_sqm", "extent_total_land_area_hectares",
+    "alarm_timeline", "resources_deployed", "problems_encountered",
+)
+
+
+@router.get("/validator/incidents/{incident_id}/diff")
+def get_incident_diff(
+    incident_id: int,
+    user: Annotated[dict, Depends(get_national_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Return the original-vs-current diff for an incident's nonsensitive fields.
+
+    Original = wims.fire_incidents.submitted_snapshot (JSONB written on first
+    DRAFT/REJECTED → PENDING transition).
+    Current  = wims.incident_nonsensitive_details (live row).
+    """
+    incident_row = db.execute(
+        text(
+            """
+            SELECT incident_id, submitted_snapshot
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid AND is_archived = FALSE
+            """
+        ),
+        {"iid": incident_id},
+    ).fetchone()
+    if incident_row is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    snapshot: dict[str, Any] | None = incident_row[1]
+
+    current_row = db.execute(
+        text(
+            """
+            SELECT to_jsonb(nd) - 'detail_id' AS doc
+            FROM wims.incident_nonsensitive_details nd
+            WHERE nd.incident_id = :iid
+            """
+        ),
+        {"iid": incident_id},
+    ).fetchone()
+    current: dict[str, Any] = current_row[0] if current_row and current_row[0] else {}
+
+    if snapshot is None:
+        return {
+            "original": None,
+            "current": {k: current.get(k) for k in _DIFF_FIELDS if k in current},
+            "changed_fields": [],
+            "note": "No snapshot available — incident submitted before diff tracking was enabled.",
+        }
+
+    original_subset: dict[str, Any] = {k: snapshot.get(k) for k in _DIFF_FIELDS if k in snapshot}
+    current_subset: dict[str, Any] = {k: current.get(k) for k in _DIFF_FIELDS if k in current}
+    all_keys = set(original_subset.keys()) | set(current_subset.keys())
+    changed_fields = sorted(
+        k for k in all_keys
+        if original_subset.get(k) != current_subset.get(k)
+    )
+
+    return {
+        "original": original_subset,
+        "current": current_subset,
+        "changed_fields": changed_fields,
+    }
+
+
+# ---------------------------------------------------------------------------
+# M4-I: Validator audit trail viewer (incident_verification_history)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/audit-log")
+def get_encoder_audit_log(
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """Return the current encoder's own action history from incident_verification_history."""
+    encoder_id = str(user["user_id"])
+    where_clauses = [
+        "ivh.target_type = 'OFFICIAL'",
+        "ivh.action_by_user_id = CAST(:encoder_id AS uuid)",
+    ]
+    params: dict[str, Any] = {"encoder_id": encoder_id}
+    if date_from:
+        where_clauses.append("ivh.action_timestamp >= CAST(:date_from AS timestamptz)")
+        params["date_from"] = date_from
+    if date_to:
+        where_clauses.append("ivh.action_timestamp <= CAST(:date_to AS timestamptz)")
+        params["date_to"] = date_to
+    where_sql = " AND ".join(where_clauses)
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                ivh.history_id, ivh.target_id,
+                ivh.action_label, ivh.previous_status, ivh.new_status,
+                ivh.notes, ivh.action_timestamp
+            FROM wims.incident_verification_history ivh
+            WHERE {where_sql}
+            ORDER BY ivh.action_timestamp DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {**params, "limit": limit, "offset": offset},
+    ).fetchall()
+
+    total = db.execute(
+        text(
+            f"SELECT COUNT(*) FROM wims.incident_verification_history ivh WHERE {where_sql}"
+        ),
+        params,
+    ).scalar() or 0
+
+    return {
+        "items": [
+            {
+                "history_id": r[0],
+                "incident_id": r[1],
+                "action_label": r[2],
+                "previous_status": r[3],
+                "new_status": r[4],
+                "notes": r[5],
+                "action_timestamp": r[6].isoformat() if r[6] else None,
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _build_audit_log_query(
+    *,
+    date_from: str | None,
+    date_to: str | None,
+    region_id: int | None,
+    validator_id: str | None,
+    action: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Compose a parameterized WHERE clause for audit log queries.
+
+    Returns (where_sql, params). The caller plugs where_sql into a SELECT.
+    """
+    where_clauses = ["ivh.target_type = 'OFFICIAL'"]
+    params: dict[str, Any] = {}
+    if date_from:
+        where_clauses.append("ivh.action_timestamp >= CAST(:date_from AS timestamptz)")
+        params["date_from"] = date_from
+    if date_to:
+        where_clauses.append("ivh.action_timestamp <= CAST(:date_to AS timestamptz)")
+        params["date_to"] = date_to
+    if region_id is not None:
+        where_clauses.append("fi.region_id = :region_id")
+        params["region_id"] = region_id
+    if validator_id:
+        where_clauses.append("ivh.action_by_user_id = CAST(:validator_id AS uuid)")
+        params["validator_id"] = validator_id
+    if action:
+        where_clauses.append("ivh.action_label = :action")
+        params["action"] = action
+    return " AND ".join(where_clauses), params
+
+
+@router.get("/validator/audit-logs")
+def get_validator_audit_logs(
+    user: Annotated[dict, Depends(get_national_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    region_id: Optional[int] = None,
+    validator_id: Optional[str] = None,
+    action: Optional[str] = None,  # filter by action_label (APPROVED/REJECTED/BULK_APPROVED/etc.)
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """Paginated audit-log query over wims.incident_verification_history."""
+    where_sql, params = _build_audit_log_query(
+        date_from=date_from,
+        date_to=date_to,
+        region_id=region_id,
+        validator_id=validator_id,
+        action=action,
+    )
+    list_params = {**params, "limit": limit, "offset": offset}
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                ivh.history_id, ivh.target_id, fi.region_id,
+                ivh.action_by_user_id, ivh.previous_status, ivh.new_status,
+                ivh.notes, ivh.action_timestamp,
+                u.username AS actor_username,
+                rr.region_name AS region_display,
+                ivh.action_label
+            FROM wims.incident_verification_history ivh
+            JOIN wims.fire_incidents fi ON fi.incident_id = ivh.target_id
+            LEFT JOIN wims.users u ON u.user_id = ivh.action_by_user_id
+            LEFT JOIN wims.ref_regions rr ON rr.region_id = fi.region_id
+            WHERE {where_sql}
+            ORDER BY ivh.action_timestamp DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        list_params,
+    ).fetchall()
+
+    total = db.execute(
+        text(
+            f"""
+            SELECT COUNT(*)
+            FROM wims.incident_verification_history ivh
+            JOIN wims.fire_incidents fi ON fi.incident_id = ivh.target_id
+            WHERE {where_sql}
+            """
+        ),
+        params,
+    ).scalar() or 0
+
+    return {
+        "items": [
+            {
+                "history_id": r[0],
+                "incident_id": r[1],
+                "region_id": r[2],
+                "action_by_user_id": str(r[3]) if r[3] else None,
+                "previous_status": r[4],
+                "new_status": r[5],
+                "notes": r[6],
+                "action_timestamp": r[7].isoformat() if r[7] else None,
+                "actor_username": r[8],
+                "region_display": r[9],
+                "action_label": r[10],
+            }
+            for r in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/validator/audit-logs/export")
+def export_validator_audit_logs(
+    user: Annotated[dict, Depends(get_national_validator)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    region_id: Optional[int] = None,
+    validator_id: Optional[str] = None,
+    action: Optional[str] = None,
+):
+    """Return an audit-log CSV. Honors the same filters as the list endpoint."""
+    where_sql, params = _build_audit_log_query(
+        date_from=date_from,
+        date_to=date_to,
+        region_id=region_id,
+        validator_id=validator_id,
+        action=action,
+    )
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                ivh.history_id, ivh.target_id, fi.region_id,
+                ivh.action_by_user_id, ivh.previous_status, ivh.new_status,
+                ivh.notes, ivh.action_timestamp,
+                u.username AS actor_username,
+                rr.region_name AS region_display,
+                ivh.action_label
+            FROM wims.incident_verification_history ivh
+            JOIN wims.fire_incidents fi ON fi.incident_id = ivh.target_id
+            LEFT JOIN wims.users u ON u.user_id = ivh.action_by_user_id
+            LEFT JOIN wims.ref_regions rr ON rr.region_id = fi.region_id
+            WHERE {where_sql}
+            ORDER BY ivh.action_timestamp DESC
+            """
+        ),
+        params,
+    ).fetchall()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "history_id", "incident_id", "region_id", "region_display",
+        "action_by_user_id", "actor_username",
+        "previous_status", "new_status", "action_label",
+        "notes", "action_timestamp",
+    ])
+    for r in rows:
+        writer.writerow([
+            r[0], r[1], r[2], r[9] or "",
+            str(r[3]) if r[3] else "", r[8] or "",
+            r[4], r[5], r[10] or "",
+            (r[6] or "").replace("\n", " "),
+            r[7].isoformat() if r[7] else "",
+        ])
+
+    export_date = datetime.utcnow().strftime("%Y%m%d")
+    return Response(
+        content=buf.getvalue().encode("utf-8"),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=audit-log-{export_date}.csv",
+        },
+    )
