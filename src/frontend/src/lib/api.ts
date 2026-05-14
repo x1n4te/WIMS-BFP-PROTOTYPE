@@ -1013,6 +1013,105 @@ export async function fetchAnalyticsFilterOptions(
   return apiFetch<string[]>(`/analytics/filter-options${qs}`);
 }
 
+// ---------------------------------------------------------------------------
+// National Analyst — Incident List & Detail (p5a / p5e)
+// ---------------------------------------------------------------------------
+
+export interface AnalystIncidentListItem {
+  incident_id: number;
+  notification_dt: string | null;
+  province_name: string;
+  municipality_name: string;
+  barangay_name: string;
+  general_category: string;
+  sub_category: string;
+  alarm_level: string;
+  estimated_damage_php: number | null;
+  total_response_time_minutes: number | null;
+  region: string;
+  verification_status: string;
+  reference_number: string | null;
+  created_at: string | null;
+}
+
+export interface AnalystIncidentListResponse {
+  incidents: AnalystIncidentListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AnalystIncidentDetailResponse extends AnalystIncidentListItem {
+  encoder_id: string;
+  encoder_username: string | null;
+  casualty_severity: string | null;
+  data_hash: string | null;
+  sync_status: string | null;
+  has_wildland_afor: boolean;
+}
+
+export type AnalystListSortField =
+  | 'notification_dt'
+  | 'region'
+  | 'municipality_name'
+  | 'barangay_name'
+  | 'general_category'
+  | 'sub_category'
+  | 'alarm_level'
+  | 'estimated_damage_php'
+  | 'total_response_time_minutes';
+
+export type SortDirection = 'asc' | 'desc';
+
+export interface AnalystIncidentListParams {
+  start_date?: string;
+  end_date?: string;
+  region_id?: number;
+  province?: string;
+  municipality?: string;
+  incident_type?: string;
+  alarm_level?: string;
+  casualty_severity?: 'high' | 'medium' | 'low';
+  damage_min?: number;
+  damage_max?: number;
+  page?: number;
+  page_size?: number;
+  sort_by?: AnalystListSortField;
+  sort_dir?: SortDirection;
+}
+
+function buildAnalystIncidentListParams(params: AnalystIncidentListParams): string {
+  const parts: string[] = [];
+  if (params.start_date) parts.push(`start_date=${encodeURIComponent(params.start_date)}`);
+  if (params.end_date) parts.push(`end_date=${encodeURIComponent(params.end_date)}`);
+  if (params.region_id) parts.push(`region_id=${params.region_id}`);
+  if (params.province) parts.push(`province=${encodeURIComponent(params.province)}`);
+  if (params.municipality) parts.push(`municipality=${encodeURIComponent(params.municipality)}`);
+  if (params.incident_type) parts.push(`incident_type=${encodeURIComponent(params.incident_type)}`);
+  if (params.alarm_level) parts.push(`alarm_level=${encodeURIComponent(params.alarm_level)}`);
+  if (params.casualty_severity) parts.push(`casualty_severity=${params.casualty_severity}`);
+  if (params.damage_min !== undefined) parts.push(`damage_min=${params.damage_min}`);
+  if (params.damage_max !== undefined) parts.push(`damage_max=${params.damage_max}`);
+  if (params.page !== undefined) parts.push(`page=${params.page}`);
+  if (params.page_size !== undefined) parts.push(`page_size=${params.page_size}`);
+  if (params.sort_by) parts.push(`sort_by=${params.sort_by}`);
+  if (params.sort_dir) parts.push(`sort_dir=${params.sort_dir}`);
+  return parts.length > 0 ? `?${parts.join('&')}` : '';
+}
+
+export async function fetchAnalystIncidentList(
+  params: AnalystIncidentListParams = {}
+): Promise<AnalystIncidentListResponse> {
+  const qs = buildAnalystIncidentListParams(params);
+  return apiFetch<AnalystIncidentListResponse>(`/incidents/analyst-list${qs}`);
+}
+
+export async function fetchAnalystIncidentDetail(
+  incidentId: number
+): Promise<AnalystIncidentDetailResponse> {
+  return apiFetch<AnalystIncidentDetailResponse>(`/incidents/analyst/${incidentId}`);
+}
+
 export interface QueueAnalyticsExportRequest {
   format: 'csv' | 'pdf' | 'excel';
   filters: Record<string, unknown>;
