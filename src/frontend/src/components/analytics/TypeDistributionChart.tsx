@@ -36,7 +36,7 @@ export function TypeDistributionChart({ data }: TypeDistributionChartProps) {
           ))}
         </Pie>
         <Tooltip
-          formatter={(value: number) => [value, 'Incidents']}
+          formatter={(value) => [Number(value ?? 0), 'Incidents']}
           contentStyle={{ fontSize: 12, borderRadius: 4, border: '1px solid #d8dbe0' }}
         />
         <Legend

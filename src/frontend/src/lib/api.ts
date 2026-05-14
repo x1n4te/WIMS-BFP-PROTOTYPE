@@ -1050,6 +1050,23 @@ export interface AnalystIncidentDetailResponse extends AnalystIncidentListItem {
   has_wildland_afor: boolean;
 }
 
+export interface AnalystIncidentWildlandDetailResponse {
+  incident_id: number;
+  reference_number: string | null;
+  wildland: Record<string, unknown>;
+  alarm_statuses: Array<{
+    sort_order: number;
+    alarm_status: string;
+    time_declared: string | null;
+    ground_commander: string | null;
+  }>;
+  assistance_rows: Array<{
+    sort_order: number;
+    organization_or_unit: string;
+    detail: string | null;
+  }>;
+}
+
 export type AnalystListSortField =
   | 'notification_dt'
   | 'region'
@@ -1110,6 +1127,12 @@ export async function fetchAnalystIncidentDetail(
   incidentId: number
 ): Promise<AnalystIncidentDetailResponse> {
   return apiFetch<AnalystIncidentDetailResponse>(`/incidents/analyst/${incidentId}`);
+}
+
+export async function fetchAnalystIncidentWildlandDetail(
+  incidentId: number
+): Promise<AnalystIncidentWildlandDetailResponse> {
+  return apiFetch<AnalystIncidentWildlandDetailResponse>(`/incidents/analyst/${incidentId}/wildland`);
 }
 
 export interface QueueAnalyticsExportRequest {

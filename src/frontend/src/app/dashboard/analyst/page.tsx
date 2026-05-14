@@ -24,11 +24,13 @@ import {
   type ResponseTimeRegionItem,
   type CompareRegionItem,
   type TopNItem,
+  type AnalystIncidentListParams,
 } from '@/lib/api';
 import { TrendCharts } from '@/components/analytics/TrendCharts';
 import { TypeDistributionChart } from '@/components/analytics/TypeDistributionChart';
 import { TopBarangaysChart } from '@/components/analytics/TopBarangaysChart';
 import { ResponseTimeChart } from '@/components/analytics/ResponseTimeChart';
+import { AnalystIncidentList } from '@/components/analytics/AnalystIncidentList';
 import { RefreshCw, Download } from 'lucide-react';
 import { getShortRegionName } from '@/lib/ph-regions';
 
@@ -130,6 +132,7 @@ export default function AnalystDashboardPage() {
   const [topNData, setTopNData] = useState<TopNItem[] | null>(null);
   const [topNMetric, setTopNMetric] = useState('incidents');
   const [topNDimension, setTopNDimension] = useState('barangay');
+  const [appliedIncidentFilters, setAppliedIncidentFilters] = useState<AnalystIncidentListParams>({});
 
   type FilterOverrides = {
     startDate?: string;
@@ -183,6 +186,7 @@ export default function AnalystDashboardPage() {
         damage_min: dm ? parseFloat(dm) : undefined,
         damage_max: dx ? parseFloat(dx) : undefined,
       };
+      setAppliedIncidentFilters(filters as AnalystIncidentListParams);
       const [heatmapRes, trendsRes, comparativeRes, typeDistRes, topBgyRes, respTimeRes, cmpRegionsRes, topNRes] = await Promise.all([
         fetchHeatmapData(filters),
         fetchTrendData({ ...filters, interval: iv }),
@@ -530,6 +534,9 @@ export default function AnalystDashboardPage() {
                     setMunicipality('');
                     setIncidentType('');
                     setAlarmLevel('');
+                    setCasualtySeverity('');
+                    setDamageMin('');
+                    setDamageMax('');
                     setInterval('daily');
                     setCmpRanges(reset);
                     loadData({
@@ -545,6 +552,9 @@ export default function AnalystDashboardPage() {
                       rangeAEnd: reset.rangeAEnd,
                       rangeBStart: reset.rangeBStart,
                       rangeBEnd: reset.rangeBEnd,
+                      casualtySeverity: '',
+                      damageMin: '',
+                      damageMax: '',
                     });
                   }}
                   className="text-sm py-2 px-3 rounded-md border hover:bg-gray-50"
@@ -815,6 +825,8 @@ export default function AnalystDashboardPage() {
               )}
             </div>
           </div>
+
+          <AnalystIncidentList filters={appliedIncidentFilters} />
         </>
       )}
     </div>

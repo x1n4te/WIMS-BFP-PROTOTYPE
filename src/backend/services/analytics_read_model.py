@@ -719,6 +719,9 @@ def get_export_rows(
         damage_min=filters.get("damage_min"),
         damage_max=filters.get("damage_max"),
     )
+    if filters.get("incident_id") is not None:
+        clauses.append("a.incident_id = :incident_id")
+        params["incident_id"] = filters.get("incident_id")
 
     where_sql = " AND ".join(clauses)
     col_list = ", ".join(select_parts)

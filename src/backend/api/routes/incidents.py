@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
@@ -560,6 +562,18 @@ ANALYST_LIST_SORT_COLUMNS = {
 }
 
 
+def _analyst_json_value(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _analyst_row_dict(row: Any) -> dict[str, Any]:
+    return {key: _analyst_json_value(value) for key, value in row._mapping.items()}
+
+
 @router.get("/incidents/analyst-list")
 def get_analyst_incident_list(
     _user: Annotated[dict, Depends(get_analyst_or_admin)],
@@ -631,62 +645,21 @@ def get_analyst_incident_list(
     params["limit"] = page_size
     params["offset"] = offset
 
+    order_sql = f"ORDER BY {sort_by_col} {'ASC' if sort_dir_val == 'asc' else 'DESC'}"
+
     list_sql = f"""
         SELECT
             fi.incident_id,
             nd.notification_dt,
-            COALESCE(aif.province_name, '')                                       AS province_name,
-            COALESCE(aif.municipality_name, '')                                  AS municipality_name,
-            COALESCE(nd.barangay, '')                                            AS barangay_name,
-            COALESCE(nd.general_category, '')                                    AS general_category,
-            COALESCE(nd.sub_category, '')                                        AS sub_category,
-            COALESCE(nd.alarm_level, '')                                         AS alarm_level,
-            aif.estimated_damage_php,
-            aif.total_response_time_minutes,
-            r.short_name                                                         AS region,
-            fi.verification_status,
-            fi.reference_number,
-            fi.created_at
-        FROM wims.fire_incidents fi
-        LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
-        LEFT JOIN wims.analytics_incident_facts aif     ON aif.incident_id = fi.incident_id
-        LEFT JOIN wims.ref_regions r                    ON r.region_id = fi.region_id
-        WHERE {where_sql}
-        ORDER BY
-            CASE WHEN :sort_dir = 'asc' THEN
-                CASE
-                    WHEN :sort_by = 'estimated_damage_php'       THEN CAST(COALESCE(aif.estimated_damage_php, 0) AS TEXT)
-                    WHEN :sort_by = 'total_response_time_minutes' THEN CAST(COALESCE(aif.total_response_time_minutes, 0) AS TEXT)
-                    WHEN :sort_by = 'notification_dt'            THEN COALESCE(nd.notification_dt::text, '')
-                    WHEN :sort_by = 'alarm_level'                THEN COALESCE(nd.alarm_level, '')
-                    WHEN :sort_by = 'municipality_name'           THEN COALESCE(aif.municipality_name, '')
-                    WHEN :sort_by = 'barangay_name'               THEN COALESCE(nd.barangay, '')
-                    WHEN :sort_by = 'general_category'           THEN COALESCE(nd.general_category, '')
-                    WHEN :sort_by = 'sub_category'                THEN COALESCE(nd.sub_category, '')
-                    WHEN :sort_by = 'region'                      THEN COALESCE(r.short_name, '')
-                    ELSE ''
-                END
-            END ASC,
-            CASE WHEN :sort_dir = 'desc' OR :sort_dir = 'asc' THEN '' END
-        LIMIT :limit OFFSET :offset
-    """
-    # Simpler approach: use sort_dir as-is with a simpler ORDER BY
-    order_sql = f"ORDER BY {sort_by_col} {'ASC' if sort_dir_val == 'asc' else 'DESC'}"
-
-    # Rewrite without the CASE complexity above — use a simpler direct sort
-    list_sql_simple = f"""
-        SELECT
-            fi.incident_id,
-            nd.notification_dt,
             COALESCE(aif.province_name, '')             AS province_name,
-            COALESCE(aif.municipality_name, '')        AS municipality_name,
-            COALESCE(nd.barangay, '')                 AS barangay_name,
-            COALESCE(nd.general_category, '')         AS general_category,
-            COALESCE(nd.sub_category, '')            AS sub_category,
-            COALESCE(nd.alarm_level, '')             AS alarm_level,
+            COALESCE(aif.municipality_name, '')         AS municipality_name,
+            COALESCE(nd.barangay, '')                  AS barangay_name,
+            COALESCE(nd.general_category, '')           AS general_category,
+            COALESCE(nd.sub_category, '')              AS sub_category,
+            COALESCE(nd.alarm_level, '')               AS alarm_level,
             aif.estimated_damage_php,
             aif.total_response_time_minutes,
-            r.short_name                              AS region,
+            r.short_name                               AS region,
             fi.verification_status,
             fi.reference_number,
             fi.created_at
@@ -701,7 +674,7 @@ def get_analyst_incident_list(
     params["sort_by"] = sort_by_col
     params["sort_dir"] = sort_dir_val
 
-    rows = db.execute(text(list_sql_simple), params).fetchall()
+    rows = db.execute(text(list_sql), params).fetchall()
 
     # Count
     count_sql = f"""
@@ -833,4 +806,72 @@ def get_analyst_incident_detail(
         "data_hash": row[17],
         "sync_status": row[18],
         "has_wildland_afor": has_wildland_afor,
+    }
+
+
+@router.get("/incidents/analyst/{incident_id}/wildland")
+def get_analyst_incident_wildland_detail(
+    incident_id: int,
+    _user: Annotated[dict, Depends(get_analyst_or_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """
+    National Analyst wildland AFOR detail for a verified, non-archived incident.
+
+    Requires: NATIONAL_ANALYST or SYSTEM_ADMIN.
+    """
+    incident_row = db.execute(
+        text("""
+            SELECT incident_id, reference_number, verification_status, is_archived
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if (
+        not incident_row
+        or incident_row[2] != "VERIFIED"
+        or bool(incident_row[3])
+    ):
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    wildland_row = db.execute(
+        text("""
+            SELECT *
+            FROM wims.incident_wildland_afor
+            WHERE incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if not wildland_row:
+        raise HTTPException(status_code=404, detail="Wildland AFOR not found")
+
+    wildland_id = wildland_row._mapping["incident_wildland_afor_id"]
+    alarm_rows = db.execute(
+        text("""
+            SELECT sort_order, alarm_status, time_declared, ground_commander
+            FROM wims.wildland_afor_alarm_statuses
+            WHERE incident_wildland_afor_id = :wildland_id
+            ORDER BY sort_order, wildland_afor_alarm_status_id
+        """),
+        {"wildland_id": wildland_id},
+    ).fetchall()
+    assistance_rows = db.execute(
+        text("""
+            SELECT sort_order, organization_or_unit, detail
+            FROM wims.wildland_afor_assistance_rows
+            WHERE incident_wildland_afor_id = :wildland_id
+            ORDER BY sort_order, wildland_afor_assistance_row_id
+        """),
+        {"wildland_id": wildland_id},
+    ).fetchall()
+
+    return {
+        "incident_id": incident_row[0],
+        "reference_number": incident_row[1],
+        "wildland": _analyst_row_dict(wildland_row),
+        "alarm_statuses": [_analyst_row_dict(row) for row in alarm_rows],
+        "assistance_rows": [_analyst_row_dict(row) for row in assistance_rows],
     }

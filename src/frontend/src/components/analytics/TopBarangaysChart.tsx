@@ -40,7 +40,7 @@ export function TopBarangaysChart({ data }: TopBarangaysChartProps) {
           width={100}
         />
         <Tooltip
-          formatter={(value: number) => [value, 'Incidents']}
+          formatter={(value) => [Number(value ?? 0), 'Incidents']}
           cursor={{ fill: 'rgba(153,27,27,0.06)' }}
           contentStyle={{ fontSize: 12, borderRadius: 4, border: '1px solid #d8dbe0' }}
         />

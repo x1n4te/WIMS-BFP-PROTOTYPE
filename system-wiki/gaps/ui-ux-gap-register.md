@@ -49,14 +49,15 @@ Source: [[ui-ux/evaluation-system-admin-hub]]
 |---|---|---|
 | Heatmap aspect ratio wrong | Wide full-width heatmap; should be tall/portrait and side-positioned | Needs implementation |
 | Filter bar sizing | Filters should be larger and more prominent than "All Synced" badge | Needs implementation |
-| No incident container/list | No dedicated panel for individual incidents | Needs implementation |
-| Side panel non-functional | Incident detail side panel redirects back to dashboard | Needs fix |
+| No incident container/list | No dedicated panel for individual incidents | Fixed in code; needs UI verification |
+| Side panel non-functional | Incident detail side panel redirects back to dashboard | Fixed in code; needs UI verification |
 | Filter missing columns | Filters do not cover all FRS M5.a.ii required fields (date range, casualty severity, property damage, location) | Needs implementation |
 | Export has no preview container | Export PDF/Excel buttons export immediately without a preview/filters container | Needs implementation |
 | Top municipalities view missing | FRS M5.a.iii requires "Top 10 municipalities" analytics view | Needs implementation |
 | Average response time by region missing | FRS M5.a.iii requires "Average response time by region" view | Needs implementation |
 | Analyst sidebar missing | No explicit `NATIONAL_ANALYST` section in `Sidebar.tsx` | Fixed in code; needs UI verification |
 | Export backend incomplete | PDF/XLSX/download/audit backend infrastructure missing | Backend fixed; frontend preview/download UX pending |
+| Analyst detail/wildland routes missing | No read-only analyst full-page incident detail or wildland detail route | Fixed in code; needs UI verification |
 
 Source: [[ui-ux/evaluation-national-analyst]]
 

@@ -20,6 +20,8 @@ Next.js App Router pages detected under `src/frontend/src/app`.
 | `/afor/import` | `afor/import/page.tsx` |
 | `/callback` | `callback/page.tsx` |
 | `/dashboard/analyst` | `dashboard/analyst/page.tsx` |
+| `/dashboard/analyst/incidents/[id]` | `dashboard/analyst/incidents/[id]/page.tsx` |
+| `/dashboard/analyst/incidents/[id]/wildland` | `dashboard/analyst/incidents/[id]/wildland/page.tsx` |
 | `/dashboard` | `dashboard/page.tsx` |
 | `/dashboard/regional/audit` | `dashboard/regional/audit/page.tsx` |
 | `/dashboard/regional/drafts` | `dashboard/regional/drafts/page.tsx` |
@@ -44,7 +46,7 @@ Next.js App Router pages detected under `src/frontend/src/app`.
 - Auth/profile: `/login`, `/callback`, `/profile`, auth API routes.
 - Incident entry/import: `/incidents/*`, `/afor/*`, regional dashboard pages.
 - Validation: `/dashboard/validator`, `/dashboard/validator/audit`, `/incidents/triage`.
-- Analytics/reporting: `/dashboard/analyst`, `/report`, `/report/track`. The sidebar now has an explicit `NATIONAL_ANALYST` navigation section pointing to `/dashboard/analyst` and `/profile`; analyst incident detail routes are still pending.
+- Analytics/reporting: `/dashboard/analyst`, `/dashboard/analyst/incidents/[id]`, `/dashboard/analyst/incidents/[id]/wildland`, `/report`, `/report/track`. The sidebar now has an explicit `NATIONAL_ANALYST` navigation section pointing to `/dashboard/analyst` and `/profile`; analyst incident list/drawer/detail routes are implemented as read-only surfaces.
 - Administration/security: `/admin`, `/admin/system`.
 
 ## Related

@@ -17,6 +17,7 @@ This register prevents agents from hallucinating completion. A module is not com
 - Analytics sync on verification/correction: verify transaction boundaries and error handling.
 - Analytics geography filters: `analytics_incident_facts` now has denormalized `municipality_name` and `province_name` via `28_analytics_geography_denorm.sql`; verify deployed databases are migrated and backfilled.
 - Export audit/download pipeline: CSV/PDF/XLSX task writers and `GET /api/analytics/export/{task_id}` are implemented; verify Celery result backend retention and export-file cleanup policy before production use.
+- Analyst incident drill-down: `GET /api/incidents/analyst-list`, `GET /api/incidents/analyst/{incident_id}`, and `GET /api/incidents/analyst/{incident_id}/wildland` are implemented for verified, non-archived incidents behind analyst/admin RBAC and RLS. Verify seeded data covers wildland examples and full browser flows before production use.
 - RLS enforcement: verify role-region scoping through helpers and policies.
 - Public DMZ abuse controls: verify unauthenticated route has rate limiting/input validation and cannot bypass triage.
 - Notifications: verify SSE/Redis/email behavior against Module 13.

@@ -29,11 +29,13 @@ Source: User desk-check notes (`raw/ui-ux/evaluation-national-analyst.md`).
 ### L-03 — No individual incident container
 **Current:** No container or list view for individual incidents.
 **Expected:** A dedicated incident list panel must exist on the dashboard — distinct from the heatmap and trend charts. This panel must be filterable.
+**Status:** Resolved in code: `/dashboard/analyst` now renders an Incident List section backed by `GET /api/incidents/analyst-list`, with pagination, sort headers, and global filters.
 **Priority:** HIGH.
 
 ### L-04 — Side panel for incidents is non-functional
 **Current:** Any side panel or drawer for viewing incident details redirects back to the dashboard.
 **Expected:** Clicking an incident in the list should open a functional detail panel (slide-over or dedicated route) showing full incident data.
+**Status:** Resolved in code: incident rows open a wide drawer with key summary fields and an "Open Full Page" link to `/dashboard/analyst/incidents/[id]`; wildland AFOR records link to `/dashboard/analyst/incidents/[id]/wildland`.
 **Priority:** HIGH.
 
 ---
@@ -120,6 +122,8 @@ These are confirmed missing by cross-referencing FRS M5 and GitHub Issue #89. Us
 | G-06 | Scheduled reports not implemented | Backend | P3 MEDIUM | M5 / #88 |
 | G-07 | Sidebar missing NATIONAL_ANALYST section | Frontend | P2 MEDIUM | M12 / #86 |
 | G-08 | No integration testing | Testing | P1 HIGH | #89 Phase 5 |
+
+Phase 5 implementation note (2026-05-14): analyst incident list, sortable drawer, read-only incident detail page, and read-only wildland detail route are implemented. Export preview remains open because the dashboard-level export UX still queues directly.
 
 **Execution order (per #89):** Phase 0 → Phase 1 → Phase 2/3 (parallel) → Phase 5 → Phase 4
 
