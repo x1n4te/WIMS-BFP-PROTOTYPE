@@ -3606,7 +3606,7 @@ def delete_incident(
     user: Annotated[dict, Depends(get_regional_encoder)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
-    """Soft-delete a DRAFT incident. Sets is_archived = TRUE."""
+    """Soft-delete a DRAFT, REJECTED, or PENDING incident. Sets is_archived = TRUE."""
     encoder_id = user["user_id"]
 
     incident = db.execute(
@@ -3623,11 +3623,13 @@ def delete_incident(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found or not owned by you")
 
-    if incident[1] not in ("DRAFT", "REJECTED"):
+    if incident[1] not in ("DRAFT", "REJECTED", "PENDING"):
         raise HTTPException(
             status_code=403,
-            detail=f"Cannot delete incident with status '{incident[1]}'. Only DRAFT or REJECTED incidents can be deleted.",
+            detail=f"Cannot delete incident with status '{incident[1]}'. Only DRAFT, PENDING, or REJECTED incidents can be deleted.",
         )
+
+    action_label = "DELETED_PENDING" if incident[1] == "PENDING" else "DELETED_DRAFT"
 
     db.execute(
         text(
@@ -3642,10 +3644,10 @@ def delete_incident(
         previous_status=incident[1],
         new_status=incident[1],
         notes="Encoder deleted incident",
-        action_label="DELETED_DRAFT",
+        action_label=action_label,
     )
     db.commit()
-    logger.info("Soft-deleted incident %s by encoder %s", incident_id, encoder_id)
+    logger.info("Soft-deleted incident %s (status=%s) by encoder %s", incident_id, incident[1], encoder_id)
     return {"status": "deleted", "incident_id": incident_id}
 
 

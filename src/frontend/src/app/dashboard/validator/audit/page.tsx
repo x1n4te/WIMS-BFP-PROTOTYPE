@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
+import { PH_REGIONS } from '@/lib/ph-regions';
 
 interface AuditEntry {
   history_id: number;
@@ -140,16 +141,22 @@ export default function ValidatorAuditPage() {
           />
         </label>
         <label className="flex flex-col">
-          <span className="text-xs text-gray-600">Region ID</span>
-          <input
-            type="text"
+          <span className="text-xs text-gray-600">Region</span>
+          <select
             className="border rounded px-2 py-1.5"
             value={regionId}
             onChange={(e) => {
               setRegionId(e.target.value);
               setPage(0);
             }}
-          />
+          >
+            <option value="">All Regions</option>
+            {PH_REGIONS.map((r) => (
+              <option key={r.regionId} value={String(r.regionId)}>
+                {r.regionName}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col">
           <span className="text-xs text-gray-600">Validator UUID</span>

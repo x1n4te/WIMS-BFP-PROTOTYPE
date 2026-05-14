@@ -25,6 +25,7 @@ const ACTION_LABEL_MAP: Record<string, string> = {
   CREATED_DRAFT: 'Created Draft',
   EDITED: 'Edited',
   DELETED_DRAFT: 'Deleted Draft',
+  DELETED_PENDING: 'Deleted Pending Submission',
   SUBMITTED: 'Submitted for Review',
   WITHDRAWN: 'Withdrawn',
 };
