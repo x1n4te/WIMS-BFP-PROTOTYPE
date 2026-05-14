@@ -1,0 +1,30 @@
+---
+title: FRS Codebase Gap Register
+created: 2026-05-14
+updated: 2026-05-14
+type: gap
+tags: [wims-bfp, gap, frs, needs-verification]
+sources: [raw/frs, raw/codebase/codebase-snapshot-2026-05-14.md]
+status: needs-review
+---
+
+# FRS Codebase Gap Register
+
+This register prevents agents from hallucinating completion. A module is not complete just because a route or table exists.
+
+## High-Risk Verification Targets
+- Immutable record hashing: verify whether `data_hash` covers all required incident/provenance fields.
+- Analytics sync on verification/correction: verify transaction boundaries and error handling.
+- Analytics geography filters: `analytics_incident_facts` now has denormalized `municipality_name` and `province_name` via `28_analytics_geography_denorm.sql`; verify deployed databases are migrated and backfilled.
+- Export audit/download pipeline: CSV/PDF/XLSX task writers and `GET /api/analytics/export/{task_id}` are implemented; verify Celery result backend retention and export-file cleanup policy before production use.
+- RLS enforcement: verify role-region scoping through helpers and policies.
+- Public DMZ abuse controls: verify unauthenticated route has rate limiting/input validation and cannot bypass triage.
+- Notifications: verify SSE/Redis/email behavior against Module 13.
+- Offline-first: verify IndexedDB encryption/sync semantics against Module 2.
+- M9 System Monitoring: verify psutil/Docker API metrics collection, 60s refresh, and full-text log search (NOT yet implemented).
+
+## Related
+- [[concepts/frs-module-map]]
+- [[security/security-baseline]]
+- [[gaps/ui-ux-gap-register]]
+- [[gaps/functional-bug-register]]

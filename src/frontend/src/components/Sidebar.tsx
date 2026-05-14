@@ -220,6 +220,18 @@ function getNavSections(role: string | null): NavSection[] {
         return sections;
     }
 
+    if (role === 'NATIONAL_ANALYST') {
+        sections.push({
+            label: 'Navigation',
+            items: [
+                { label: 'Home', href: '/home', icon: Home },
+                { label: 'Analyst Dashboard', href: '/dashboard/analyst', icon: LayoutDashboard },
+            ],
+        });
+        sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });
+        return sections;
+    }
+
     // Add Incidents for non-system-admin and non-regional-encoder roles
     navItems.push({ label: 'Incidents', href: '/incidents', icon: Flame });
     sections.push({ label: 'Navigation', items: navItems });

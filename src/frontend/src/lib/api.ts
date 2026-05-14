@@ -804,18 +804,17 @@ export interface HeatmapFilters {
   start_date?: string;
   end_date?: string;
   region_id?: number;
+  province?: string;
+  municipality?: string;
   alarm_level?: string;
   /** API query `incident_type` filters `general_category` in analytics_incident_facts */
   incident_type?: string;
+  casualty_severity?: 'high' | 'medium' | 'low' | string;
+  damage_min?: number;
+  damage_max?: number;
 }
 
-export interface TrendFilters {
-  start_date?: string;
-  end_date?: string;
-  region_id?: number;
-  /** API query `incident_type` filters `general_category` */
-  incident_type?: string;
-  alarm_level?: string;
+export interface TrendFilters extends HeatmapFilters {
   interval?: 'daily' | 'weekly' | 'monthly';
 }
 
@@ -844,8 +843,13 @@ export async function fetchHeatmapData(filters: HeatmapFilters = {}): Promise<He
     start_date: filters.start_date,
     end_date: filters.end_date,
     region_id: filters.region_id,
+    province: filters.province,
+    municipality: filters.municipality,
     alarm_level: filters.alarm_level,
     incident_type: filters.incident_type,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
   });
   return apiFetch<HeatmapGeoJSON>(`/analytics/heatmap${qs}`);
 }
@@ -856,8 +860,13 @@ export async function fetchTrendData(filters: TrendFilters = {}): Promise<Trends
     start_date: filters.start_date,
     end_date: filters.end_date,
     region_id: filters.region_id,
+    province: filters.province,
+    municipality: filters.municipality,
     incident_type: filters.incident_type,
     alarm_level: filters.alarm_level,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
     interval: filters.interval ?? 'daily',
   });
   return apiFetch<TrendsResponse>(`/analytics/trends${qs}`);
@@ -912,18 +921,57 @@ export interface TopNItem {
   value: number;
 }
 
-export async function fetchTypeDistribution(filters: { start_date?: string; end_date?: string; region_id?: number } = {}): Promise<TypeDistributionItem[]> {
-  const qs = buildAnalyticsParams({ start_date: filters.start_date, end_date: filters.end_date, region_id: filters.region_id });
+export type AnalyticsFilterOptionsField = 'province' | 'municipality';
+
+export interface AnalyticsGlobalFilters extends HeatmapFilters {
+  interval?: 'daily' | 'weekly' | 'monthly';
+}
+
+export async function fetchTypeDistribution(filters: AnalyticsGlobalFilters = {}): Promise<TypeDistributionItem[]> {
+  const qs = buildAnalyticsParams({
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+    region_id: filters.region_id,
+    province: filters.province,
+    municipality: filters.municipality,
+    alarm_level: filters.alarm_level,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
+  });
   return apiFetch<TypeDistributionItem[]>(`/analytics/type-distribution${qs}`);
 }
 
-export async function fetchTopBarangays(filters: { limit?: number; start_date?: string; end_date?: string; incident_type?: string } = {}): Promise<TopBarangayItem[]> {
-  const qs = buildAnalyticsParams({ limit: filters.limit, start_date: filters.start_date, end_date: filters.end_date, incident_type: filters.incident_type });
+export async function fetchTopBarangays(filters: AnalyticsGlobalFilters & { limit?: number } = {}): Promise<TopBarangayItem[]> {
+  const qs = buildAnalyticsParams({
+    limit: filters.limit,
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+    region_id: filters.region_id,
+    province: filters.province,
+    municipality: filters.municipality,
+    incident_type: filters.incident_type,
+    alarm_level: filters.alarm_level,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
+  });
   return apiFetch<TopBarangayItem[]>(`/analytics/top-barangays${qs}`);
 }
 
-export async function fetchResponseTimeByRegion(filters: { start_date?: string; end_date?: string } = {}): Promise<ResponseTimeRegionItem[]> {
-  const qs = buildAnalyticsParams({ start_date: filters.start_date, end_date: filters.end_date });
+export async function fetchResponseTimeByRegion(filters: AnalyticsGlobalFilters = {}): Promise<ResponseTimeRegionItem[]> {
+  const qs = buildAnalyticsParams({
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+    region_id: filters.region_id,
+    province: filters.province,
+    municipality: filters.municipality,
+    incident_type: filters.incident_type,
+    alarm_level: filters.alarm_level,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
+  });
   return apiFetch<ResponseTimeRegionItem[]>(`/analytics/response-time-by-region${qs}`);
 }
 
@@ -932,9 +980,67 @@ export async function fetchCompareRegions(filters: { region_ids: string; start_d
   return apiFetch<CompareRegionItem[]>(`/analytics/compare-regions${qs}`);
 }
 
-export async function fetchTopN(filters: { metric: string; dimension: string; limit?: number; start_date?: string; end_date?: string }): Promise<TopNItem[]> {
-  const qs = buildAnalyticsParams({ metric: filters.metric, dimension: filters.dimension, limit: filters.limit, start_date: filters.start_date, end_date: filters.end_date });
+export async function fetchTopN(filters: AnalyticsGlobalFilters & { metric: string; dimension: string; limit?: number }): Promise<TopNItem[]> {
+  const qs = buildAnalyticsParams({
+    metric: filters.metric,
+    dimension: filters.dimension,
+    limit: filters.limit,
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+    region_id: filters.region_id,
+    province: filters.province,
+    municipality: filters.municipality,
+    incident_type: filters.incident_type,
+    alarm_level: filters.alarm_level,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
+  });
   return apiFetch<TopNItem[]>(`/analytics/top-n${qs}`);
+}
+
+export async function fetchAnalyticsFilterOptions(
+  field: AnalyticsFilterOptionsField,
+  filters: Pick<AnalyticsGlobalFilters, 'region_id' | 'province' | 'start_date' | 'end_date'> = {}
+): Promise<string[]> {
+  const qs = buildAnalyticsParams({
+    field,
+    region_id: filters.region_id,
+    province: filters.province,
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+  });
+  return apiFetch<string[]>(`/analytics/filter-options${qs}`);
+}
+
+export interface QueueAnalyticsExportRequest {
+  format: 'csv' | 'pdf' | 'excel';
+  filters: Record<string, unknown>;
+  columns: string[];
+}
+
+export async function queueAnalyticsExport(request: QueueAnalyticsExportRequest): Promise<{ task_id: string }> {
+  const { format, filters, columns } = request;
+  return apiFetch<{ task_id: string }>(`/analytics/export/${format}`, {
+    method: 'POST',
+    body: JSON.stringify({ filters, columns }),
+  });
+}
+
+export async function downloadAnalyticsExport(taskId: string): Promise<Blob> {
+  const path = `/analytics/export/${encodeURIComponent(taskId)}`;
+  const normalizedPath = path.startsWith('/api/') ? path.slice(4) : path;
+  const url = `${API_BASE.replace(/\/$/, '')}${normalizedPath}`;
+  const response = await fetch(url, { credentials: 'include' });
+  if (!response.ok) {
+    const json = await response.json().catch(() => ({}));
+    throw new ApiRequestError(
+      errorMessageFromJson(json, `Export download failed: ${response.status}`),
+      response.status,
+      (json as { detail?: unknown }).detail,
+    );
+  }
+  return response.blob();
 }
 
 // ---------------------------------------------------------------------------

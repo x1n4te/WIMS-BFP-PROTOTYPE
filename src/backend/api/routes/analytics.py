@@ -7,16 +7,21 @@ Queries wims.analytics_incident_facts (read model) instead of raw operational ta
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from celery.result import AsyncResult
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from celery_config import celery_app
 from auth import get_analyst_or_admin
 from database import get_db_with_rls
 from services.analytics_read_model import (
     count_in_range,
+    get_filter_options,
     get_heatmap_points,
     get_trends,
     get_type_distribution,
@@ -54,6 +59,8 @@ def get_heatmap(
     end_date: Optional[str] = None,
     region_id: Optional[int] = Query(None),
     region_ids: Optional[str] = Query(None, description="Comma-separated region IDs"),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
     alarm_level: Optional[str] = None,
     incident_type: Optional[str] = None,
     casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
@@ -89,6 +96,8 @@ def get_heatmap(
         end_date=end_date,
         region_id=region_id,
         region_ids=parsed_region_ids,
+        province=province,
+        municipality=municipality,
         alarm_level=alarm_level,
         incident_type=incident_type,
         casualty_severity=casualty_severity,
@@ -119,10 +128,14 @@ def get_trends_route(
     end_date: Optional[str] = None,
     region_id: Optional[int] = Query(None),
     region_ids: Optional[str] = Query(None, description="Comma-separated region IDs"),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
     incident_type: Optional[str] = None,
     alarm_level: Optional[str] = None,
     interval: str = Query("daily", pattern="^(daily|weekly|monthly)$"),
     casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
 ):
     """
     Time-series counts for line/bar charts.
@@ -145,10 +158,14 @@ def get_trends_route(
         end_date=end_date,
         region_id=region_id,
         region_ids=parsed_region_ids,
+        province=province,
+        municipality=municipality,
         incident_type=incident_type,
         alarm_level=alarm_level,
         interval=interval,
         casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
     return {"data": data}
 
@@ -261,6 +278,61 @@ def export_excel(
     return {"task_id": result.id}
 
 
+@router.get("/export/{task_id}")
+def download_export(
+    task_id: str,
+    _user: Annotated[dict, Depends(get_analyst_or_admin)],
+):
+    """Download a completed Celery export artifact."""
+    result = AsyncResult(task_id, app=celery_app)
+    if result.state == "PENDING":
+        raise HTTPException(status_code=409, detail="Export is still pending")
+    if result.failed():
+        raise HTTPException(status_code=409, detail="Export failed")
+
+    path = result.result
+    if not isinstance(path, str):
+        raise HTTPException(status_code=404, detail="Export result is unavailable")
+    if not os.path.exists(path) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Export file is unavailable")
+
+    extension = os.path.splitext(path)[1].lower()
+    media_types = {
+        ".csv": "text/csv",
+        ".pdf": "application/pdf",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+    return FileResponse(
+        path,
+        media_type=media_types.get(extension, "application/octet-stream"),
+        filename=os.path.basename(path),
+    )
+
+
+@router.get("/filter-options")
+def filter_options_route(
+    _user: Annotated[dict, Depends(get_analyst_or_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    field: str = Query(..., pattern="^(province|municipality)$"),
+    region_id: Optional[int] = Query(None),
+    province: Optional[str] = Query(None),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """Cascading geography filter options for analyst dashboards."""
+    try:
+        return get_filter_options(
+            db,
+            field=field,
+            region_id=region_id,
+            province=province,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/type-distribution")
 def get_type_distribution_route(
     _user: Annotated[dict, Depends(get_analyst_or_admin)],
@@ -268,6 +340,12 @@ def get_type_distribution_route(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     region_id: Optional[int] = Query(None),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
 ):
     """Incident count by type (for pie chart)."""
     data = get_type_distribution(
@@ -275,6 +353,12 @@ def get_type_distribution_route(
         start_date=start_date,
         end_date=end_date,
         region_id=region_id,
+        province=province,
+        municipality=municipality,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
     return data
 
@@ -286,7 +370,14 @@ def get_top_barangays_route(
     limit: int = Query(10, ge=1, le=50),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    region_id: Optional[int] = Query(None),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
     incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
 ):
     """Top N barangays by incident count."""
     data = get_top_barangays(
@@ -294,7 +385,14 @@ def get_top_barangays_route(
         limit=limit,
         start_date=start_date,
         end_date=end_date,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
         incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
     return data
 
@@ -305,12 +403,28 @@ def get_response_time_by_region_route(
     db: Annotated[Session, Depends(get_db_with_rls)],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    region_id: Optional[int] = Query(None),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
+    incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
 ):
     """Average/min/max response time grouped by region."""
     data = get_response_time_by_region(
         db,
         start_date=start_date,
         end_date=end_date,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
     return data
 
@@ -348,10 +462,18 @@ def top_n_route(
     _user: Annotated[dict, Depends(get_analyst_or_admin)],
     db: Annotated[Session, Depends(get_db_with_rls)],
     metric: str = Query(..., pattern="^(incidents|response_time|casualties)$"),
-    dimension: str = Query(..., pattern="^(barangay|fire_station|region)$"),
+    dimension: str = Query(..., pattern="^(barangay|fire_station|region|municipality)$"),
     limit: int = Query(10, ge=1, le=50),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    region_id: Optional[int] = Query(None),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
+    incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
 ):
     """Configurable top-N analysis by metric and dimension."""
     data = get_top_n(
@@ -361,5 +483,13 @@ def top_n_route(
         limit=limit,
         start_date=start_date,
         end_date=end_date,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
     return data
