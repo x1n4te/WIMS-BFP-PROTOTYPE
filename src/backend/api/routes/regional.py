@@ -750,6 +750,27 @@ def _combine_date_and_time(notification_dt: str | None, time_value: Any) -> str 
     return _safe_dt(f"{date_part} {str(time_value).strip()}")
 
 
+def _time_str(val: Any) -> str | None:
+    """Extract HH:MM 24-hour string from a raw time value (datetime.time, Excel serial float, or string)."""
+    if val is None:
+        return None
+    # Native Python datetime.time or datetime object
+    if hasattr(val, "hour") and hasattr(val, "minute"):
+        return f"{val.hour:02d}:{val.minute:02d}"
+    try:
+        t_serial = float(val)
+        base = datetime(1899, 12, 30)
+        time_dt = (base + timedelta(days=t_serial)).time()
+        return f"{time_dt.hour:02d}:{time_dt.minute:02d}"
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    m = re.match(r"(\d{1,2}):(\d{2})", s)
+    if m:
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
+    return s or None
+
+
 class BfpXlsxParser:
     """Parser for the official BFP manual entry form (AFOR)."""
 
@@ -855,6 +876,14 @@ class BfpXlsxParser:
     def _is_marked_on_row(self, row: int, cols: tuple[str, ...] = ("B", "C", "D")) -> bool:
         return any(self._is_marked(f"{col}{row}") for col in cols)
 
+    def _parse_name_contact(self, coord: str, prefix: str) -> dict[str, Any]:
+        """Read a cell and split on '/' to get name and contact number."""
+        raw = str(self.get(coord) or "").strip()
+        if "/" in raw:
+            parts = raw.split("/", 1)
+            return {prefix: parts[0].strip(), f"{prefix}_contact": parts[1].strip()}
+        return {prefix: raw, f"{prefix}_contact": ""}
+
     def parse(self) -> dict[str, Any]:
         """Extract sections A through L into a comprehensive data dictionary."""
 
@@ -937,7 +966,9 @@ class BfpXlsxParser:
                 problems.append(flavor)
 
         icp_present = self._is_marked_on_row(102)
-        icp_location = self.get("D102") if icp_present else None
+        _raw_icp = str(self.get("D102") or "").strip()
+        _raw_icp = re.sub(r"(?i)^Specify\s+location\s+of\s+ICP\s*:\s*", "", _raw_icp).strip()
+        icp_location = _raw_icp or None if icp_present else None
 
         # Section I: Narrative joining (Rows 160 to 190)
         narrative_lines = []
@@ -976,8 +1007,14 @@ class BfpXlsxParser:
             "caller_info": self.get("D29"),
             "receiver": self.get("D30"),
             "engine": self.get("D31"),
+            "engine_2": self.get("D32"),
+            "engine_3": self.get("D33"),
             "time_dispatched": self.get("D34"),
+            "time_dispatched_2": self.get("D35"),
+            "time_dispatched_3": self.get("D36"),
             "time_arrived": self.get("D37"),
+            "time_arrived_2": self.get("D38"),
+            "time_arrived_3": self.get("D39"),
             "response_time": self.get("D40"),
             "distance_km": self.get("D41"),
             "alarm_level": self.get("D42"),
@@ -990,12 +1027,26 @@ class BfpXlsxParser:
             "origin": self.get("D53"),
             "stage": stage,
             "extent": extent,
-            "extent_total_floor_area_sqm": self.get("D56")
-            or self.get("D57")
-            or self.get("D58")
-            or self.get("D59")
-            or self.get("D60"),
-            "extent_total_land_area_hectares": self.get("D59") or self.get("D60"),
+            "extent_total_floor_area_sqm": (
+                self.get("D58") if extent == "Confined to Room"
+                else self.get("D59") if extent == "Confined to Structure"
+                else self.get("D60") if extent in ("Total Loss", "Extended Beyond Structure")
+                else None
+            ),
+            "extent_total_land_area_hectares": (
+                self.get("E59") or self.get("D60") if extent == "Confined to Structure"
+                else self.get("E60") if extent == "Total Loss"
+                else None
+            ),
+            "extent_description": (
+                str(self.get("D56") or "").strip() or None if extent == "None / Minor"
+                else str(self.get("D57") or "").strip() or None if extent == "Confined to Object"
+                else str(self.get("D61") or "").strip() or None if extent == "Extended Beyond Structure"
+                else None
+            ),
+            "extent_objects_count": (
+                _safe_int(self.get("D61")) if extent == "Extended Beyond Structure" else None
+            ),
             "struct_aff": self.get("D62"),
             "house_aff": self.get("D63"),
             "fam_aff": self.get("D64"),
@@ -1017,6 +1068,7 @@ class BfpXlsxParser:
             "tool_others": self.get("D84"),
             "hydrant_dist": self.get("D85"),
             "timeline": {
+                "alarm_foua": {"time": self.get("D88"), "date": self.get("E88")},
                 "alarm_1st": {"time": self.get("D89"), "date": self.get("E89")},
                 "alarm_2nd": {"time": self.get("D90"), "date": self.get("E90")},
                 "alarm_3rd": {"time": self.get("D91"), "date": self.get("E91")},
@@ -1050,7 +1102,8 @@ class BfpXlsxParser:
             "pod_lineman": self.get("D117"),
             "pod_crew": self.get("D118"),
             "pod_dpo": self.get("D119"),
-            "pod_safety": self.get("D120"),
+            **self._parse_name_contact("D120", "pod_safety"),
+            **self._parse_name_contact("D121", "pod_inv"),
             "others_list": others,
             "narrative": "\n".join(narrative_lines),
             "problems": problems,
@@ -1146,6 +1199,7 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
     }
 
     timeline = data.get("timeline") or {
+        "alarm_foua": {"time": None, "date": data.get("notification_date")},
         "alarm_1st": {
             "time": data.get("alarm_1st"),
             "date": data.get("notification_date"),
@@ -1163,6 +1217,31 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
         "fo": {"time": None, "date": data.get("notification_date")},
     }
 
+    # Normalize extent values to match the frontend form radio values
+    _EXTENT_NORMALIZE: dict[str, str] = {
+        "None / Minor": "None / Minor Damage",
+        "Confined to Object": "Confined to Object/Vehicle",
+        "Confined to Structure": "Confined to Structure or Property",
+        "Extended Beyond Structure": "Extended Beyond Structure or Property",
+    }
+    raw_extent = data.get("extent") or data.get("extent_of_damage")
+    normalized_extent = _EXTENT_NORMALIZE.get(str(raw_extent or "").strip(), raw_extent)
+
+    # Build multi-engine list for alarm_timeline._engines
+    engines: list[dict[str, Any]] = []
+    for name_key, disp_key, arr_key in [
+        ("engine", "time_dispatched", "time_arrived"),
+        ("engine_2", "time_dispatched_2", "time_arrived_2"),
+        ("engine_3", "time_dispatched_3", "time_arrived_3"),
+    ]:
+        eng_name = data.get(name_key)
+        if eng_name:
+            engines.append({
+                "name": str(eng_name).strip(),
+                "time_dispatched": _time_str(data.get(disp_key)),
+                "time_arrived": _time_str(data.get(arr_key)),
+            })
+
     incident_nonsensitive_details = {
         "notification_dt": notif_dt,
         "responder_type": data.get("responder_type"),
@@ -1173,7 +1252,9 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
         "general_category": data.get("classification") or data.get("classification_of_involved"),
         "sub_category": data.get("category") or data.get("type_of_involved_general_category"),
         "fire_origin": data.get("origin") or data.get("area_of_origin"),
-        "extent_of_damage": data.get("extent") or data.get("extent_of_damage"),
+        "extent_of_damage": normalized_extent,
+        "extent_description": data.get("extent_description") or "",
+        "extent_objects_count": _safe_int(data.get("extent_objects_count"), default=None) if data.get("extent_objects_count") is not None else None,
         "stage_of_fire": data.get("stage") or data.get("stage_of_fire_upon_arrival"),
         "structures_affected": _safe_int(
             data.get("struct_aff")
@@ -1223,6 +1304,7 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
             "hydrant_distance": str(data.get("hydrant_dist") or ""),
         },
         "alarm_timeline": {
+            "alarm_foua": _dt(timeline.get("alarm_foua", {}).get("date"), timeline.get("alarm_foua", {}).get("time")),
             "alarm_1st": _dt(timeline["alarm_1st"]["date"], timeline["alarm_1st"]["time"]),
             "alarm_2nd": _dt(timeline["alarm_2nd"]["date"], timeline["alarm_2nd"]["time"]),
             "alarm_3rd": _dt(timeline["alarm_3rd"]["date"], timeline["alarm_3rd"]["time"]),
@@ -1235,6 +1317,10 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
             "alarm_general": _dt(timeline["general"]["date"], timeline["general"]["time"]),
             "alarm_fuc": _dt(timeline["fuc"]["date"], timeline["fuc"]["time"]),
             "alarm_fo": _dt(timeline["fo"]["date"], timeline["fo"]["time"]),
+            "_engines": engines,
+            "_response": {
+                "time_returned_to_base": _time_str(data.get("time_returned")),
+            },
         },
         "problems_encountered": data.get("problems", []),
         "recommendations": data.get("recommendations") or "",
@@ -1259,7 +1345,8 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
                 "engine_crew": data.get("pod_crew") or "",
                 "driver": data.get("pod_dpo") or "",
                 "pump_operator": data.get("pod_dpo") or "",
-                "safety_officer": {"name": data.get("pod_safety") or "", "contact": ""},
+                "safety_officer": {"name": data.get("pod_safety") or "", "contact": data.get("pod_safety_contact") or ""},
+                "fire_arson_investigator": {"name": data.get("pod_inv") or "", "contact": data.get("pod_inv_contact") or ""},
             },
             "other_personnel": data.get("others_list", []),
             "casualty_details": casualty_details,
@@ -1280,6 +1367,17 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
             "arrival_dt": _combine_date_and_time(notif_dt, data.get("time_arrived")),
             "return_dt": _combine_date_and_time(notif_dt, data.get("time_returned")),
         },
+        "_extra_engines": [
+            {
+                "station_name": data.get("fire_station_name") or "",
+                "engine_number": eng["name"],
+                "responder_type": data.get("responder_type") or "",
+                "dispatch_dt": _combine_date_and_time(notif_dt, eng.get("time_dispatched")),
+                "arrival_dt": _combine_date_and_time(notif_dt, eng.get("time_arrived")),
+                "return_dt": _combine_date_and_time(notif_dt, data.get("time_returned")),
+            }
+            for eng in engines[1:]  # skip first engine — already in responding_unit
+        ],
         "_city_text": data.get("city") or "",
         "_province_text": data.get("province") or "",
     }
@@ -1915,7 +2013,8 @@ async def commit_afor_import(
                     resources_deployed, alarm_timeline, problems_encountered, recommendations,
                     fire_station_name, total_response_time_minutes, total_gas_consumed_liters,
                     stage_of_fire, extent_total_floor_area_sqm, extent_total_land_area_hectares,
-                    vehicles_affected
+                    vehicles_affected, province_district, city_municipality,
+                    extent_description, extent_objects_count
                 ) VALUES (
                     :incident_id, :city_id, :distance_from_station_km, CAST(:notification_dt AS timestamptz),
                     :alarm_level, :general_category, :sub_category,
@@ -1925,7 +2024,9 @@ async def commit_afor_import(
                     CAST(:resources_deployed AS jsonb), CAST(:alarm_timeline AS jsonb),
                     CAST(:problems_encountered AS jsonb), :recommendations,
                     :fire_station_name, :total_response_time_minutes, :total_gas_consumed_liters,
-                    :stage_of_fire, :floor_area, :land_area, :vehicles_affected
+                    :stage_of_fire, :floor_area, :land_area, :vehicles_affected,
+                    :province_district, :city_municipality,
+                    :extent_description, :extent_objects_count
                 )
             """),
             {
@@ -1960,6 +2061,10 @@ async def commit_afor_import(
                 "floor_area": ns.get("extent_total_floor_area_sqm", 0),
                 "land_area": ns.get("extent_total_land_area_hectares", 0),
                 "vehicles_affected": ns.get("vehicles_affected", 0),
+                "province_district": row_data.get("_province_text", ""),
+                "city_municipality": row_data.get("_city_text", ""),
+                "extent_description": ns.get("extent_description") or None,
+                "extent_objects_count": ns.get("extent_objects_count"),
             },
         )
 
@@ -2091,6 +2196,41 @@ async def commit_afor_import(
                     "return_dt": responding_unit.get("return_dt"),
                 },
             )
+
+        for extra_eng in row_data.get("_extra_engines", []):
+            if any(extra_eng.get(k) for k in ("engine_number", "dispatch_dt", "arrival_dt")):
+                db.execute(
+                    text("""
+                        INSERT INTO wims.responding_units (
+                            incident_id, station_name, engine_number, responder_type,
+                            dispatch_dt, arrival_dt, return_dt
+                        ) VALUES (
+                            :incident_id, :station_name, :engine_number, :responder_type,
+                            CAST(:dispatch_dt AS timestamptz),
+                            CAST(:arrival_dt AS timestamptz),
+                            CAST(:return_dt AS timestamptz)
+                        )
+                    """),
+                    {
+                        "incident_id": incident_id,
+                        "station_name": extra_eng.get("station_name", ""),
+                        "engine_number": extra_eng.get("engine_number", ""),
+                        "responder_type": extra_eng.get("responder_type", ""),
+                        "dispatch_dt": extra_eng.get("dispatch_dt"),
+                        "arrival_dt": extra_eng.get("arrival_dt"),
+                        "return_dt": extra_eng.get("return_dt"),
+                    },
+                )
+
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(user_id),
+            previous_status="DRAFT",
+            new_status="DRAFT",
+            notes="Imported via XLSX",
+            action_label="CREATED_DRAFT",
+        )
 
     db.commit()
 
@@ -2419,7 +2559,7 @@ def get_regional_incident_detail(
 ):
     """Fetch a single incident detail. Encoders see only their own; validators see any."""
     role = user.get("role", "")
-    is_validator = role in ("NATIONAL_VALIDATOR", "SYSTEM_ADMIN", "NATIONAL_ANALYST")
+    is_validator = role in ("NATIONAL_VALIDATOR", "SYSTEM_ADMIN", "NATIONAL_ANALYST", "VALIDATOR")
 
     if is_validator:
         row = db.execute(

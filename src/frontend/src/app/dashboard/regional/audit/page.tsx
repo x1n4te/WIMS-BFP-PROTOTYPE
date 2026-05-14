@@ -74,9 +74,9 @@ export default function EncoderAuditPage() {
         <h1 className="text-2xl font-bold">My Activity Log</h1>
         <Link
           href="/dashboard/regional"
-          className="text-sm font-medium text-blue-700 hover:text-blue-900"
+          className="inline-flex items-center gap-1.5 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 transition-colors"
         >
-          ← Back to incidents
+          ← Back to Dashboard
         </Link>
       </div>
       <p className="text-sm text-gray-500 mb-6">

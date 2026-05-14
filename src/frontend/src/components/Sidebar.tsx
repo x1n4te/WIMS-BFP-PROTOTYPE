@@ -16,6 +16,7 @@ import {
     Settings,
     X,
     UserCircle,
+    History,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -193,6 +194,7 @@ function getNavSections(role: string | null): NavSection[] {
             items: [
                 { label: 'Manual Entry', href: '/afor/create', icon: FileText },
                 { label: 'Import AFOR', href: '/afor/import', icon: Upload },
+                { label: 'Activity Log', href: '/dashboard/regional/audit', icon: History },
             ]
         });
 

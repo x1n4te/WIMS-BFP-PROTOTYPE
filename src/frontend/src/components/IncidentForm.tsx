@@ -29,9 +29,7 @@ const MapPicker = dynamic(
 
 const STAGE_OF_FIRE_OPTIONS = [
   'Incipient',
-  'Free-burning',
-  'Smoldering',
-  'Flashover',
+  'Growth',
   'Fully Developed',
   'Decay',
 ];
@@ -54,7 +52,7 @@ const ALARM_ROWS = [
 
 const VEHICLE_ROWS = [
   { key: 'resources_bfp_trucks', label: 'BFP Fire Trucks' },
-  { key: 'resources_lgu_trucks', label: 'BFP Manned Fire Trucks (LGU Owned)' },
+  { key: 'resources_lgu_trucks', label: 'BFP Manned Fire Trucks (LGU)' },
   { key: 'resources_non_bfp_trucks', label: 'Non-BFP Fire Trucks' },
   { key: 'resources_bfp_ambulance', label: 'BFP Ambulance' },
   { key: 'resources_non_bfp_ambulance', label: 'Non-BFP Ambulance' },
@@ -63,11 +61,11 @@ const VEHICLE_ROWS = [
 ] as const;
 
 const TOOL_ROWS: { key: string; label: string; type: 'number' | 'text' }[] = [
-  { key: 'tools_scba', label: 'Self-Contained Breathing Apparatus (SCBA)', type: 'number' },
+  { key: 'tools_scba', label: 'SCBA', type: 'number' },
   { key: 'tools_rope', label: 'Rope', type: 'text' },
   { key: 'tools_ladder', label: 'Ladder', type: 'number' },
   { key: 'tools_hoseline', label: 'Hoseline', type: 'text' },
-  { key: 'tools_hydraulic', label: 'Hydraulic Tools & Equipment', type: 'number' },
+  { key: 'tools_hydraulic', label: 'Hydraulic Tools', type: 'number' },
 ];
 
 const POD_ROLES: { key: string; label: string; contactKey?: string }[] = [
@@ -142,6 +140,11 @@ export function IncidentForm({
     engine_dispatched: '',
     time_engine_dispatched: '',
     time_arrived_at_scene: '',
+    engines: [
+      { name: '', time_dispatched: '', time_arrived: '' },
+      { name: '', time_dispatched: '', time_arrived: '' },
+      { name: '', time_dispatched: '', time_arrived: '' },
+    ] as { name: string; time_dispatched: string; time_arrived: string }[],
     total_response_time_minutes: '',
     distance_to_fire_scene_km: '',
     alarm_level: '',
@@ -152,11 +155,12 @@ export function IncidentForm({
     classification_of_involved: '',
     type_of_involved_general_category: '',
     owner_name: '',
-    establishment_name: '',
     general_description_of_involved: '',
     area_of_origin: '',
     stage_of_fire_upon_arrival: '',
     extent_of_damage: '',
+    extent_description: '',
+    extent_objects_count: '',
     extent_total_floor_area_sqm: '',
     extent_total_land_area_hectares: '',
     structures_affected: '',
@@ -239,10 +243,10 @@ export function IncidentForm({
     station_code: 'TBA',
   });
 
-  const [otherPersonnel, setOtherPersonnel] = useState<{ name: string; designation: string; remarks: string }[]>([
-    { name: '', designation: '', remarks: '' },
-    { name: '', designation: '', remarks: '' },
-    { name: '', designation: '', remarks: '' },
+  const [otherPersonnel, setOtherPersonnel] = useState<{ name: string; designation: string }[]>([
+    { name: '', designation: '' },
+    { name: '', designation: '' },
+    { name: '', designation: '' },
   ]);
 
   // Duplicate detection modal state
@@ -421,6 +425,22 @@ export function IncidentForm({
       engine_dispatched: ns.engine_dispatched || responseFields.engine_dispatched || '',
       time_engine_dispatched: ns.time_engine_dispatched || responseFields.time_engine_dispatched || '',
       time_arrived_at_scene: ns.time_arrived_at_scene || responseFields.time_arrived_at_scene || '',
+      engines: (() => {
+        const stored = (timeline as Record<string, unknown>)._engines as { name: string; time_dispatched: string; time_arrived: string }[] | undefined;
+        if (stored && stored.length > 0) {
+          const rows = stored.map((e) => ({ name: e.name || '', time_dispatched: e.time_dispatched || '', time_arrived: e.time_arrived || '' }));
+          while (rows.length < 3) rows.push({ name: '', time_dispatched: '', time_arrived: '' });
+          return rows.slice(0, 3);
+        }
+        const legacyName = ns.engine_dispatched || responseFields.engine_dispatched || '';
+        const legacyDisp = ns.time_engine_dispatched || responseFields.time_engine_dispatched || '';
+        const legacyArr = ns.time_arrived_at_scene || responseFields.time_arrived_at_scene || '';
+        return [
+          { name: legacyName, time_dispatched: legacyDisp, time_arrived: legacyArr },
+          { name: '', time_dispatched: '', time_arrived: '' },
+          { name: '', time_dispatched: '', time_arrived: '' },
+        ];
+      })(),
       total_response_time_minutes: ns.total_response_time_minutes?.toString() || '',
       distance_to_fire_scene_km: (ns.distance_to_fire_scene_km ?? (ns as Record<string, unknown>).distance_from_station_km)?.toString() || '',
       alarm_level: ns.alarm_level || '',
@@ -465,12 +485,13 @@ export function IncidentForm({
         return rawType; // fall back to raw value; user can correct
       })(),
       station_code: (ns as Record<string, unknown>).station_code as string || 'TBA',
-      owner_name: sen.owner_name || ns.owner_name || '',
-      establishment_name: sen.establishment_name || ns.establishment_name || '',
+      owner_name: sen.owner_name || ns.owner_name || sen.establishment_name || ns.establishment_name || '',
       general_description_of_involved: ns.general_description_of_involved || responseFields.general_description_of_involved || '',
       area_of_origin: ns.area_of_origin || (ns as Record<string, unknown>).fire_origin as string || '',
       stage_of_fire_upon_arrival: ns.stage_of_fire_upon_arrival || (ns as Record<string, unknown>).stage_of_fire as string || '',
       extent_of_damage: ns.extent_of_damage || '',
+      extent_description: (ns as Record<string, unknown>).extent_description as string || '',
+      extent_objects_count: (ns as Record<string, unknown>).extent_objects_count?.toString() || '',
       extent_total_floor_area_sqm: ns.extent_total_floor_area_sqm?.toString() || '',
       extent_total_land_area_hectares: ns.extent_total_land_area_hectares?.toString() || '',
       structures_affected: ns.structures_affected?.toString() || '',
@@ -567,7 +588,6 @@ export function IncidentForm({
         people.map((p: Record<string, unknown>) => ({
           name: String(p.name ?? ''),
           designation: String(p.designation ?? ''),
-          remarks: String(p.remarks ?? ''),
         }))
       );
     }
@@ -698,57 +718,9 @@ export function IncidentForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setToast(null);
-
-    // Field-level validation with highlights
-    const errors = new Set<string>();
-    if (!formState.responder_type) errors.add('responder_type');
-    if (!formState.fire_station_name) errors.add('fire_station_name');
-    if (!formState.notification_dt_date) errors.add('notification_dt_date');
-    if (!formState.notification_dt_time) errors.add('notification_dt_time');
-    if (!formState.incident_address) errors.add('incident_address');
-    if (!formState.alarm_level) errors.add('alarm_level');
-    if (!formState.classification_of_involved) errors.add('classification_of_involved');
-    if (!formState.extent_of_damage) errors.add('extent_of_damage');
-    if (!formState.province_district) errors.add('province_district');
-    if (!formState.city_municipality) errors.add('city_municipality');
-    if (!formState.disposition_prepared_by) errors.add('disposition_prepared_by');
-    if (!formState.disposition_noted_by) errors.add('disposition_noted_by');
-    if (!resolveRegionId()) errors.add('region');
-    if (!existingIncidentId && (latitude === null || longitude === null)) errors.add('map_location');
-    // Reference number dependency: type is required when classification is selected
-    if (formState.classification_of_involved && !formState.type_of_involved_general_category) {
-      errors.add('type_of_involved_general_category');
-    }
-    if (errors.size > 0) {
-      setFieldErrors(errors);
-      const FIELD_NAMES: Record<string, string> = {
-        responder_type: 'Type of Responder',
-        fire_station_name: 'Fire Station Name',
-        notification_dt_date: 'Date of Notification',
-        notification_dt_time: 'Time of Notification',
-        incident_address: 'Incident Address',
-        alarm_level: 'Highest Alarm Level',
-        classification_of_involved: 'Classification of Involved',
-        extent_of_damage: 'Extent of Damage',
-        type_of_involved_general_category: 'Type of Involved (required for reference number)',
-        region: 'Region',
-        province_district: 'Province / District',
-        city_municipality: 'City / Municipality',
-        disposition_prepared_by: 'Prepared by (Officer)',
-        disposition_noted_by: 'Noted by (Officer)',
-        map_location: 'Fire Scene Location on Map',
-      };
-      const firstKey = [...errors][0];
-      showToast(`Required field missing: ${FIELD_NAMES[firstKey] ?? firstKey}. Please fill in all highlighted fields.`);
-      setTimeout(() => {
-        const firstEl = document.querySelector('[data-field-error="true"]');
-        firstEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 100);
-      return;
-    }
     setFieldErrors(new Set());
 
-    const effectiveRegionId = resolveRegionId()!;
+    const effectiveRegionId = resolveRegionId() ?? 0;
 
     await doCreateIncident(effectiveRegionId);
   };
@@ -796,13 +768,15 @@ export function IncidentForm({
         incident_type_code: incidentTypeCode || undefined,
         station_code: formState.station_code || 'TBA',
         owner_name: formState.owner_name || 'N/A',
-        establishment_name: formState.establishment_name || 'N/A',
+        establishment_name: formState.owner_name || 'N/A',
         general_description_of_involved: formState.general_description_of_involved || 'N/A',
         area_of_origin: formState.area_of_origin || 'N/A',
         fire_origin: formState.area_of_origin || 'N/A',
         stage_of_fire: formState.stage_of_fire_upon_arrival,
         stage_of_fire_upon_arrival: formState.stage_of_fire_upon_arrival,
         extent_of_damage: formState.extent_of_damage,
+        extent_description: formState.extent_description || null,
+        extent_objects_count: parseInt(formState.extent_objects_count) || null,
         extent_total_floor_area_sqm: parseFloat(formState.extent_total_floor_area_sqm) || 0,
         extent_total_land_area_hectares: parseFloat(formState.extent_total_land_area_hectares) || 0,
         structures_affected: parseInt(formState.structures_affected) || 0,
@@ -851,10 +825,11 @@ export function IncidentForm({
           alarm_general: alarmEntry('alarm_general'),
           alarm_fuc: alarmEntry('alarm_fuc'),
           alarm_fo: alarmEntry('alarm_fo'),
+          _engines: formState.engines.filter((e) => e.name.trim()),
           _response: {
-            engine_dispatched: formState.engine_dispatched || '',
-            time_engine_dispatched: formState.time_engine_dispatched || '',
-            time_arrived_at_scene: formState.time_arrived_at_scene || '',
+            engine_dispatched: formState.engines[0]?.name || formState.engine_dispatched || '',
+            time_engine_dispatched: formState.engines[0]?.time_dispatched || formState.time_engine_dispatched || '',
+            time_arrived_at_scene: formState.engines[0]?.time_arrived || formState.time_arrived_at_scene || '',
             time_returned_to_base: formState.time_returned_to_base || '',
             general_description_of_involved: formState.general_description_of_involved || '',
           },
@@ -867,11 +842,13 @@ export function IncidentForm({
         other_personnel: otherPersonnel.filter((p) => p.name.trim()),
       },
       incident_sensitive_details: {
+        street_address: formState.incident_address,
+        landmark: formState.nearest_landmark,
         caller_name: formState.caller_name,
         caller_number: formState.caller_number,
         receiver_name: formState.receiver_name,
         owner_name: formState.owner_name || 'N/A',
-        establishment_name: formState.establishment_name || 'N/A',
+        establishment_name: formState.owner_name || 'N/A',
         icp_location: formState.icp_location || 'N/A',
         is_icp_present: formState.icp_present === 'with',
         personnel_on_duty: {
@@ -923,6 +900,8 @@ export function IncidentForm({
         region_label: formState.region,
         fire_origin: incident.incident_nonsensitive_details.fire_origin,
         extent_of_damage: incident.incident_nonsensitive_details.extent_of_damage,
+        extent_description: formState.extent_description || null,
+        extent_objects_count: parseInt(formState.extent_objects_count) || null,
         stage_of_fire: incident.incident_nonsensitive_details.stage_of_fire,
         structures_affected: incident.incident_nonsensitive_details.structures_affected,
         households_affected: incident.incident_nonsensitive_details.households_affected,
@@ -940,7 +919,7 @@ export function IncidentForm({
         receiver_name: incident.incident_sensitive_details.receiver_name,
         narrative_report: incident.incident_sensitive_details.narrative_report,
         owner_name: incident.incident_sensitive_details.owner_name,
-        establishment_name: incident.incident_sensitive_details.establishment_name,
+        establishment_name: incident.incident_sensitive_details.owner_name,
         street_address: formState.incident_address,
         landmark: formState.nearest_landmark,
         prepared_by_officer: (incident.incident_sensitive_details as Record<string, unknown>).prepared_by_officer as string | undefined,
@@ -1054,7 +1033,6 @@ export function IncidentForm({
       classification_of_involved: pick(['STRUCTURAL', 'NON_STRUCTURAL', 'TRANSPORTATION']),
       type_of_involved_general_category: pick(['Single-Family Residential', 'Multi-Storey Residential', 'Commercial Building', 'Warehouse', 'Factory']),
       owner_name: pick(['Juan Dela Cruz', 'Maria Santos', 'ABC Corporation', 'N/A']),
-      establishment_name: pick(['Dela Cruz Residence', 'Santos Apartment', 'ABC Bodega', 'N/A']),
       general_description_of_involved: pick(['Two-storey residential structure made of mixed construction', 'Single-storey commercial building made of concrete', 'Three-storey apartment building']),
       area_of_origin: pick(FIRE_ORIGINS),
       stage_of_fire_upon_arrival: pick(STAGES),
@@ -1123,10 +1101,10 @@ export function IncidentForm({
       disposition_noted_by: pick(CMDS),
     }));
     setOtherPersonnel([
-      { name: `FO2 ${pick(['Santos', 'Reyes', 'Garcia', 'Lopez'])}`, designation: 'BFP Personnel', remarks: 'On standby at scene' },
-      { name: `FO1 ${pick(['Cruz', 'Bautista', 'Ramos', 'Mendoza'])}`, designation: 'BFP Personnel', remarks: 'Crowd control perimeter' },
-      { name: pick(['Barangay Captain Juan Dela Cruz', 'Kagawad Pedro Santos', 'Barangay Captain Maria Reyes']), designation: 'Barangay Official', remarks: 'Assisted in area clearing' },
-      { name: pick(['Dr. Maria Reyes', 'EMT Ana Lopez', 'Nurse Carlo Gomez']), designation: 'DRRMO / Medical Response', remarks: 'Standby medical support' },
+      { name: `FO2 ${pick(['Santos', 'Reyes', 'Garcia', 'Lopez'])}`, designation: 'BFP Personnel' },
+      { name: `FO1 ${pick(['Cruz', 'Bautista', 'Ramos', 'Mendoza'])}`, designation: 'BFP Personnel' },
+      { name: pick(['Barangay Captain Juan Dela Cruz', 'Kagawad Pedro Santos', 'Barangay Captain Maria Reyes']), designation: 'Barangay Official' },
+      { name: pick(['Dr. Maria Reyes', 'EMT Ana Lopez', 'Nurse Carlo Gomez']), designation: 'DRRMO / Medical Response' },
     ]);
   };
 
@@ -1318,19 +1296,34 @@ export function IncidentForm({
               <input name="receiver_name" type="text" className={inputCls} value={formState.receiver_name} onChange={handleChange} />
             </div>
 
-            <div>
-              <label className={labelCls}>Name of Engine Dispatched</label>
-              <input name="engine_dispatched" type="text" className={inputCls} placeholder="e.g. BFP Engine Unit 1" value={formState.engine_dispatched} onChange={handleChange} />
-            </div>
-
-            <div>
-              <label className={labelCls}>Time Engine Dispatched</label>
-              <input name="time_engine_dispatched" type="time" className={inputCls} value={formState.time_engine_dispatched} onChange={handleChange} />
-            </div>
-
-            <div>
-              <label className={labelCls}>Time Arrived at Fire Scene</label>
-              <input name="time_arrived_at_scene" type="time" className={inputCls} value={formState.time_arrived_at_scene} onChange={handleChange} />
+            <div className="md:col-span-2">
+              <label className={labelCls}>Engine(s) Dispatched</label>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs border border-gray-300 mt-1">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="border px-2 py-1 text-left w-1/3">Name of Engine</th>
+                      <th className="border px-2 py-1 text-left w-1/3">Time Engine Dispatched</th>
+                      <th className="border px-2 py-1 text-left w-1/3">Time Arrived at Fire Scene</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {formState.engines.map((eng, i) => (
+                      <tr key={i}>
+                        <td className="border px-1 py-1">
+                          <input type="text" placeholder="e.g. BFP Engine Unit 1" className="w-full border-0 bg-transparent text-xs p-1 focus:outline-none focus:ring-1 focus:ring-red-300 rounded" value={eng.name} onChange={(ev) => setFormState((prev) => { const engines = prev.engines.map((e, j) => j === i ? { ...e, name: ev.target.value } : e); return { ...prev, engines }; })} />
+                        </td>
+                        <td className="border px-1 py-1">
+                          <input type="time" className="w-full border-0 bg-transparent text-xs p-1 focus:outline-none focus:ring-1 focus:ring-red-300 rounded" value={eng.time_dispatched} onChange={(ev) => setFormState((prev) => { const engines = prev.engines.map((e, j) => j === i ? { ...e, time_dispatched: ev.target.value } : e); return { ...prev, engines }; })} />
+                        </td>
+                        <td className="border px-1 py-1">
+                          <input type="time" className="w-full border-0 bg-transparent text-xs p-1 focus:outline-none focus:ring-1 focus:ring-red-300 rounded" value={eng.time_arrived} onChange={(ev) => setFormState((prev) => { const engines = prev.engines.map((e, j) => j === i ? { ...e, time_arrived: ev.target.value } : e); return { ...prev, engines }; })} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <div>
@@ -1339,7 +1332,7 @@ export function IncidentForm({
             </div>
 
             <div>
-              <label className={labelCls}>Distance to Fire Scene (km)</label>
+              <label className={labelCls}>Approximate Distance to Fire Scene (km)</label>
               <input name="distance_to_fire_scene_km" type="number" min="0" step="0.1" className={inputCls} value={formState.distance_to_fire_scene_km} onChange={handleChange} />
             </div>
 
@@ -1435,14 +1428,9 @@ export function IncidentForm({
               )}
             </div>
 
-            <div>
-              <label className={labelCls}>Name of Owner</label>
-              <input name="owner_name" type="text" className={inputCls} value={formState.owner_name} onChange={handleChange} />
-            </div>
-
-            <div>
-              <label className={labelCls}>Name of Establishment</label>
-              <input name="establishment_name" type="text" className={inputCls} value={formState.establishment_name} onChange={handleChange} />
+            <div className="md:col-span-2">
+              <label className={labelCls}>Name of Owner/Establishment</label>
+              <input name="owner_name" type="text" className={inputCls} placeholder="e.g. Juan dela Cruz / ABC Corp" value={formState.owner_name} onChange={handleChange} />
             </div>
 
             <div className="md:col-span-2">
@@ -1474,7 +1462,19 @@ export function IncidentForm({
                   </label>
                 ))}
               </div>
-              {(formState.extent_of_damage === 'Confined to Structure or Property' || formState.extent_of_damage === 'Extended Beyond Structure or Property') && (
+              {(formState.extent_of_damage === 'None / Minor Damage' || formState.extent_of_damage === 'Confined to Object/Vehicle') && (
+                <div className="mt-2">
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Description of Object / Damage</label>
+                  <input name="extent_description" type="text" className={inputCls} placeholder="Short description" value={formState.extent_description} onChange={handleChange} />
+                </div>
+              )}
+              {formState.extent_of_damage === 'Confined to Room' && (
+                <div className="mt-2 max-w-xs">
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Total Floor Area (sqm)</label>
+                  <input name="extent_total_floor_area_sqm" type="number" min="0" step="0.1" className={inputCls} value={formState.extent_total_floor_area_sqm} onChange={handleChange} />
+                </div>
+              )}
+              {(formState.extent_of_damage === 'Confined to Structure or Property' || formState.extent_of_damage === 'Total Loss') && (
                 <div className="grid grid-cols-2 gap-4 mt-2">
                   <div>
                     <label className="block text-xs font-bold text-gray-700 mb-1">Total Floor Area (sqm)</label>
@@ -1675,16 +1675,14 @@ export function IncidentForm({
         {/* ── G. OTHER BFP PERSONNEL ── */}
         <section className="space-y-4 border-b pb-6">
           <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">G. Other BFP Personnel and Significant Personalities at the Scene</h3>
-          <p className="text-xs text-gray-500">Include designation and agency affiliated in the Remarks column.</p>
           <div className="space-y-2">
             {otherPersonnel.map((person, index) => (
-              <div key={index} className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <div key={index} className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <input type="text" placeholder="Name" className={inputCls} value={person.name} onChange={(e) => handleOtherPersonnelChange(index, 'name', e.target.value)} />
                 <input type="text" placeholder="Designation / Agency" className={inputCls} value={person.designation} onChange={(e) => handleOtherPersonnelChange(index, 'designation', e.target.value)} />
-                <input type="text" placeholder="Remarks" className={inputCls} value={person.remarks} onChange={(e) => handleOtherPersonnelChange(index, 'remarks', e.target.value)} />
               </div>
             ))}
-            <button type="button" onClick={() => setOtherPersonnel([...otherPersonnel, { name: '', designation: '', remarks: '' }])} className="text-xs text-blue-600 hover:underline">
+            <button type="button" onClick={() => setOtherPersonnel([...otherPersonnel, { name: '', designation: '' }])} className="text-xs text-blue-600 hover:underline">
               + Add Row
             </button>
           </div>

@@ -161,6 +161,18 @@ function FieldRow({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+// ── 24h datetime formatter ───────────────────────────────────────────────────
+function fmt24h(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const d = new Date(String(raw));
+  if (isNaN(d.getTime())) return String(raw);
+  return d.toLocaleString('en-PH', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+}
+
 // ── Section card ─────────────────────────────────────────────────────────────
 function Section({
   title,
@@ -357,13 +369,17 @@ export default function RegionalIncidentDetailPage() {
     const ns = (detail.nonsensitive as Record<string, unknown>) ?? {};
     const sen = (detail.sensitive as Record<string, unknown>) ?? {};
     const missing: string[] = [];
+    if (!ns.responder_type) missing.push('Type of Responder');
+    if (!ns.fire_station_name) missing.push('Name of Fire Station/Team');
     if (!ns.notification_dt) missing.push('Date and Time of Fire Notification Received');
-    if (!ns.general_category) missing.push('Classification of Involved');
-    if (ns.general_category && !detail.incident_type_code) missing.push('Type of Involved (e.g. APT, Daycare)');
     if (!detail.region_id) missing.push('Region');
     if (!ns.province_district) missing.push('Province / District');
     if (!ns.city_municipality) missing.push('City / Municipality');
+    if (!ns.alarm_level) missing.push('Highest Alarm Level');
+    if (!ns.general_category) missing.push('Classification of Involved');
+    if (ns.general_category && !detail.incident_type_code) missing.push('Type of Involved');
     if (!ns.extent_of_damage) missing.push('Extent of Damage');
+    if (!detail.latitude || !detail.longitude) missing.push('Location Coordinates (set via map pin)');
     if (!sen.prepared_by_officer && !sen.disposition_prepared_by) missing.push('Prepared by (Officer)');
     if (!sen.noted_by_officer && !sen.disposition_noted_by) missing.push('Noted by (Officer)');
     if (missing.length > 0) {
@@ -782,10 +798,10 @@ export default function RegionalIncidentDetailPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <Link
           href={isValidator ? '/dashboard/validator' : '/dashboard/regional'}
-          className="inline-flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+          className="inline-flex items-center gap-2 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:text-gray-900 transition-colors"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden />
-          {isValidator ? 'Back to validator dashboard' : 'Back to regional dashboard'}
+          {isValidator ? 'Back to Validator Dashboard' : 'Back to Regional Dashboard'}
         </Link>
         {detail && isEncoder && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -953,15 +969,53 @@ export default function RegionalIncidentDetailPage() {
 
           {/* A. Response Details */}
           <Section title="A. Response Details" sectionId="sec-response">
-            <FieldRow label={FIELD_LABELS.notification_dt} value={ns?.notification_dt ? new Date(String(ns.notification_dt)).toLocaleString() : null} />
+            <FieldRow label={FIELD_LABELS.notification_dt} value={fmt24h(ns?.notification_dt as string | null)} />
             <FieldRow label={FIELD_LABELS.fire_station_name} value={ns?.fire_station_name} />
             <FieldRow label={FIELD_LABELS.responder_type} value={ns?.responder_type} />
             <FieldRow label={FIELD_LABELS.alarm_level} value={ns?.alarm_level} />
-            <FieldRow label="Engine / Unit Dispatched" value={engineDispatched} />
-            <FieldRow label="Time Engine Dispatched" value={timeEngineDispatched} />
-            <FieldRow label="Time Arrived at Fire Scene" value={timeArrivedAtScene} />
+            {(() => {
+              type EngineRow = { name?: string; time_dispatched?: string; time_arrived?: string };
+              const engines = ((alarmTimeline as Record<string, unknown>)._engines as EngineRow[] | undefined) ?? [];
+              const hasEngines = engines.some((e) => e.name || e.time_dispatched || e.time_arrived);
+              if (hasEngines) {
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-b border-gray-100 pb-3 text-sm">
+                    <div className="font-medium text-gray-600">Engine / Unit Dispatched</div>
+                    <div className="md:col-span-2">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-xs text-gray-500 border-b border-gray-200">
+                            <th className="text-left pb-1 pr-4 font-medium">Engine / Unit</th>
+                            <th className="text-left pb-1 pr-4 font-medium">Time Dispatched</th>
+                            <th className="text-left pb-1 font-medium">Time Arrived at Scene</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {engines.map((eng, i) =>
+                            eng.name || eng.time_dispatched || eng.time_arrived ? (
+                              <tr key={i} className="border-b border-gray-50 last:border-0">
+                                <td className="py-1 pr-4">{displayValue(eng.name)}</td>
+                                <td className="py-1 pr-4">{displayValue(eng.time_dispatched)}</td>
+                                <td className="py-1">{displayValue(eng.time_arrived)}</td>
+                              </tr>
+                            ) : null
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <>
+                  <FieldRow label="Engine / Unit Dispatched" value={engineDispatched} />
+                  <FieldRow label="Time Engine Dispatched" value={timeEngineDispatched} />
+                  <FieldRow label="Time Arrived at Fire Scene" value={timeArrivedAtScene} />
+                </>
+              );
+            })()}
             <FieldRow label="Time Returned to Base" value={timeReturnedToBase} />
-            <FieldRow label={FIELD_LABELS.distance_from_station_km} value={ns?.distance_from_station_km} />
+            <FieldRow label={FIELD_LABELS.distance_from_station_km} value={ns?.distance_from_station_km ?? ns?.distance_to_fire_scene_km} />
             <FieldRow label={FIELD_LABELS.total_response_time_minutes} value={ns?.total_response_time_minutes} />
             <FieldRow label={FIELD_LABELS.total_gas_consumed_liters} value={ns?.total_gas_consumed_liters} />
             <FieldRow label="Location" value={[ns?.city_municipality, ns?.province_district, ns?.region].filter(Boolean).join(', ') || null} />
@@ -976,14 +1030,15 @@ export default function RegionalIncidentDetailPage() {
           <Section title="B. Nature and Classification of Involved" sectionId="sec-class">
             <FieldRow label={FIELD_LABELS.general_category} value={formatClassification(String(ns?.general_category ?? ns?.classification_of_involved ?? ''))} />
             <FieldRow label={FIELD_LABELS.sub_category} value={ns?.sub_category ?? ns?.type_of_involved_general_category} />
-            <FieldRow label="Owner / Occupant Name" value={sens?.owner_name ?? ns?.owner_name} />
-            <FieldRow label="Establishment Name" value={sens?.establishment_name ?? ns?.establishment_name} />
+            <FieldRow label="Name of Owner/Establishment" value={sens?.owner_name ?? ns?.owner_name} />
             <FieldRow label="General Description" value={ns?.general_description_of_involved} />
             <FieldRow label={FIELD_LABELS.fire_origin} value={ns?.fire_origin ?? ns?.area_of_origin} />
             <FieldRow label="Stage of Fire Upon Arrival" value={ns?.stage_of_fire_upon_arrival ?? ns?.stage_of_fire} />
             <FieldRow label={FIELD_LABELS.extent_of_damage} value={ns?.extent_of_damage} />
-            <FieldRow label={FIELD_LABELS.extent_total_floor_area_sqm} value={ns?.extent_total_floor_area_sqm} />
-            <FieldRow label={FIELD_LABELS.extent_total_land_area_hectares} value={ns?.extent_total_land_area_hectares} />
+            {ns?.extent_description ? <FieldRow label="Description" value={ns.extent_description} /> : null}
+            {ns?.extent_total_floor_area_sqm ? <FieldRow label={FIELD_LABELS.extent_total_floor_area_sqm} value={ns.extent_total_floor_area_sqm} /> : null}
+            {ns?.extent_total_land_area_hectares ? <FieldRow label={FIELD_LABELS.extent_total_land_area_hectares} value={ns.extent_total_land_area_hectares} /> : null}
+            {ns?.extent_objects_count ? <FieldRow label="No. of Objects/Properties Affected" value={ns.extent_objects_count} /> : null}
             {detail.is_wildland && (
               <>
                 <FieldRow label="Wildland Fire Type" value={detail.wildland_fire_type} />
@@ -1013,10 +1068,10 @@ export default function RegionalIncidentDetailPage() {
               const medical = resources?.medical as Record<string, unknown> | undefined;
               const special = resources?.special_assets as Record<string, unknown> | undefined;
               const tools = resources?.tools as Record<string, unknown> | undefined;
-              const TRUCK_LABELS: Record<string, string> = { bfp: 'BFP Fire Trucks', lgu: 'BFP-Manned (LGU Owned)', non_bfp: 'Non-BFP Fire Trucks', volunteer: 'Non-BFP Fire Trucks' };
+              const TRUCK_LABELS: Record<string, string> = { bfp: 'BFP Fire Trucks', lgu: 'BFP-Manned (LGU)', non_bfp: 'Non-BFP Fire Trucks', volunteer: 'Non-BFP Fire Trucks' };
               const MEDICAL_LABELS: Record<string, string> = { bfp: 'BFP Ambulance', non_bfp: 'Non-BFP Ambulance' };
               const SPECIAL_LABELS: Record<string, string> = { rescue_bfp: 'BFP Rescue Trucks', rescue_non_bfp: 'Non-BFP Rescue Trucks', others: 'Other Vehicles / Assets' };
-              const TOOL_LABELS: Record<string, string> = { scba: 'SCBA', rope: 'Rope', ladder: 'Ladder', hoseline: 'Hoseline', hydraulic: 'Hydraulic Tools & Equipment', others: 'Other Tools' };
+              const TOOL_LABELS: Record<string, string> = { scba: 'SCBA', rope: 'Rope', ladder: 'Ladder', hoseline: 'Hoseline', hydraulic: 'Hydraulic Tools', others: 'Other Tools' };
               const rows: { label: string; value: unknown }[] = [];
               if (trucks) Object.entries(trucks).forEach(([k, v]) => rows.push({ label: TRUCK_LABELS[k] ?? k, value: v }));
               if (medical) Object.entries(medical).forEach(([k, v]) => rows.push({ label: MEDICAL_LABELS[k] ?? k, value: v }));
