@@ -28,6 +28,7 @@ const mockFetchTopBarangays = vi.fn();
 const mockFetchResponseTimeByRegion = vi.fn();
 const mockFetchCompareRegions = vi.fn();
 const mockFetchTopN = vi.fn();
+const mockFetchAnalyticsFilterOptions = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   fetchHeatmapData: (f: object) => mockFetchHeatmapData(f),
@@ -39,6 +40,8 @@ vi.mock('@/lib/api', () => ({
   fetchResponseTimeByRegion: (f: object) => mockFetchResponseTimeByRegion(f),
   fetchCompareRegions: (f: object) => mockFetchCompareRegions(f),
   fetchTopN: (f: object) => mockFetchTopN(f),
+  fetchAnalyticsFilterOptions: (field: string, filters: object) =>
+    mockFetchAnalyticsFilterOptions(field, filters),
 }));
 
 vi.mock('react-leaflet', () => ({
@@ -87,6 +90,7 @@ describe('Analyst dashboard page', () => {
     mockFetchTopN.mockResolvedValue([
       { name: 'Barangay A', value: 120 },
     ]);
+    mockFetchAnalyticsFilterOptions.mockResolvedValue([]);
   });
 
   it('renders filter controls', async () => {
