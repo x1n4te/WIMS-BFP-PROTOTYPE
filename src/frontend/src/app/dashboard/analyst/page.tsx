@@ -15,6 +15,7 @@ import {
   fetchResponseTimeByRegion,
   fetchCompareRegions,
   fetchTopN,
+  fetchAnalyticsFilterOptions,
   type HeatmapGeoJSON,
   type TrendsResponse,
   type ComparativeResponse,
@@ -25,6 +26,9 @@ import {
   type TopNItem,
 } from '@/lib/api';
 import { TrendCharts } from '@/components/analytics/TrendCharts';
+import { TypeDistributionChart } from '@/components/analytics/TypeDistributionChart';
+import { TopBarangaysChart } from '@/components/analytics/TopBarangaysChart';
+import { ResponseTimeChart } from '@/components/analytics/ResponseTimeChart';
 import { RefreshCw, Download } from 'lucide-react';
 import { getShortRegionName } from '@/lib/ph-regions';
 
@@ -102,6 +106,10 @@ export default function AnalystDashboardPage() {
   const [alarmLevel, setAlarmLevel] = useState('');
   const [interval, setInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [regions, setRegions] = useState<Region[]>([]);
+  const [province, setProvince] = useState('');
+  const [municipality, setMunicipality] = useState('');
+  const [provinceOptions, setProvinceOptions] = useState<string[]>([]);
+  const [municipalityOptions, setMunicipalityOptions] = useState<string[]>([]);
 
   const [cmpRanges, setCmpRanges] = useState(() => initialComparativeRanges());
 
@@ -127,6 +135,8 @@ export default function AnalystDashboardPage() {
     startDate?: string;
     endDate?: string;
     regionId?: string;
+    province?: string;
+    municipality?: string;
     incidentType?: string;
     alarmLevel?: string;
     interval?: 'daily' | 'weekly' | 'monthly';
@@ -159,10 +169,14 @@ export default function AnalystDashboardPage() {
     setError(null);
     setAccessDenied(false);
     try {
+      const pv = overrides?.province ?? province;
+      const mc = overrides?.municipality ?? municipality;
       const filters = {
         start_date: sd || undefined,
         end_date: ed || undefined,
         region_id: rid ? parseInt(rid, 10) : undefined,
+        province: pv || undefined,
+        municipality: mc || undefined,
         incident_type: it || undefined,
         alarm_level: al || undefined,
         casualty_severity: cs || undefined,
@@ -181,11 +195,11 @@ export default function AnalystDashboardPage() {
           incident_type: it || undefined,
           alarm_level: al || undefined,
         }),
-        fetchTypeDistribution({ start_date: sd || undefined, end_date: ed || undefined, region_id: rid ? parseInt(rid, 10) : undefined }),
-        fetchTopBarangays({ start_date: sd || undefined, end_date: ed || undefined, incident_type: it || undefined }),
-        fetchResponseTimeByRegion({ start_date: sd || undefined, end_date: ed || undefined }),
+        fetchTypeDistribution(filters),
+        fetchTopBarangays({ ...filters, limit: 10 }),
+        fetchResponseTimeByRegion(filters),
         rid ? fetchCompareRegions({ region_ids: rid, start_date: sd || undefined, end_date: ed || undefined }).catch(() => []) : Promise.resolve([]),
-        fetchTopN({ metric: topNMetric, dimension: topNDimension, start_date: sd || undefined, end_date: ed || undefined }),
+        fetchTopN({ metric: topNMetric, dimension: topNDimension, ...filters }),
       ]);
       setHeatmap(heatmapRes);
       setTrends(trendsRes);
@@ -210,6 +224,8 @@ export default function AnalystDashboardPage() {
     startDate,
     endDate,
     regionId,
+    province,
+    municipality,
     incidentType,
     alarmLevel,
     interval,
@@ -225,6 +241,36 @@ export default function AnalystDashboardPage() {
     if (loading) return;
     fetchRegions().then((r) => setRegions(Array.isArray(r) ? r : []));
   }, [loading]);
+
+  // Cascade: load province options when region changes
+  useEffect(() => {
+    if (!ANALYST_ROLES.includes(role ?? '')) return;
+    fetchAnalyticsFilterOptions('province', {
+      region_id: regionId ? parseInt(regionId, 10) : undefined,
+      start_date: startDate || undefined,
+      end_date: endDate || undefined,
+    }).then(setProvinceOptions).catch(() => setProvinceOptions([]));
+  }, [loading, regionId, startDate, endDate, role]);
+
+  // Cascade: load municipality options when province changes
+  useEffect(() => {
+    if (!ANALYST_ROLES.includes(role ?? '')) return;
+    if (!province) {
+      setMunicipalityOptions([]);
+      return;
+    }
+    fetchAnalyticsFilterOptions('municipality', {
+      region_id: regionId ? parseInt(regionId, 10) : undefined,
+      province,
+      start_date: startDate || undefined,
+      end_date: endDate || undefined,
+    }).then(setMunicipalityOptions).catch(() => setMunicipalityOptions([]));
+  }, [loading, regionId, province, startDate, endDate, role]);
+
+  // Clear municipality when province is cleared
+  useEffect(() => {
+    if (!province && municipality) setMunicipality('');
+  }, [province, municipality]);
 
   useEffect(() => {
     if (ANALYST_ROLES.includes(role ?? '')) {
@@ -329,6 +375,44 @@ export default function AnalystDashboardPage() {
                     <option key={r.region_id} value={String(r.region_id)}>
                       {r.region_name} ({r.region_code})
                     </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
+                  Province
+                </label>
+                <select
+                  value={province}
+                  onChange={(e) => {
+                    setProvince(e.target.value);
+                    setMunicipality('');
+                  }}
+                  className="w-full rounded-md py-2 px-3 text-sm border cursor-pointer"
+                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  aria-label="Province"
+                >
+                  <option value="">All Provinces</option>
+                  {provinceOptions.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
+                  Municipality
+                </label>
+                <select
+                  value={municipality}
+                  onChange={(e) => setMunicipality(e.target.value)}
+                  disabled={!province}
+                  className="w-full rounded-md py-2 px-3 text-sm border cursor-pointer disabled:opacity-50"
+                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  aria-label="Municipality"
+                >
+                  <option value="">All Municipalities</option>
+                  {municipalityOptions.map((m) => (
+                    <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
               </div>
@@ -442,6 +526,8 @@ export default function AnalystDashboardPage() {
                     setStartDate('');
                     setEndDate('');
                     setRegionId('');
+                    setProvince('');
+                    setMunicipality('');
                     setIncidentType('');
                     setAlarmLevel('');
                     setInterval('daily');
@@ -450,6 +536,8 @@ export default function AnalystDashboardPage() {
                       startDate: '',
                       endDate: '',
                       regionId: '',
+                      province: '',
+                      municipality: '',
                       incidentType: '',
                       alarmLevel: '',
                       interval: 'daily',
@@ -620,63 +708,27 @@ export default function AnalystDashboardPage() {
 
           {/* Charts grid: pie, top barangays, response time */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* AQ-06: Type distribution pie chart */}
+            {/* AQ-06: Type distribution donut chart */}
             <div className="card">
               <div className="card-header">Incident Type Distribution</div>
               <div className="card-body">
-                {typeDistribution && typeDistribution.length > 0 ? (
-                  <div data-testid="pie-chart">
-                    {typeDistribution.map((d) => (
-                      <div key={d.type} className="flex justify-between py-1 text-sm border-b" style={{ borderColor: 'var(--border-color)' }} data-testid={`pie-segment-${d.type}`}>
-                        <span>{d.type}</span>
-                        <span className="font-bold">{d.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No distribution data.</p>
-                )}
+                <TypeDistributionChart data={typeDistribution ?? []} />
               </div>
             </div>
 
-            {/* AQ-07: Top barangays */}
+            {/* AQ-07: Top barangays horizontal bar chart */}
             <div className="card">
               <div className="card-header">Top Barangays</div>
               <div className="card-body">
-                {topBarangays && topBarangays.length > 0 ? (
-                  <div data-testid="bar-chart">
-                    {topBarangays.map((d) => (
-                      <div key={d.barangay} className="flex justify-between py-1 text-sm border-b" style={{ borderColor: 'var(--border-color)' }}>
-                        <span>{d.barangay}</span>
-                        <span className="font-bold">{d.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No barangay data.</p>
-                )}
+                <TopBarangaysChart data={topBarangays ?? []} />
               </div>
             </div>
 
-            {/* AQ-08: Response time by region */}
+            {/* AQ-08: Response time by region bar chart */}
             <div className="card">
-              <div className="card-header">Response Time by Region</div>
+              <div className="card-header">Avg Response Time by Region</div>
               <div className="card-body">
-                {responseTime && responseTime.length > 0 ? (
-                  <div>
-                    {responseTime.map((d) => (
-                      <div key={d.region_id} className="py-2 text-sm border-b" style={{ borderColor: 'var(--border-color)' }}>
-                        <div className="font-medium">{getShortRegionName(d.region_id)}</div>
-                        <div className="text-gray-500">
-                          Avg: <span className="font-bold text-gray-700">{d.avg_response_time}</span> min
-                          &nbsp;|&nbsp; Min: {d.min_response_time} / Max: {d.max_response_time}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No response time data.</p>
-                )}
+                <ResponseTimeChart data={responseTime ?? []} />
               </div>
             </div>
           </div>
@@ -745,6 +797,7 @@ export default function AnalystDashboardPage() {
                     <option value="barangay">Barangay</option>
                     <option value="fire_station">Fire Station</option>
                     <option value="region">Region</option>
+                    <option value="municipality">Municipality</option>
                   </select>
                 </div>
               </div>
