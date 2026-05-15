@@ -179,8 +179,13 @@ def get_comparative(
     range_b_start: str = Query(...),
     range_b_end: str = Query(...),
     region_id: Optional[int] = Query(None),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
     incident_type: Optional[str] = None,
     alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
 ):
     """
     Comparative counts for two date ranges with percentage variance.
@@ -191,16 +196,26 @@ def get_comparative(
         range_a_start,
         range_a_end,
         region_id=region_id,
+        province=province,
+        municipality=municipality,
         incident_type=incident_type,
         alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
     count_b = count_in_range(
         db,
         range_b_start,
         range_b_end,
         region_id=region_id,
+        province=province,
+        municipality=municipality,
         incident_type=incident_type,
         alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
 
     variance_pct = 0.0
@@ -436,7 +451,13 @@ def compare_regions_route(
     region_ids: str = Query(..., description="Comma-separated region IDs (min 2)"),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
     incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
 ):
     """Cross-region comparison. Requires at least 2 region IDs."""
     from fastapi import HTTPException
@@ -452,7 +473,13 @@ def compare_regions_route(
         region_ids=parsed,
         start_date=start_date,
         end_date=end_date,
+        province=province,
+        municipality=municipality,
         incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
     )
     return data
 

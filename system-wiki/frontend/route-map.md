@@ -46,7 +46,7 @@ Next.js App Router pages detected under `src/frontend/src/app`.
 - Auth/profile: `/login`, `/callback`, `/profile`, auth API routes.
 - Incident entry/import: `/incidents/*`, `/afor/*`, regional dashboard pages.
 - Validation: `/dashboard/validator`, `/dashboard/validator/audit`, `/incidents/triage`.
-- Analytics/reporting: `/dashboard/analyst`, `/dashboard/analyst/incidents/[id]`, `/dashboard/analyst/incidents/[id]/wildland`, `/report`, `/report/track`. The sidebar now has an explicit `NATIONAL_ANALYST` navigation section pointing to `/dashboard/analyst` and `/profile`; analyst incident list/drawer/detail routes are implemented as read-only surfaces.
+- Analytics/reporting: `/dashboard/analyst`, `/dashboard/analyst/incidents/[id]`, `/dashboard/analyst/incidents/[id]/wildland`, `/report`, `/report/track`. The sidebar now has an explicit `NATIONAL_ANALYST` navigation section pointing to `/dashboard/analyst` and `/profile`; analyst incident list/drawer/detail routes are implemented as read-only surfaces. The dashboard now includes the side-column heatmap layout, prominent filter bar, Recharts analytics panels, CSV/PDF/Excel export preview modal, and active-filter export download flow.
 - Administration/security: `/admin`, `/admin/system`.
 
 ## Related

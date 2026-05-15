@@ -1,275 +1,129 @@
-# Context Dump — National Analyst Dashboard Implementation
-**File:** `2026-05-14_XXXX_national-analyst-dashboard-impl-context.md`
-**Author:** Ares (Principal Systems Architect)
-**Date:** 2026-05-14
-**Purpose:** Full scope context for a specialized sub-agent to execute implementation
+# National Analyst Dashboard — Phase 6 Context Dump
+**Created:** 2026-05-14
+**Phase:** 6 (Export UX + Heatmap Layout Fix)
+**Source:** Phase 5 handoff review + code cross-reference
 
 ---
 
-## What We Did in the Grill-Me Session
+## What Phase 5 Completed
 
-We went through a decision-tree walk of the National Analyst Dashboard implementation scope. Every branch was resolved and confirmed with the user. This document is the authoritative output of that session.
+### Backend (Done)
+- `GET /api/incidents/analyst-list` — paginated, sortable, VERIFIED-only, analyst/admin RBAC
+- `GET /api/incidents/analyst/{incident_id}` — read-only detail, has_wildland_afor flag, provenance fields
+- `GET /api/incidents/analyst/{incident_id}/wildland` — wildland AFOR data (alarm statuses + assistance rows)
+- `GET /api/analytics/filter-options?field=province|municipality` — cascading geography options
+- `GET /api/analytics/export/{task_id}` — download completed Celery export file
+- `POST /api/analytics/export/csv|pdf|excel` — dispatch Celery export task (returns task_id)
+- `tasks/exports.py` — real CSV/PDF/XLSX writers using reportlab + openpyxl; logs to analytics_export_log
+- `analytics_read_model.py` — sync_incident_to_analytics, sync_incidents_batch, backfill_analytics_facts all include municipality_name + province_name from incident_nonsensitive_details.city_municipality / province_district
+- `28_analytics_geography_denorm.sql` — idempotent migration adding municipality_name/province_name columns + indexes to analytics_incident_facts
 
----
+### Frontend (Done)
+- `AnalystIncidentList.tsx` — 25 rows/page, sortable headers, 640px drawer, full-page link
+- `/dashboard/analyst/incidents/[id]/page.tsx` — read-only, no edit/validator controls
+- `/dashboard/analyst/incidents/[id]/wildland/page.tsx` — wildland-specific fields
+- Recharts: TypeDistributionChart (donut), TopBarangaysChart (horizontal bar), ResponseTimeChart (bar w/ avg/min/max)
+- Filter bar: region → province → municipality cascade, date range, incident type, alarm level, casualty severity, damage min/max
+- Sidebar: NATIONAL_ANALYST section pointing to /dashboard/analyst and /profile
 
-## Confirmed Implementation Scope (6 Phases)
-
-### Phase 1 — Export Infrastructure Fix (backend)
-
-**Problem:** `src/backend/tasks/exports.py` is broken:
-- `export_incidents_pdf_task` (line 122): writes HTML to `.html` file. `reportlab` not in `requirements.txt`.
-- `export_incidents_excel_task` (line 167): writes CSV to `.csv` file using Python's csv writer (not openpyxl). `openpyxl` IS in requirements but task doesn't use it.
-- No `GET /api/analytics/export/{task_id}` download endpoint found in `analytics.py`.
-- `analytics_export_log` INSERT not found in task code — audit trail may not be wired.
-
-**Fix required:**
-1. Add `reportlab>=4.0` to `src/backend/requirements.txt`
-2. Rewrite `export_incidents_pdf_task` to produce actual PDF using reportlab `Table`/`Paragraph`
-3. Rewrite `export_incidents_excel_task` to use openpyxl `Workbook`
-4. Add `GET /api/analytics/export/{task_id}` download endpoint to `src/backend/api/routes/analytics.py`
-5. Wire `analytics_export_log` INSERT in all three export tasks (PDF, Excel, CSV)
-
-**Key files:**
-- `src/backend/tasks/exports.py` — the broken tasks
-- `src/backend/api/routes/analytics.py` — where to add download endpoint
-- `src/backend/requirements.txt` — add reportlab
-
----
-
-### Phase 2 — Analytics Schema Migration (backend)
-
-**Decision:** Denormalized for analytics. Normalized reference tables are for transaction-heavy tables.
-
-**New migration file:** `src/postgres-init/XX_analytics_geography_denorm.sql` (auto-assign number)
-
-**Changes:**
-1. `ALTER TABLE wims.analytics_incident_facts ADD COLUMN IF NOT EXISTS municipality_name TEXT`
-2. `ALTER TABLE wims.analytics_incident_facts ADD COLUMN IF NOT EXISTS province_name TEXT`
-3. Update `sync_incident_to_analytics` in `src/backend/services/analytics_read_model.py`:
-   - SELECT: add `nd.province_district` and `nd.city_municipality` from the JOIN with `incident_nonsensitive_details nd`
-   - UPSERT: include both in the INSERT/ON CONFLICT DO UPDATE SET
-
-**Source columns (from `incident_nonsensitive_details`):**
-- `nd.city_municipality` → `municipality_name`
-- `nd.province_district` → `province_name`
-
-**No `ref_municipalities` table** — denormalized free text in analytics facts table. This is intentional per user decision.
-
-**Dependency:** Phase 1 is independent of Phase 2. Can run in parallel or after.
+### Verification
+- `python -m py_compile` on incidents.py + analytics_read_model.py — passed
+- `git diff --check` — passed
+- `vitest run` (3 test files) — 59 tests passed
+- `npm run lint` — passed (3 pre-existing warnings)
+- `tsc --noEmit` — fails on pre-existing admin/login/offline-sync type debt (not phase-5 blocking)
 
 ---
 
-### Phase 3 — Filter Options API (backend)
+## What Phase 6 Must Implement
 
-**New endpoint:** `GET /api/analytics/filter-options`
+### 1. Export UX (CRITICAL — currently broken)
 
-**Query params:**
-- `field` — required, one of: `municipality`, `province`
+**Current state:** `analyst/page.tsx:687-717` uses raw inline `fetch` directly to `/api/analytics/export/pdf` and `/api/analytics/export/excel` with hardcoded empty `filters: {}`. On response, shows `alert('PDF export queued: ' + task_id)`. No download, no preview, no column selection.
 
-**Behavior:**
-- Returns distinct values from `analytics_incident_facts` for the requested field
-- Optionally scoped by active filters (region_id, date range) — use same filter pattern as existing analytics endpoints
-- Returns JSON array of strings: `["City A", "City B", ...]`
+**What needs building:**
+- Add to `src/frontend/src/lib/api.ts`:
+  - `queueExport(format: 'csv'|'pdf'|'excel', filters, columns) → { task_id: string }`
+  - `pollExportDownload(task_id) → { state: 'PENDING'|'SUCCESS'|'FAILURE', path?: string }`
+  - Or better: `downloadExport(task_id: string)` — calls `GET /api/analytics/export/{task_id}`, extracts filename from Content-Disposition, triggers browser download
+- Replace inline fetch in `analyst/page.tsx` with proper state machine:
+  - `idle | queued | polling | downloading | done | error`
+  - After queueing, poll via `pollExportDownload` until state != PENDING
+  - On SUCCESS, call `downloadExport` to trigger browser download
+- Export preview component (new, not existing):
+  - Modal/sidebar showing: active filters summary, column checkboxes (from DEFAULT_EXPORT_COLUMNS), estimated row count (call `count_export_rows` or pass count from list)
+  - "Queue Export" button fires the actual task
 
-**Files:**
-- `src/backend/api/routes/analytics.py` — add new route
-- `src/backend/services/analytics_read_model.py` — add `get_filter_options(db, field)` function
+### 2. Heatmap Layout Fix
 
----
+**Current state:** Heatmap is full-width (`card` with `card-body p-0`) in a single-column stack.
+**Spec:** "tall/portrait and side-positioned on desktop" — side column on desktop.
+**What needs building:** CSS grid re-layout of the main dashboard content area. On desktop (`lg:`), heatmap should be portrait/tall and occupy a side column (~300-400px wide) while charts/list occupy the main column. Mobile: stacked as-is.
 
-### Phase 4 — National Analyst Dashboard Enhancements (frontend)
+### 3. Filter Bar Prominence
 
-**Recharts installation:**
-- Run: `cd src/frontend && npm install recharts`
-- Update `package.json` to include `recharts`
+**Current state:** Filter labels are `text-[11px]`, inputs are `text-sm`.
+**Spec:** "Filters should be larger and more prominent than 'All Synced' badge" (which no longer exists — was removed).
+**What needs building:** Increase label font size to `text-sm` or `text-base`, increase input height/padding. Possibly reduce the number of filters shown in the initial row (move comparative period filters into a collapsible "Advanced" section).
 
-**New filter fields (in filter bar):**
-- `Municipality` dropdown — populated by `GET /api/analytics/filter-options?field=municipality`
-- `Province` dropdown — populated by `GET /api/analytics/filter-options?field=province`
-- Cascading behavior: Region selected → Province dropdown shows only provinces in that region; Province selected → Municipality dropdown shows only municipalities in that province
-- If no Region selected: Province dropdown shows all provinces nationwide
-- If no Province selected: Municipality dropdown shows all municipalities
-- No reverse auto-selection (cleaner UX)
-
-**Chart upgrades (replace text lists with Recharts):**
-
-| Section | Chart Type | Recharts Component |
-|---|---|---|
-| AQ-06: Type Distribution | Pie or donut chart | `<PieChart>` with `<Cell>` |
-| AQ-07: Top Barangays | Horizontal bar chart | `<BarChart>` with `layout="vertical"` |
-| AQ-08: Response Time by Region | Bar chart (avg + min/max optional) | `<BarChart>` |
-
-All three charts respond to the full filter bar (date range, region, incident type, alarm level, casualty severity, damage range, municipality, province).
-
-**Existing components:**
-- `src/frontend/src/app/dashboard/analyst/page.tsx` — main page (read it before editing)
-- `src/frontend/src/components/analytics/TrendCharts.tsx` — existing chart component reference for style
-- `src/frontend/src/lib/api.ts` — API functions
-
-**Key confirmed findings from direct read:**
-- Recharts was NOT in `package.json` (confirmed absent)
-- AQ-06/07/08 were rendered as `flex` list-rows with `data-testid="pie-chart"` and `data-testid="bar-chart"` — these are mislabeled, no Recharts involved
-- All three need full replacement with Recharts components
+### 4. (No work needed)
+- Incident list, detail, wildland routes — done
+- Recharts charts — done
+- Filter cascade logic — done
+- Analytics sync — done
+- Backend export tasks — done
 
 ---
 
-### Phase 5 — Incident List Container (frontend)
+## Key Code Locations
 
-**Purpose:** Dedicated incident list/table that responds to the filter bar (fixes L-03 from gap register: "no dedicated incident container/list panel")
-
-**Format:** Paginated table, 25 rows per page.
-
-**Columns:**
-1. `notification_dt` — date/time
-2. `region` — short name via `getShortRegionName()`
-3. `municipality_name`
-4. `barangay_name`
-5. `general_category` — AFOR: Structural/Non-Structural/Transportation; Wildland: Brush/Forest/Grassland/etc.
-6. `sub_category` — specific type within general_category (e.g., Apartment Building, Brush Fire, etc.)
-7. `alarm_level`
-8. `estimated_damage_php`
-9. `total_response_time_minutes`
-
-**No verification_status column** — analyst only sees VERIFIED incidents.
-
-**Data source:** Backend endpoint `GET /api/incidents/list` (new — see below). Not from analytics_incident_facts (no schema change needed; sub_category already exists in incident_nonsensitive_details).
-
-**Backend endpoint for incident list:**
-- `GET /api/incidents/list` in `src/backend/api/routes/incidents.py`
-- Query params: `start_date`, `end_date`, `region_id`, `incident_type`, `alarm_level`, `casualty_severity`, `damage_min`, `damage_max`, `municipality`, `province`, `page`, `page_size=25`
-- WHERE clause filters: `verification_status = 'VERIFIED'` always (analyst scope)
-- Returns: `{ incidents: [...], total: N, page: N, page_size: 25 }`
-
-**Interaction:** Click row → side drawer opens.
-- Side drawer shows: incident summary (key fields)
-- Side drawer has "Open Full Page" button → navigates to `/dashboard/analyst/incidents/[id]`
-
-**Location in `analyst/page.tsx`:** Place below the charts grid, separated by a section header "Incident List".
-
----
-
-### Phase 6 — Analyst Incident Detail Page (frontend)
-
-**Route:** `src/frontend/src/app/dashboard/analyst/incidents/[id]/page.tsx` (new file)
-
-**Purpose:** Read-only incident detail page for national analysts. No edit mode, no validator actions.
-
-**Display:** All AFOR sections A–L, same structure as the existing `src/frontend/src/app/dashboard/regional/incidents/[id]/page.tsx`.
-
-**Key difference from regional_encoder page:** No edit button, no validator accept/reject actions, no AFOR form (IncidentForm). Pure read-only display.
-
-**Sections to display:**
-- Section A: Fire Notification Details (notification_dt, alarm_level, responder_type, etc.)
-- Section B: Classification (general_category, sub_category, specific_type, occupancy_type)
-- Section C: Location (barangay, municipality, province, distance_from_station, latitude/longitude with map)
-- Section D: Incident Timeline (alarm_timeline)
-- Section E: Casualties
-- Section F: Personnel on Duty
-- Section G: Incident Command Post
-- Section H: Fire Scene Location (map)
-- Section H-alt: Sketch attachment if present
-- Section I: Narrative Report
-- Section J: Problems Encountered
-- Section K: Recommendations
-- Section L: Disposition & Signatories
-
-**Also display:**
-- Chain of custody provenance (from M6-D): `data_hash`, `created_at`, `encoder_id`
-- Analytics sync status (if applicable)
-
-**Export buttons:** Export PDF + Export CSV (call the fixed export infrastructure from Phase 1).
-
-**Access control:** `NATIONAL_ANALYST` and `SYSTEM_ADMIN` only.
-
----
-
-## Confirmed Findings from Codebase Read (Ground Truth)
-
-### Export Infrastructure
-- `reportlab` not in `requirements.txt` — needs to be added
-- `openpyxl` IS in requirements.txt but not used by `export_incidents_excel_task`
-- No download endpoint in `analytics.py`
-
-### Schema
-- `analytics_incident_facts` base: 5 columns (incident_id, region_id, location, notification_dt, notification_date, alarm_level, general_category, synced_at)
-- Richer schema comes from `12_analytics_mvs.sql` ALTER TABLE expansions: civilian_injured, civilian_deaths, firefighter_injured, firefighter_deaths, total_response_time_minutes, estimated_damage_php, fire_station_name, barangay_name
-- `municipality_name` and `province_name` are NOT yet in `analytics_incident_facts` — this is the Phase 2 migration
-- `sub_category` in `incident_nonsensitive_details` is plain VARCHAR — no DB-level CHECK constraint, enforced by frontend dropdown only
-
-### Recharts
-- Not in `package.json` — confirmed absent
-- `TrendCharts.tsx` and `HeatmapViewer.tsx` exist as components
-
-### Incident Detail Pages (existing)
-- `src/frontend/src/app/dashboard/regional/incidents/[id]/page.tsx` — full read/edit page (1265 lines), AFOR sections A–L, edit button, validator actions, no export
-- `src/frontend/src/app/incidents/[id]/page.tsx` — redirector (35 lines), redirects to regional
-
-### Top-N
-- `VALID_TOP_N_DIMENSIONS` in `analytics_read_model.py`: barangay, fire_station, region
-- `municipality` NOT in the list — G-01 confirmed
-
----
-
-## Thesis-Wiki Recommendation (Phase 7 — documentation only)
-
-**Recommendation:** Add DB-level CHECK constraints on `general_category` and `sub_category` in `incident_nonsensitive_details` as defense-in-depth against curl/Postman bypass of frontend dropdowns.
-
-**Rationale:** Frontend dropdowns enforce valid values, but a threat actor with knowledge of the API could POST arbitrary strings via curl. CHECK constraints provide a second layer.
-
-**Do NOT implement in this sprint** — document as a recommendation in the thesis-wiki under security hardening section. Implementation is out of scope for the current phase.
-
----
-
-## Do Not Break Conventions
-
-- `regional.py` is monolithic — do not split it
-- `get_db` vs `get_db_with_rls` are different dependency tokens — overriding one does not affect the other
-- `KeycloakOpenIDConnection(username/password)` is broken in python-keycloak 7.1.1 — use `KeycloakOpenID.token()` + `KeycloakAdmin(token=)` instead
-- Anonymous submissions: `encoder_id = NULL`, `verification_status = PENDING_VALIDATION`
-- Wiki `raw/` directory is immutable — update synthesis pages, not raw sources
-
----
-
-## Key File Locations
-
-| Artifact | Path |
+| File | Purpose |
 |---|---|
-| Export tasks (broken) | `src/backend/tasks/exports.py` |
-| Analytics routes | `src/backend/api/routes/analytics.py` |
-| Analytics read model | `src/backend/services/analytics_read_model.py` |
-| Backend requirements | `src/backend/requirements.txt` |
-| Postgres migrations | `src/postgres-init/` |
-| Analyst page | `src/frontend/src/app/dashboard/analyst/page.tsx` |
-| Regional incident detail (reference) | `src/frontend/src/app/dashboard/regional/incidents/[id]/page.tsx` |
-| Frontend API lib | `src/frontend/src/lib/api.ts` |
-| Package.json | `src/frontend/package.json` |
-| System wiki | `system-wiki/` |
+| `src/backend/api/routes/analytics.py` | Export dispatch + download endpoints |
+| `src/backend/api/routes/incidents.py:577-877` | Analyst incident list/detail/wildland |
+| `src/backend/tasks/exports.py` | CSV/PDF/XLSX Celery tasks, _insert_export_log |
+| `src/backend/services/analytics_read_model.py` | get_export_rows, get_filter_options, sync_incident_to_analytics |
+| `src/frontend/src/app/dashboard/analyst/page.tsx` | Dashboard page — export buttons at lines 687-717 |
+| `src/frontend/src/components/analytics/AnalystIncidentList.tsx` | Incident list + drawer |
+| `src/frontend/src/lib/api.ts` | API helpers — add queueExport/pollExportDownload/downloadExport here |
+| `src/frontend/src/components/analytics/HeatmapViewer.tsx` | Map component (loaded dynamically, ssr:false) |
 
 ---
 
-## Dependency Order
+## API Contract for Export Flow
 
 ```
-Phase 1 (Export fix)      ─┐
-                           ├─► Phase 5 (Incident list container)
-Phase 2 (Schema migrate)  ─┤        │
-                           │        ▼
-Phase 3 (Filter options) ─┴──► Phase 4 (Charts + filters)
-                                    │
-                                    ▼
-                              Phase 6 (Analyst detail page)
+POST /api/analytics/export/csv  Body: { filters: {}, columns: [] }  → { task_id: string }
+POST /api/analytics/export/pdf  → { task_id: string }
+POST /api/analytics/export/excel  → { task_id: string }
+GET  /api/analytics/export/{task_id}  → FileResponse (csv/pdf/xlsx) or 409 if pending/failed
 ```
 
-Phase 1 and Phase 2 can run in parallel.
-Phase 3 depends on Phase 2 (province/municipality columns must exist before filter-options can query them).
-Phase 4 depends on Phase 3 (filters need the endpoint before they can populate).
-Phase 5 (incident list) depends on Phase 1 (export) for the download buttons — but the list itself can be built once export endpoint exists.
-Phase 6 (analyst detail page) depends on Phase 1 for export buttons and Phase 2 for any analytics data displayed.
+Frontend must:
+1. POST to queue → get task_id
+2. Poll GET /api/analytics/export/{task_id} until file is ready (or use client-side polling with setInterval)
+3. On success, trigger browser download (window.location or anchor click)
 
-**Minimum viable order:**
-1. Phase 1 (export fix) — unblocks Phase 5 and Phase 6 export buttons
-2. Phase 2 (schema migration) — unblocks Phase 3
-3. Phase 3 (filter options API) — unblocks Phase 4 municipality/province dropdowns
-4. Phase 4 (charts + filters) — frontend work
-5. Phase 5 (incident list container) — frontend work
-6. Phase 6 (analyst detail page) — frontend work
+---
+
+## Gaps Status
+
+| Gap | Status for Phase 6 |
+|---|---|
+| Export backend (CSV/PDF/XLSX) | ✅ Done — frontend UX missing |
+| Export preview container | ❌ Needs implementation |
+| Heatmap aspect ratio + position | ❌ Needs implementation |
+| Filter bar prominence/sizing | ❌ Needs implementation |
+| Top municipalities view | ✅ Done via Top-N dimension=municipality |
+| Response time by region | ✅ Done |
+| Analyst sidebar | ✅ Done |
+| Incident detail/wildland pages | ✅ Done |
+
+---
+
+## Pre-existing Issues (Not Phase 6 Scope)
+
+- `tsc --noEmit` fails on admin/login/offline-sync type debt
+- `npm run lint` 3 pre-existing warnings
+- Scheduled reports deferred per plan
+- M9 system monitoring not yet implemented

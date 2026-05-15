@@ -824,8 +824,13 @@ export interface ComparativeFilters {
   range_b_start: string;
   range_b_end: string;
   region_id?: number;
+  province?: string;
+  municipality?: string;
   incident_type?: string;
   alarm_level?: string;
+  casualty_severity?: 'high' | 'medium' | 'low' | string;
+  damage_min?: number;
+  damage_max?: number;
 }
 
 function buildAnalyticsParams(params: Record<string, string | number | undefined>): string {
@@ -880,8 +885,13 @@ export async function fetchComparativeData(filters: ComparativeFilters): Promise
     range_b_start: filters.range_b_start,
     range_b_end: filters.range_b_end,
     region_id: filters.region_id,
+    province: filters.province,
+    municipality: filters.municipality,
     incident_type: filters.incident_type,
     alarm_level: filters.alarm_level,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
   });
   return apiFetch<ComparativeResponse>(`/analytics/comparative${qs}`);
 }
@@ -975,8 +985,19 @@ export async function fetchResponseTimeByRegion(filters: AnalyticsGlobalFilters 
   return apiFetch<ResponseTimeRegionItem[]>(`/analytics/response-time-by-region${qs}`);
 }
 
-export async function fetchCompareRegions(filters: { region_ids: string; start_date?: string; end_date?: string; incident_type?: string }): Promise<CompareRegionItem[]> {
-  const qs = buildAnalyticsParams({ region_ids: filters.region_ids, start_date: filters.start_date, end_date: filters.end_date, incident_type: filters.incident_type });
+export async function fetchCompareRegions(filters: AnalyticsGlobalFilters & { region_ids: string }): Promise<CompareRegionItem[]> {
+  const qs = buildAnalyticsParams({
+    region_ids: filters.region_ids,
+    start_date: filters.start_date,
+    end_date: filters.end_date,
+    province: filters.province,
+    municipality: filters.municipality,
+    incident_type: filters.incident_type,
+    alarm_level: filters.alarm_level,
+    casualty_severity: filters.casualty_severity,
+    damage_min: filters.damage_min,
+    damage_max: filters.damage_max,
+  });
   return apiFetch<CompareRegionItem[]>(`/analytics/compare-regions${qs}`);
 }
 

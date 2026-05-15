@@ -1,7 +1,7 @@
 ---
 title: UI/UX Gap Register
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-15
 type: gap
 tags: [wims-bfp, gap, ui-ux, needs-verification]
 sources: [raw/ui-ux, ui-ux/evaluation-loginpage-keycloaksso.md, ui-ux/evaluation-system-admin-hub.md, ui-ux/evaluation-national-analyst.md]
@@ -47,17 +47,18 @@ Source: [[ui-ux/evaluation-system-admin-hub]]
 ## National Analyst Dashboard (`/dashboard/analyst`)
 | Issue | Detail | Status |
 |---|---|---|
-| Heatmap aspect ratio wrong | Wide full-width heatmap; should be tall/portrait and side-positioned | Needs implementation |
-| Filter bar sizing | Filters should be larger and more prominent than "All Synced" badge | Needs implementation |
+| Heatmap aspect ratio wrong | Wide full-width heatmap; should be tall/portrait and side-positioned | Fixed in code; needs browser verification |
+| Filter bar sizing | Filters should be larger and more prominent than "All Synced" badge | Fixed in code; needs browser verification |
 | No incident container/list | No dedicated panel for individual incidents | Fixed in code; needs UI verification |
 | Side panel non-functional | Incident detail side panel redirects back to dashboard | Fixed in code; needs UI verification |
-| Filter missing columns | Filters do not cover all FRS M5.a.ii required fields (date range, casualty severity, property damage, location) | Needs implementation |
-| Export has no preview container | Export PDF/Excel buttons export immediately without a preview/filters container | Needs implementation |
-| Top municipalities view missing | FRS M5.a.iii requires "Top 10 municipalities" analytics view | Needs implementation |
-| Average response time by region missing | FRS M5.a.iii requires "Average response time by region" view | Needs implementation |
+| Filter missing columns | Filters do not cover all FRS M5.a.ii required fields (date range, casualty severity, property damage, location) | Core M5 filters fixed in code; wildfire-specific filters deferred |
+| Export has no preview container | Export PDF/Excel buttons export immediately without a preview/filters container | Fixed in code; needs browser verification |
+| Top municipalities view missing | FRS M5.a.iii requires "Top 10 municipalities" analytics view | Fixed in code; needs browser verification |
+| Average response time by region missing | FRS M5.a.iii requires "Average response time by region" view | Fixed in code; needs browser verification |
 | Analyst sidebar missing | No explicit `NATIONAL_ANALYST` section in `Sidebar.tsx` | Fixed in code; needs UI verification |
-| Export backend incomplete | PDF/XLSX/download/audit backend infrastructure missing | Backend fixed; frontend preview/download UX pending |
+| Export backend incomplete | PDF/XLSX/download/audit backend infrastructure missing | Fixed in code; verify Celery retention/cleanup before production |
 | Analyst detail/wildland routes missing | No read-only analyst full-page incident detail or wildland detail route | Fixed in code; needs UI verification |
+| Dashboard scanability and incident-list failure state | Dashboard did not provide enough at-a-glance context, and the incident list surfaced raw 500 text during backend failures | Fixed in code; needs browser verification |
 
 Source: [[ui-ux/evaluation-national-analyst]]
 

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, X } from 'lucide-react';
+import { AlertCircle, ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, ListChecks, X } from 'lucide-react';
 import {
   fetchAnalystIncidentList,
   type AnalystIncidentListItem,
@@ -76,6 +76,13 @@ function SummaryRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+function listErrorMessage(error: unknown): string {
+  if (error instanceof Error && /Request failed:\s*500/i.test(error.message)) {
+    return 'Incident list is temporarily unavailable. The filters and analytics panels remain usable while the list request is retried.';
+  }
+  return error instanceof Error ? error.message : 'Failed to load incidents.';
+}
+
 export function AnalystIncidentList({ filters }: { filters: AnalystIncidentListParams }) {
   const [items, setItems] = useState<AnalystIncidentListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -113,7 +120,7 @@ export function AnalystIncidentList({ filters }: { filters: AnalystIncidentListP
         if (cancelled) return;
         setItems([]);
         setTotal(0);
-        setError(e instanceof Error ? e.message : 'Failed to load incidents.');
+        setError(listErrorMessage(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -135,25 +142,33 @@ export function AnalystIncidentList({ filters }: { filters: AnalystIncidentListP
   };
 
   return (
-    <section className="card" aria-labelledby="incident-list-heading">
-      <div className="card-header flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 id="incident-list-heading" className="font-bold">Incident List</h2>
-          <p className="text-xs font-normal text-gray-500">Verified, non-archived incidents matching the active filters.</p>
+    <section className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm" aria-labelledby="incident-list-heading">
+      <div className="flex flex-col gap-3 border-b border-gray-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-red-50 text-red-700">
+            <ListChecks className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 id="incident-list-heading" className="text-base font-bold text-gray-900">Incident List</h2>
+            <p className="mt-0.5 text-sm text-gray-500">Verified, non-archived incidents matching the active filters.</p>
+          </div>
         </div>
-        <span className="text-xs font-semibold text-gray-500">{total.toLocaleString()} total</span>
+        <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600">
+          {total.toLocaleString()} total
+        </span>
       </div>
 
-      <div className="card-body p-0">
+      <div>
         {error && (
-          <div className="border-b border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+          <div className="flex items-start gap-2 border-b border-red-100 bg-red-50 px-5 py-3 text-sm text-red-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
           </div>
         )}
 
         <div className="overflow-x-auto">
           <table className="min-w-[1080px] w-full text-sm">
-            <thead className="bg-gray-50">
+            <thead className="sticky top-0 bg-gray-50">
               <tr>
                 {COLUMNS.map((column) => (
                   <th
@@ -176,7 +191,7 @@ export function AnalystIncidentList({ filters }: { filters: AnalystIncidentListP
               {loading && (
                 <tr>
                   <td colSpan={COLUMNS.length} className="px-4 py-8 text-center text-gray-500">
-                    Loading incidents...
+                    Loading verified incidents...
                   </td>
                 </tr>
               )}

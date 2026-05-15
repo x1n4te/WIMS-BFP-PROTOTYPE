@@ -490,10 +490,11 @@ def get_incidents(
                    nd.households_affected, nd.individuals_affected,
                    nd.responder_type, nd.fire_origin, nd.extent_of_damage,
                    sd.owner_name, sd.establishment_name, sd.caller_name,
-                   nd.barangay, nd.specific_type
+                   rb.barangay_name, nd.specific_type
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
+            LEFT JOIN wims.ref_barangays rb ON rb.barangay_id = nd.barangay_id
             WHERE {where_sql}
             ORDER BY fi.created_at DESC
             LIMIT :limit OFFSET :offset
@@ -562,6 +563,27 @@ ANALYST_LIST_SORT_COLUMNS = {
 }
 
 
+def _append_analyst_casualty_filter(
+    where_clauses: list[str],
+    casualty_severity: str,
+) -> None:
+    casualty_columns = {
+        "civilian_injured": "COALESCE(aif.civilian_injured, nd.civilian_injured, 0)",
+        "civilian_deaths": "COALESCE(aif.civilian_deaths, nd.civilian_deaths, 0)",
+        "firefighter_injured": "COALESCE(aif.firefighter_injured, nd.firefighter_injured, 0)",
+        "firefighter_deaths": "COALESCE(aif.firefighter_deaths, nd.firefighter_deaths, 0)",
+    }
+    deaths = f"({casualty_columns['civilian_deaths']} + {casualty_columns['firefighter_deaths']})"
+    injuries = f"({casualty_columns['civilian_injured']} + {casualty_columns['firefighter_injured']})"
+
+    if casualty_severity == "high":
+        where_clauses.append(f"{deaths} > 0")
+    elif casualty_severity == "medium":
+        where_clauses.append(f"{injuries} > 0 AND {deaths} = 0")
+    elif casualty_severity == "low":
+        where_clauses.append(f"{injuries} = 0 AND {deaths} = 0")
+
+
 def _analyst_json_value(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
@@ -627,16 +649,14 @@ def get_analyst_incident_list(
         where_clauses.append("nd.alarm_level = :alarm_level")
         params["alarm_level"] = alarm_level
 
-    # Casualty severity derived from analytics_incident_facts.casualty_severity
     if casualty_severity:
-        where_clauses.append("aif.casualty_severity = :casualty_severity")
-        params["casualty_severity"] = casualty_severity
+        _append_analyst_casualty_filter(where_clauses, casualty_severity)
 
     if damage_min is not None:
-        where_clauses.append("COALESCE(aif.estimated_damage_php, 0) >= :damage_min")
+        where_clauses.append("COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) >= :damage_min")
         params["damage_min"] = damage_min
     if damage_max is not None:
-        where_clauses.append("COALESCE(aif.estimated_damage_php, 0) <= :damage_max")
+        where_clauses.append("COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) <= :damage_max")
         params["damage_max"] = damage_max
 
     where_sql = " AND ".join(where_clauses)
@@ -653,13 +673,13 @@ def get_analyst_incident_list(
             nd.notification_dt,
             COALESCE(aif.province_name, '')             AS province_name,
             COALESCE(aif.municipality_name, '')         AS municipality_name,
-            COALESCE(nd.barangay, '')                  AS barangay_name,
+            COALESCE(aif.barangay_name, rb.barangay_name, '') AS barangay_name,
             COALESCE(nd.general_category, '')           AS general_category,
             COALESCE(nd.sub_category, '')              AS sub_category,
             COALESCE(nd.alarm_level, '')               AS alarm_level,
-            aif.estimated_damage_php,
-            aif.total_response_time_minutes,
-            r.short_name                               AS region,
+            COALESCE(aif.estimated_damage_php, nd.estimated_damage_php) AS estimated_damage_php,
+            COALESCE(aif.total_response_time_minutes, nd.total_response_time_minutes) AS total_response_time_minutes,
+            COALESCE(r.region_code, r.region_name, '') AS region,
             fi.verification_status,
             fi.reference_number,
             fi.created_at
@@ -667,6 +687,7 @@ def get_analyst_incident_list(
         LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
         LEFT JOIN wims.analytics_incident_facts aif       ON aif.incident_id = fi.incident_id
         LEFT JOIN wims.ref_regions r                      ON r.region_id = fi.region_id
+        LEFT JOIN wims.ref_barangays rb                   ON rb.barangay_id = nd.barangay_id
         WHERE {where_sql}
         {order_sql}
         LIMIT :limit OFFSET :offset
@@ -682,6 +703,7 @@ def get_analyst_incident_list(
         FROM wims.fire_incidents fi
         LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
         LEFT JOIN wims.analytics_incident_facts aif     ON aif.incident_id = fi.incident_id
+        LEFT JOIN wims.ref_barangays rb                 ON rb.barangay_id = nd.barangay_id
         WHERE {where_sql}
     """
     total = db.execute(
@@ -740,23 +762,28 @@ def get_analyst_incident_detail(
                 fi.verification_status,
                 fi.is_archived,
                 fi.created_at,
+                fi.data_hash,
                 nd.notification_dt,
-                r.short_name             AS region,
+                COALESCE(r.region_code, r.region_name, '') AS region,
                 COALESCE(aif.province_name, '')     AS province_name,
                 COALESCE(aif.municipality_name, '')  AS municipality_name,
-                COALESCE(nd.barangay, '')            AS barangay_name,
+                COALESCE(aif.barangay_name, rb.barangay_name, '') AS barangay_name,
                 COALESCE(nd.general_category, '')    AS general_category,
                 COALESCE(nd.sub_category, '')       AS sub_category,
                 COALESCE(nd.alarm_level, '')        AS alarm_level,
-                aif.estimated_damage_php,
-                aif.total_response_time_minutes,
-                aif.casualty_severity,
-                aif.data_hash,
-                aif.sync_status
+                COALESCE(aif.estimated_damage_php, nd.estimated_damage_php) AS estimated_damage_php,
+                COALESCE(aif.total_response_time_minutes, nd.total_response_time_minutes) AS total_response_time_minutes,
+                CASE
+                    WHEN (COALESCE(aif.civilian_deaths, nd.civilian_deaths, 0) + COALESCE(aif.firefighter_deaths, nd.firefighter_deaths, 0)) > 0 THEN 'high'
+                    WHEN (COALESCE(aif.civilian_injured, nd.civilian_injured, 0) + COALESCE(aif.firefighter_injured, nd.firefighter_injured, 0)) > 0 THEN 'medium'
+                    ELSE 'low'
+                END AS casualty_severity,
+                CASE WHEN aif.incident_id IS NULL THEN 'MISSING' ELSE 'SYNCED' END AS sync_status
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.analytics_incident_facts aif       ON aif.incident_id = fi.incident_id
             LEFT JOIN wims.ref_regions r                      ON r.region_id = fi.region_id
+            LEFT JOIN wims.ref_barangays rb                   ON rb.barangay_id = nd.barangay_id
             WHERE fi.incident_id = :iid
         """),
         {"iid": incident_id},
@@ -792,18 +819,18 @@ def get_analyst_incident_detail(
         "encoder_username": encoder_username,
         "verification_status": row[3],
         "created_at": row[5].isoformat() if row[5] else None,
-        "notification_dt": row[6].isoformat() if row[6] else None,
-        "region": row[7],
-        "province_name": row[8],
-        "municipality_name": row[9],
-        "barangay_name": row[10],
-        "general_category": row[11],
-        "sub_category": row[12],
-        "alarm_level": row[13],
-        "estimated_damage_php": float(row[14]) if row[14] is not None else None,
-        "total_response_time_minutes": row[15],
-        "casualty_severity": row[16],
-        "data_hash": row[17],
+        "notification_dt": row[7].isoformat() if row[7] else None,
+        "region": row[8],
+        "province_name": row[9],
+        "municipality_name": row[10],
+        "barangay_name": row[11],
+        "general_category": row[12],
+        "sub_category": row[13],
+        "alarm_level": row[14],
+        "estimated_damage_php": float(row[15]) if row[15] is not None else None,
+        "total_response_time_minutes": row[16],
+        "casualty_severity": row[17],
+        "data_hash": row[6],
         "sync_status": row[18],
         "has_wildland_afor": has_wildland_afor,
     }

@@ -1,7 +1,7 @@
 ---
 title: "National Analyst Dashboard — UX Evaluation"
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-15
 type: evaluation
 tags: [wims-bfp, ui-ux, national-analyst, dashboard, m5]
 sources: [raw/ui-ux/evaluation-national-analyst.md]
@@ -19,11 +19,13 @@ Source: User desk-check notes (`raw/ui-ux/evaluation-national-analyst.md`).
 ### L-01 — Heatmap aspect ratio is wrong; wastes horizontal space
 **Current:** Wide, full-width heatmap spanning the top of the dashboard.
 **Expected:** Tall (portrait) heatmap positioned on the side (left or right column), not spanning the full width. This allows the layout to use vertical space more efficiently for a data-dense analyst view.
+**Status:** Fixed in code: `/dashboard/analyst` now uses a desktop two-column grid with the heatmap in a 360px side column and the chart/list/export workflow in the main column. Browser layout verification remains recommended.
 **Priority:** HIGH — layout restructure needed.
 
 ### L-02 — Filter bar sizing and alignment
 **Current:** Filters are inline with "All Synced" status indicator but are the same size.
 **Expected:** Filters should be larger and more prominent than the "All Synced" badge. The filter bar should sit at the top of the content area, inline with the sync status, but visually dominant.
+**Status:** Fixed in code: analyst filter labels were raised from tiny uppercase labels to `text-sm font-semibold`; the sync badge is no longer the visual peer of the filter controls.
 **Priority:** MEDIUM.
 
 ### L-03 — No individual incident container
@@ -54,11 +56,13 @@ Source: User desk-check notes (`raw/ui-ux/evaluation-national-analyst.md`).
 - Fire cause/origin
 - Weather conditions at time of incident
 - Suppression resources deployed
+**Status:** Core M5 filter contract fixed in code for analytics dashboard endpoints: date range, region, province, municipality, incident type, alarm level, casualty severity, and property damage range are wired through the dashboard, API helpers, and analytics read model. Wildfire-specific filter expansion remains future scope.
 **Priority:** HIGH — FRS compliance gap. Filter must be expanded to match the full `fire_incidents` schema and planned `wildfire_incidents` schema.
 
 ### F-02 — No export preview container
 **Current:** Export PDF and Export Excel buttons export immediately without showing what will be included.
 **Expected:** A dedicated container/section above the export buttons should show a quick overview of what data will be included — query parameters applied, date range, incident count preview — before triggering the export. This container should also expose filters specific to the export (e.g., date range, incident type, region).
+**Status:** Fixed in code: dashboard export buttons now open `ExportPreviewModal` for CSV/PDF/Excel, showing active filters, selectable backend-allowed columns, queue/poll/download state, and using `POST /api/analytics/export/{format}` plus `GET /api/analytics/export/{task_id}`.
 **Priority:** HIGH.
 
 ---
@@ -69,10 +73,12 @@ These are confirmed missing by cross-referencing FRS M5 and GitHub Issue #89. Us
 
 ### G-01 — Top municipalities view missing
 **FRS M5.a.iii:** "Top 10 municipalities with highest incident count" is a required analytics view. Not present in current `analyst/page.tsx`.
+**Status:** Fixed in code: Top-N analysis supports `dimension=municipality` via `analytics_incident_facts.municipality_name`.
 **Priority:** HIGH.
 
 ### G-02 — Average response time by region view missing
 **FRS M5.a.iii:** "Average response time by region" is a required analytics view. Not present in current `analyst/page.tsx` (response time is listed in imports but not rendered).
+**Status:** Fixed in code: `/dashboard/analyst` renders `ResponseTimeChart` backed by `GET /api/analytics/response-time-by-region`.
 **Priority:** HIGH.
 
 ### G-03 — Phase 0: verify_incident() missing analytics sync (P0 CRITICAL)
@@ -87,6 +93,7 @@ These are confirmed missing by cross-referencing FRS M5 and GitHub Issue #89. Us
 
 ### G-05 — Charts not upgraded to Recharts (Phase 3)
 **Issue #87:** Type distribution (AQ-06), top barangays (AQ-07), and response time (AQ-08) still render as HTML table rows instead of Recharts visualizations.
+**Status:** Fixed in code: `TypeDistributionChart`, `TopBarangaysChart`, `ResponseTimeChart`, and `TrendCharts` now use Recharts.
 **Priority:** P2 MEDIUM.
 
 ### G-06 — Scheduled reports not implemented (Phase 4)
@@ -123,7 +130,15 @@ These are confirmed missing by cross-referencing FRS M5 and GitHub Issue #89. Us
 | G-07 | Sidebar missing NATIONAL_ANALYST section | Frontend | P2 MEDIUM | M12 / #86 |
 | G-08 | No integration testing | Testing | P1 HIGH | #89 Phase 5 |
 
-Phase 5 implementation note (2026-05-14): analyst incident list, sortable drawer, read-only incident detail page, and read-only wildland detail route are implemented. Export preview remains open because the dashboard-level export UX still queues directly.
+Phase 5 implementation note (2026-05-14): analyst incident list, sortable drawer, read-only incident detail page, and read-only wildland detail route are implemented.
+
+Phase 7 validation note (2026-05-14): Phases 0-6 are implemented in code, including dashboard export preview/download, CSV/PDF/Excel entry points, side-column heatmap, prominent filter labels, Recharts charts, top municipalities, response-time view, incident list/drawer/detail/wildland routes, and analyst sidebar. Remaining verification: full browser UI pass and full backend integration test pass in a non-hanging environment.
+
+Manual validation follow-up (2026-05-15): User reported `/dashboard/analyst` showing "All synced" while the Incident List returned `Request failed: 500`. Root cause was a backend analyst incident SQL/schema mismatch in `src/backend/api/routes/incidents.py`: the list/detail queries referenced `nd.barangay`, `r.short_name`, and analytics columns not present in `wims.analytics_incident_facts`. Code now uses `ref_barangays` / `aif.barangay_name`, `ref_regions.region_code` / `region_name`, derives casualty severity from casualty count columns, reads `data_hash` from `fire_incidents`, and exposes a derived analytics sync status. Focused regression coverage added in `src/backend/tests/test_analyst_incidents_sql_contract.py`.
+
+Runtime data note (2026-05-15): After container rebuild/restart, local Postgres showed `0` rows in `wims.fire_incidents` and `0` rows in `wims.analytics_incident_facts`; the dashboard therefore correctly has no visible incidents until incidents are created, submitted, verified, and synced/backfilled.
+
+UI/UX overhaul note (2026-05-15): `/dashboard/analyst` was reorganized for HCI-friendly scanning: top summary tiles, grouped filters, clearer apply/reset controls, export preview actions, icon-led panel headers, sticky portrait heatmap, and a friendlier incident-list error state. Frontend analyst Vitest suites pass; browser verification remains recommended.
 
 **Execution order (per #89):** Phase 0 → Phase 1 → Phase 2/3 (parallel) → Phase 5 → Phase 4
 

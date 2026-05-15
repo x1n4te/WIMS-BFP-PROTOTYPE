@@ -34,6 +34,7 @@ import os
 import re
 import time
 import uuid
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -215,16 +216,25 @@ def _get_reset_credentials_flow_id() -> str | None:
 
 def _get_flow_executions(flow_alias: str) -> list[dict]:
     """Get executions for a flow by alias."""
-    flow_id = _get_reset_credentials_flow_id()
-    if not flow_id:
+    if flow_alias == "reset credentials" and not _get_reset_credentials_flow_id():
         return []
+    encoded_alias = quote(flow_alias, safe="")
     r = httpx.get(
-        f"{ADMIN_API}/authentication/flows/{flow_id}/executions",
+        f"{ADMIN_API}/authentication/flows/{encoded_alias}/executions",
         headers=_admin_headers(),
         timeout=10,
     )
     r.raise_for_status()
     return r.json()
+
+
+def _execution_provider(execution: dict) -> str | None:
+    """Return the authenticator/provider id across Keycloak response variants."""
+    for key in ("authenticator", "providerId", "alias", "displayName"):
+        value = execution.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -276,24 +286,33 @@ class TestForgotPasswordConfiguration:
 
     def test_reset_credentials_has_correct_executions(self):
         """
-        The reset credentials flow must have all 3 required executions
-        in the correct order.
+        The reset credentials flow must contain the 3 required core executions.
+        Some realms include additional conditional reset factors such as OTP.
         """
         executions = _get_flow_executions("reset credentials")
-        assert len(executions) == 3, (
-            f"Expected 3 executions, found {len(executions)}: "
-            f"{[e.get('authenticator') for e in executions]}"
-        )
+        providers = [_execution_provider(e) for e in executions]
 
-        authenticators = [e.get("authenticator") for e in executions]
-        assert "reset-credentials-choose-user" in authenticators
-        assert "reset-credential-email" in authenticators
-        assert "reset-password" in authenticators
+        required_core = [
+            "reset-credentials-choose-user",
+            "reset-credential-email",
+            "reset-password",
+        ]
+        for provider in required_core:
+            assert provider in providers, (
+                f"{provider} missing from reset credentials flow. Found: {providers}"
+            )
 
-        # All must be REQUIRED
+        provider_positions = {provider: providers.index(provider) for provider in required_core}
+        assert provider_positions["reset-credentials-choose-user"] < provider_positions["reset-credential-email"]
+        assert provider_positions["reset-credential-email"] < provider_positions["reset-password"]
+
+        # Core executions must be REQUIRED; optional/conditional extra factors are allowed.
         for exe in executions:
+            provider = _execution_provider(exe)
+            if provider not in required_core:
+                continue
             assert exe.get("requirement") == "REQUIRED", (
-                f"{exe.get('authenticator')} should be REQUIRED, got {exe.get('requirement')}"
+                f"{provider} should be REQUIRED, got {exe.get('requirement')}"
             )
 
     def test_realm_smtp_configured(self):

@@ -606,8 +606,13 @@ def count_in_range(
     range_end: str,
     *,
     region_id: Optional[int] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
     incident_type: Optional[str] = None,
     alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> int:
     """Comparative range count from analytics_incident_facts."""
     clauses = [
@@ -615,15 +620,18 @@ def count_in_range(
         "a.notification_date <= CAST(:range_end AS date)",
     ]
     params: dict[str, Any] = {"range_start": range_start, "range_end": range_end}
-    if region_id is not None:
-        clauses.append("a.region_id = :region_id")
-        params["region_id"] = region_id
-    if incident_type:
-        clauses.append("a.general_category = :incident_type")
-        params["incident_type"] = incident_type
-    if alarm_level:
-        clauses.append("a.alarm_level = :alarm_level")
-        params["alarm_level"] = alarm_level
+    _append_common_filters(
+        clauses,
+        params,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     result = db.execute(
@@ -965,20 +973,31 @@ def get_compare_regions(
     region_ids: list[int],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
     incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Cross-region comparison: per-region aggregate stats."""
-    clauses = ["a.region_id = ANY(:region_ids)"]
-    params: dict[str, Any] = {"region_ids": region_ids}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
-    if incident_type:
-        clauses.append("a.general_category = :incident_type")
-        params["incident_type"] = incident_type
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_ids=region_ids,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     rows = db.execute(

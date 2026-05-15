@@ -1,0 +1,37 @@
+import inspect
+
+from api.routes.incidents import (
+    _append_analyst_casualty_filter,
+    get_analyst_incident_detail,
+    get_analyst_incident_list,
+)
+
+
+def test_analyst_list_query_uses_existing_barangay_columns():
+    source = inspect.getsource(get_analyst_incident_list)
+
+    assert "nd.barangay," not in source
+    assert "ref_barangays" in source
+    assert "aif.barangay_name" in source
+    assert "r.short_name" not in source
+    assert "r.region_code" in source
+
+
+def test_analyst_list_derives_casualty_severity_from_counts():
+    source = inspect.getsource(get_analyst_incident_list)
+    helper_source = inspect.getsource(_append_analyst_casualty_filter)
+
+    assert "aif.casualty_severity" not in source
+    assert "civilian_deaths" in helper_source
+    assert "firefighter_injured" in helper_source
+
+
+def test_analyst_detail_uses_provenance_columns_from_real_tables():
+    source = inspect.getsource(get_analyst_incident_detail)
+
+    assert "aif.data_hash" not in source
+    assert "aif.sync_status" not in source
+    assert "r.short_name" not in source
+    assert "r.region_code" in source
+    assert "fi.data_hash" in source
+    assert "CASE WHEN aif.incident_id IS NULL" in source
