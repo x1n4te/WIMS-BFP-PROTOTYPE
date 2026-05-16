@@ -43,66 +43,6 @@ def _get_security_provider() -> SecurityProvider:
 logger = logging.getLogger("wims.regional")
 
 
-# ---------------------------------------------------------------------------
-# Barangay Reverse-Geocoding
-# ---------------------------------------------------------------------------
-
-
-def _reverse_geocode_barangay(db: Session, incident_id: int, lon: float, lat: float) -> None:
-    """Look up the barangay containing the given point and backfill
-    incident_nonsensitive_details.barangay_id, then sync to analytics.
-
-    Gracefully skips — logging a warning — if the geometry column has not yet
-    been populated (i.e. PSGC polygon data not yet loaded).
-    """
-    # Check whether any row has a non-NULL geometry before doing the expensive
-    # ST_Contains lookup. This allows the system to run without polygon data.
-    geometry_ready = db.execute(
-        text("SELECT EXISTS(SELECT 1 FROM wims.ref_barangays WHERE geometry IS NOT NULL LIMIT 1)")
-    ).scalar()
-    if not geometry_ready:
-        logger.warning(
-            "Barangay geometry not yet loaded — skipping reverse-geocode for incident %s",
-            incident_id,
-        )
-        return
-
-    barangay_row = db.execute(
-        text("""
-            SELECT rb.barangay_id
-            FROM wims.ref_barangays rb
-            WHERE ST_Contains(
-                rb.geometry,
-                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
-            )
-            LIMIT 1
-        """),
-        {"lon": lon, "lat": lat},
-    ).fetchone()
-
-    if barangay_row is None:
-        logger.debug(
-            "No barangay polygon contains point (%s, %s) for incident %s",
-            lon,
-            lat,
-            incident_id,
-        )
-        return
-
-    barangay_id = barangay_row[0]
-    db.execute(
-        text("""
-            UPDATE wims.incident_nonsensitive_details
-            SET barangay_id = :bid
-            WHERE incident_id = :iid
-        """),
-        {"bid": barangay_id, "iid": incident_id},
-    )
-    logger.info("Reverse-geocoded incident %s to barangay_id=%s", incident_id, barangay_id)
-
-    sync_incident_to_analytics(db, incident_id)
-
-
 router = APIRouter(prefix="/api/regional", tags=["regional"])
 
 
@@ -1529,9 +1469,6 @@ def _commit_wildland_afor_row(
     incident_id = inc_row[0]
     incident_ids.append(incident_id)
 
-    # ── Barangay reverse-geocode (graceful no-op if geometry not yet loaded) ──
-    _reverse_geocode_barangay(db, incident_id, lon, lat)
-
     params = {
         "incident_id": incident_id,
         "batch_id": batch_id,
@@ -1955,9 +1892,6 @@ async def commit_afor_import(
 
         incident_id = inc_row[0]
         incident_ids.append(incident_id)
-
-        # ── Barangay reverse-geocode (graceful no-op if geometry not yet loaded) ──
-        _reverse_geocode_barangay(db, incident_id, lon, lat)
 
         city_text = row_data.get("_city_text", "")
         geo_ids = db.execute(
@@ -3160,9 +3094,6 @@ def create_incident(
         notes="Encoder created new draft",
         action_label="CREATED_DRAFT",
     )
-
-    # ── Barangay reverse-geocode (graceful no-op if geometry not yet loaded) ──
-    _reverse_geocode_barangay(db, incident_id, body.longitude, body.latitude)
 
     db.commit()
     logger.info(
