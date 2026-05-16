@@ -71,7 +71,6 @@ ALTER TABLE wims.analytics_incident_facts
     ADD COLUMN IF NOT EXISTS firefighter_deaths     INTEGER DEFAULT 0,
     ADD COLUMN IF NOT EXISTS total_response_time_minutes NUMERIC,
     ADD COLUMN IF NOT EXISTS estimated_damage_php   NUMERIC,
-    ADD COLUMN IF NOT EXISTS fire_station_name      TEXT,
-    ADD COLUMN IF NOT EXISTS barangay_name          TEXT;
+    ADD COLUMN IF NOT EXISTS fire_station_name      TEXT;
 
 COMMIT;

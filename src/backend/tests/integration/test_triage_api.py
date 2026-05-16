@@ -89,7 +89,7 @@ def pending_report(db_session: Session):
     result = db_session.execute(
         text("""
             INSERT INTO wims.citizen_reports (location, description, status)
-            VALUES (ST_GeogFromText(:wkt), 'Fire near barangay', 'PENDING')
+            VALUES (ST_GeogFromText(:wkt), 'Fire incident', 'PENDING')
             RETURNING report_id
         """),
         {"wkt": wkt},
@@ -131,7 +131,7 @@ def test_get_triage_pending_returns_pending_reports(
         assert r["status"] == "PENDING"
     # Find our report
     ours = next(r for r in data if r["report_id"] == report_id)
-    assert ours["description"] == "Fire near barangay"
+    assert ours["description"] == "Fire incident"
     assert abs(ours["latitude"] - lat) < 1e-6
     assert abs(ours["longitude"] - lon) < 1e-6
 

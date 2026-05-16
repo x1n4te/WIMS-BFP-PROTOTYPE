@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Annotated, Literal, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr, field_validator
+import redis
 from keycloak.exceptions import KeycloakError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -56,12 +58,10 @@ def _apply_backup_retention() -> None:
         try:
             return float(path.stat().st_mtime)
         except Exception:
-            # Be defensive with mocked or transient fs states.
             return 0.0
 
     backups: list[Path] = []
     try:
-        # Use os.scandir to avoid pathlib's internal is_dir/stat checks.
         with os.scandir(BACKUP_DIR) as entries:
             for entry in entries:
                 if entry.is_file() and re.match(r"^wims_\d{8}_\d{6}\.sql\.enc$", entry.name):
@@ -75,8 +75,11 @@ def _apply_backup_retention() -> None:
         try:
             backup_path.unlink()
         except FileNotFoundError:
-            # Another worker/process may have already removed it.
             continue
+
+
+RATE_LIMIT_CONFIG_KEY = "rate_limit_config:login"
+RATE_LIMIT_DEFAULTS = {"window_seconds": 900, "threshold": 5}
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +93,33 @@ VALID_ROLES = (
     "NATIONAL_ANALYST",
     "SYSTEM_ADMIN",
 )
+
+
+class RateLimitUpdate(BaseModel):
+    tier: str
+    limit: int
+    window: int
+
+    @field_validator("tier")
+    @classmethod
+    def tier_must_be_known(cls, v: str) -> str:
+        if v not in ("login",):
+            raise ValueError("Unknown tier. Valid tiers: login")
+        return v
+
+    @field_validator("limit")
+    @classmethod
+    def limit_must_be_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("limit must be >= 1")
+        return v
+
+    @field_validator("window")
+    @classmethod
+    def window_must_be_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("window must be >= 1")
+        return v
 
 
 class UserCreate(BaseModel):
@@ -173,10 +203,8 @@ def create_user(
     # Use provided username if given; fall back to email-derived
     username = body.username if body.username else str(body.email).lower()[:50]
 
-    # Generate a secure temporary password
     temp_password = generate_temp_password()
 
-    # --- Create in Keycloak ---
     try:
         keycloak_id = create_keycloak_user(
             email=str(body.email),
@@ -200,7 +228,6 @@ def create_user(
             detail="Failed to create user in identity provider. Try again later.",
         )
 
-    # --- Validate region_id exists (FK guard) ---
     if body.assigned_region_id is not None:
         region_exists = db.execute(
             text("SELECT 1 FROM wims.ref_regions WHERE region_id = :rid"),
@@ -212,14 +239,8 @@ def create_user(
                 detail=f"Region ID {body.assigned_region_id} does not exist. Please select a valid region.",
             )
 
-    # --- Set RLS context so wims.current_user_role() returns SYSTEM_ADMIN during INSERT ---
-    # get_db() (not get_db_with_rls) is used above because the postgres service-account
-    # session has no Keycloak JWT — wims.current_user_id would be NULL and RLS would block
-    # the insert with 'ANONYMOUS' role.  We explicitly set it here using a SECURITY DEFINER
-    # helper so the INSERT policy (wims.current_user_role() IN ('SYSTEM_ADMIN')) passes.
     db.execute(text("SELECT wims.exec_as_system_admin(:uid)"), {"uid": _admin["user_id"]})
 
-    # --- Insert into wims.users ---
     try:
         db.execute(
             text("""
@@ -282,8 +303,6 @@ def create_user(
         "keycloak_id": keycloak_id,
         "username": username,
         "role": body.role,
-        # Returned IN PLAINTEXT for admin to distribute — prototype behaviour.
-        # In production, deliver via secure email instead.
         "temporary_password": temp_password,
         "note": "Distribute this temporary password to the user securely. They will be required to change it on first login.",
     }
@@ -353,7 +372,6 @@ def update_user(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    # Fetch keycloak_id and current role BEFORE the update so we can synchronise Keycloak
     kc_row = db.execute(
         text("SELECT keycloak_id, role FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
         {"uid": user_id},
@@ -366,7 +384,6 @@ def update_user(
     sql = f"UPDATE wims.users SET {', '.join(updates)}, updated_at = now() WHERE user_id = CAST(:uid AS uuid)"
     result = db.execute(text(sql), params)
 
-    # Log audit for update
     actions = []
     if body.role:
         actions.append(f"ROLE_CHANGE_TO_{body.role}")
@@ -379,7 +396,7 @@ def update_user(
             user_id=_admin["user_id"],
             action_type=action_name,
             table_affected="users",
-            record_id=None,  # user_id is uuid in db, but table expects int. We skip for users table or just pass 0.
+            record_id=None,
             request=request,
         )
 
@@ -387,21 +404,18 @@ def update_user(
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # --- Synchronise is_active state with Keycloak ---
     if body.is_active is not None and keycloak_id:
         from utils.session import session_manager
 
         try:
             set_user_enabled(keycloak_id, enabled=body.is_active)
             if body.is_active is False:
-                # Also revoke all active sessions if we are disabling the user
                 from services.keycloak_admin import _get_admin_client
 
                 adm = _get_admin_client()
                 adm.user_logout(keycloak_id)
                 session_manager.revoke_all_sessions(keycloak_id)
         except Exception as e:
-            # DB is already updated — warn but don't roll back; admin can retry
             logger.error(
                 f"Keycloak sync failed for user {user_id} (keycloak_id={keycloak_id}): {e}"
             )
@@ -411,7 +425,6 @@ def update_user(
                 "warning": f"Database updated but Keycloak sync failed: {e}",
             }
 
-    # --- Invalidate sessions if role changed (security event) ---
     if body.role is not None and body.role != current_role and keycloak_id:
         logout_user_sessions(keycloak_id)
 
@@ -454,7 +467,6 @@ def get_active_sessions(
         except Exception as e:
             logger.warning(f"Failed to fetch sessions for {u.keycloak_id}: {e}")
 
-    # sort by last_access desc
     active_sessions.sort(key=lambda x: x.get("last_access", 0), reverse=True)
     return active_sessions
 
@@ -480,7 +492,6 @@ def force_logout_user(
     kid = str(row[0])
     try:
         adm.user_logout(kid)
-        # Instant revocation in backend via Redis
         session_manager.revoke_all_sessions(kid)
     except Exception as e:
         logger.warning(f"Failed to logout user {user_id}: {e}")
@@ -506,7 +517,6 @@ def get_system_health(
 
     import time
 
-    # Check DB
     try:
         t0 = time.time()
         db.execute(text("SELECT 1"))
@@ -522,7 +532,6 @@ def get_system_health(
         }
         health["status"] = "DEGRADED"
 
-    # Check Redis
     try:
         import redis
         import os
@@ -542,7 +551,6 @@ def get_system_health(
         }
         health["status"] = "DEGRADED"
 
-    # Check Keycloak
     try:
         from services.keycloak_admin import _get_admin_client
 
@@ -813,8 +821,6 @@ async def trigger_backup(
     output_path = BACKUP_DIR / filename
 
     db_url = os.environ.get("DATABASE_URL", "")
-    # Parse DATABASE_URL without regex — use urllib to handle special chars
-    # in password (e.g. @, :, /) that break a naive regex split.
     try:
         parsed = urllib.parse.urlparse(db_url)
     except Exception as e:
@@ -867,7 +873,6 @@ async def trigger_backup(
             detail=f"pg_dump failed: {result.stderr[:500]}",
         )
 
-    # Encrypt the backup file at rest using AES-256-GCM
     try:
         from utils.backup_crypto import encrypt_backup
 
@@ -950,3 +955,74 @@ async def download_backup(
         filename=filename,
         media_type="application/octet-stream",
     )
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Rate Limit Configuration
+# ---------------------------------------------------------------------------
+
+
+@router.get("/rate-limits")
+def get_rate_limits(
+    current_user: dict = Depends(get_system_admin),
+):
+    """Return current rate limit config for all tiers."""
+    r = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+    try:
+        config = r.hgetall(RATE_LIMIT_CONFIG_KEY)
+        window = int(config.get("window_seconds", RATE_LIMIT_DEFAULTS["window_seconds"]))
+        threshold = int(config.get("threshold", RATE_LIMIT_DEFAULTS["threshold"]))
+        updated_at = config.get("updated_at")
+    except Exception:
+        window = RATE_LIMIT_DEFAULTS["window_seconds"]
+        threshold = RATE_LIMIT_DEFAULTS["threshold"]
+        updated_at = None
+
+    return {
+        "tier": "login",
+        "login_window_seconds": window,
+        "login_threshold": threshold,
+        "updated_at": updated_at,
+    }
+
+
+@router.patch("/rate-limits")
+def update_rate_limits(
+    body: RateLimitUpdate,
+    request: Request,
+    current_user: dict = Depends(get_system_admin),
+    db: Session = Depends(get_db_with_rls),
+):
+    """Update rate limit config for a tier. Takes effect immediately without restart."""
+    config_key = f"rate_limit_config:{body.tier}"
+    updated_at = str(time.time())
+
+    r = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+    try:
+        r.hset(
+            config_key,
+            mapping={
+                "window_seconds": body.window,
+                "threshold": body.limit,
+                "updated_at": updated_at,
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Redis write failed: {e}")
+
+    log_system_audit(
+        db=db,
+        user_id=current_user["user_id"],
+        action_type="RATE_LIMIT_UPDATED",
+        table_affected="redis",
+        record_id=None,
+        request=request,
+    )
+    db.commit()
+
+    return {
+        "tier": body.tier,
+        "login_window_seconds": body.window,
+        "login_threshold": body.limit,
+        "updated_at": updated_at,
+    }

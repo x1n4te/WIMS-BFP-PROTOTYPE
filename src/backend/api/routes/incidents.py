@@ -3,18 +3,23 @@ import json
 import logging
 import os
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 import auth
-from auth import get_current_wims_user
+from auth import get_current_wims_user, get_analyst_or_admin
 from database import get_db_with_rls
 from schemas.incident import IncidentCreate, IncidentResponse
 from services.analytics_read_model import sync_incident_to_analytics
 from api.routes.regional import _normalize_general_category, _insert_incident_verification_history
+from tasks.exports import export_analyst_incidents_task
+from api.routes.regional import _normalize_general_category
 
 router = APIRouter(prefix="/api", tags=["incidents"])
 logger = logging.getLogger("wims.incidents")
@@ -506,7 +511,7 @@ def get_incidents(
                    nd.households_affected, nd.individuals_affected,
                    nd.responder_type, nd.fire_origin, nd.extent_of_damage,
                    sd.owner_name, sd.establishment_name, sd.caller_name,
-                   nd.barangay, nd.specific_type
+                   nd.specific_type
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
@@ -551,12 +556,410 @@ def get_incidents(
                 "owner_name": r[13],
                 "establishment_name": r[14],
                 "caller_name": r[15],
-                "barangay": r[16],
-                "specific_type": r[17],
+                "specific_type": r[16],
             }
             for r in rows
         ],
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+# -----------------------------------------------------------------------
+# National Analyst — Incident List (p5a)
+# -----------------------------------------------------------------------
+ANALYST_LIST_SORT_COLUMNS = {
+    "notification_dt",
+    "region",
+    "municipality_name",
+    "general_category",
+    "sub_category",
+    "alarm_level",
+    "estimated_damage_php",
+    "total_response_time_minutes",
+}
+
+
+class AnalystIncidentExportRequest(BaseModel):
+    filters: dict[str, Any] = {}
+    columns: list[str] = []
+    incident_ids: Optional[list[int]] = None
+
+
+def _append_analyst_casualty_filter(
+    where_clauses: list[str],
+    casualty_severity: str,
+) -> None:
+    casualty_columns = {
+        "civilian_injured": "COALESCE(aif.civilian_injured, nd.civilian_injured, 0)",
+        "civilian_deaths": "COALESCE(aif.civilian_deaths, nd.civilian_deaths, 0)",
+        "firefighter_injured": "COALESCE(aif.firefighter_injured, nd.firefighter_injured, 0)",
+        "firefighter_deaths": "COALESCE(aif.firefighter_deaths, nd.firefighter_deaths, 0)",
+    }
+    deaths = f"({casualty_columns['civilian_deaths']} + {casualty_columns['firefighter_deaths']})"
+    injuries = (
+        f"({casualty_columns['civilian_injured']} + {casualty_columns['firefighter_injured']})"
+    )
+
+    if casualty_severity == "high":
+        where_clauses.append(f"{deaths} > 0")
+    elif casualty_severity == "medium":
+        where_clauses.append(f"{injuries} > 0 AND {deaths} = 0")
+    elif casualty_severity == "low":
+        where_clauses.append(f"{injuries} = 0 AND {deaths} = 0")
+
+
+def _analyst_json_value(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _analyst_row_dict(row: Any) -> dict[str, Any]:
+    return {key: _analyst_json_value(value) for key, value in row._mapping.items()}
+
+
+@router.post("/incidents/analyst/export/{export_format}")
+def export_analyst_incidents(
+    export_format: str,
+    body: AnalystIncidentExportRequest,
+    current_user: Annotated[dict, Depends(get_analyst_or_admin)],
+):
+    """Queue analyst incident export for selected IDs or the supplied filters."""
+    if export_format not in {"csv", "pdf", "excel"}:
+        raise HTTPException(status_code=422, detail="format must be csv, pdf, or excel")
+
+    incident_ids = sorted(set(body.incident_ids or [])) or None
+    result = export_analyst_incidents_task.delay(
+        user_id=str(current_user["user_id"]),
+        filters=body.filters,
+        columns=body.columns,
+        incident_ids=incident_ids,
+        format=export_format,
+    )
+    return {"task_id": result.id}
+
+
+@router.get("/incidents/analyst-list")
+def get_analyst_incident_list(
+    _user: Annotated[dict, Depends(get_analyst_or_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    region_id: Optional[int] = Query(None),
+    province: Optional[str] = Query(None),
+    municipality: Optional[str] = Query(None),
+    incident_type: Optional[str] = Query(None),
+    alarm_level: Optional[str] = Query(None),
+    casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
+    damage_min: Optional[float] = Query(None, ge=0),
+    damage_max: Optional[float] = Query(None, ge=0),
+    incident_ids: Optional[str] = Query(None, description="Comma-separated incident IDs"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None, pattern="^(asc|desc)$"),
+):
+    """
+    National Analyst incident list — verified incidents only.
+
+    Requires: NATIONAL_ANALYST or SYSTEM_ADMIN.
+    Always filters: verification_status = 'VERIFIED', is_archived = FALSE.
+    """
+    sort_by_col = sort_by if sort_by and sort_by in ANALYST_LIST_SORT_COLUMNS else "notification_dt"
+    sort_dir_val = sort_dir if sort_dir in ("asc", "desc") else "desc"
+
+    where_clauses = ["fi.verification_status = 'VERIFIED'", "fi.is_archived = FALSE"]
+    params: dict[str, Any] = {}
+
+    if start_date:
+        where_clauses.append("nd.notification_dt >= :start_date")
+        params["start_date"] = start_date
+    if end_date:
+        where_clauses.append("nd.notification_dt <= :end_date")
+        params["end_date"] = end_date
+    if region_id:
+        where_clauses.append("fi.region_id = :region_id")
+        params["region_id"] = region_id
+    if province:
+        where_clauses.append("aif.province_name = :province")
+        params["province"] = province
+    if municipality:
+        where_clauses.append("aif.municipality_name = :municipality")
+        params["municipality"] = municipality
+    if incident_type:
+        where_clauses.append("nd.general_category = :incident_type")
+        params["incident_type"] = incident_type
+    if alarm_level:
+        where_clauses.append("nd.alarm_level = :alarm_level")
+        params["alarm_level"] = alarm_level
+
+    if incident_ids:
+        try:
+            parsed_incident_ids = [int(x.strip()) for x in incident_ids.split(",") if x.strip()]
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="incident_ids must be comma-separated integers"
+            ) from exc
+        if parsed_incident_ids:
+            where_clauses.append("fi.incident_id = ANY(:incident_ids)")
+            params["incident_ids"] = parsed_incident_ids
+
+    if casualty_severity:
+        _append_analyst_casualty_filter(where_clauses, casualty_severity)
+
+    if damage_min is not None:
+        where_clauses.append(
+            "COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) >= :damage_min"
+        )
+        params["damage_min"] = damage_min
+    if damage_max is not None:
+        where_clauses.append(
+            "COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) <= :damage_max"
+        )
+        params["damage_max"] = damage_max
+
+    where_sql = " AND ".join(where_clauses)
+
+    offset = (page - 1) * page_size
+    params["limit"] = page_size
+    params["offset"] = offset
+
+    order_sql = f"ORDER BY {sort_by_col} {'ASC' if sort_dir_val == 'asc' else 'DESC'}"
+
+    list_sql = f"""
+        SELECT
+            fi.incident_id,
+            nd.notification_dt,
+            COALESCE(aif.province_name, '')             AS province_name,
+            COALESCE(aif.municipality_name, '')         AS municipality_name,
+            COALESCE(nd.general_category, '')           AS general_category,
+            COALESCE(nd.sub_category, '')              AS sub_category,
+            COALESCE(nd.alarm_level, '')               AS alarm_level,
+            COALESCE(aif.estimated_damage_php, nd.estimated_damage_php) AS estimated_damage_php,
+            COALESCE(aif.total_response_time_minutes, nd.total_response_time_minutes) AS total_response_time_minutes,
+            COALESCE(r.region_code, r.region_name, '') AS region,
+            fi.verification_status,
+            fi.reference_number,
+            fi.created_at
+        FROM wims.fire_incidents fi
+        LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
+        LEFT JOIN wims.analytics_incident_facts aif       ON aif.incident_id = fi.incident_id
+        LEFT JOIN wims.ref_regions r                      ON r.region_id = fi.region_id
+        WHERE {where_sql}
+        {order_sql}
+        LIMIT :limit OFFSET :offset
+    """
+    params["sort_by"] = sort_by_col
+    params["sort_dir"] = sort_dir_val
+
+    rows = db.execute(text(list_sql), params).fetchall()
+
+    # Count
+    count_sql = f"""
+        SELECT COUNT(*)
+        FROM wims.fire_incidents fi
+        LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
+        LEFT JOIN wims.analytics_incident_facts aif     ON aif.incident_id = fi.incident_id
+        WHERE {where_sql}
+    """
+    total = (
+        db.execute(
+            text(count_sql),
+            {
+                k: v
+                for k, v in params.items()
+                if k not in ("limit", "offset", "sort_by", "sort_dir")
+            },
+        ).scalar()
+        or 0
+    )
+
+    return {
+        "incidents": [
+            {
+                "incident_id": r[0],
+                "notification_dt": r[1].isoformat() if r[1] else None,
+                "province_name": r[2],
+                "municipality_name": r[3],
+                "general_category": r[4],
+                "sub_category": r[5],
+                "alarm_level": r[6],
+                "estimated_damage_php": float(r[7]) if r[7] is not None else None,
+                "total_response_time_minutes": r[8],
+                "region": r[9],
+                "verification_status": r[10],
+                "reference_number": r[11],
+                "created_at": r[12].isoformat() if r[12] else None,
+            }
+            for r in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+# -----------------------------------------------------------------------
+# National Analyst — Incident Detail (p5e)
+# -----------------------------------------------------------------------
+@router.get("/incidents/analyst/{incident_id}")
+def get_analyst_incident_detail(
+    incident_id: int,
+    _user: Annotated[dict, Depends(get_analyst_or_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """
+    National Analyst detail for a single incident.
+
+    Requires: NATIONAL_ANALYST or SYSTEM_ADMIN.
+    Returns 404 if the incident is not VERIFIED or is archived.
+    Includes provenance fields and has_wildland_afor flag.
+    """
+    row = db.execute(
+        text("""
+            SELECT
+                fi.incident_id,
+                fi.reference_number,
+                fi.encoder_id,
+                fi.verification_status,
+                fi.is_archived,
+                fi.created_at,
+                fi.data_hash,
+                nd.notification_dt,
+                COALESCE(r.region_code, r.region_name, '') AS region,
+                COALESCE(aif.province_name, '')     AS province_name,
+                COALESCE(aif.municipality_name, '')  AS municipality_name,
+                COALESCE(nd.general_category, '')    AS general_category,
+                COALESCE(nd.sub_category, '')       AS sub_category,
+                COALESCE(nd.alarm_level, '')        AS alarm_level,
+                COALESCE(aif.estimated_damage_php, nd.estimated_damage_php) AS estimated_damage_php,
+                COALESCE(aif.total_response_time_minutes, nd.total_response_time_minutes) AS total_response_time_minutes,
+                CASE
+                    WHEN (COALESCE(aif.civilian_deaths, nd.civilian_deaths, 0) + COALESCE(aif.firefighter_deaths, nd.firefighter_deaths, 0)) > 0 THEN 'high'
+                    WHEN (COALESCE(aif.civilian_injured, nd.civilian_injured, 0) + COALESCE(aif.firefighter_injured, nd.firefighter_injured, 0)) > 0 THEN 'medium'
+                    ELSE 'low'
+                END AS casualty_severity,
+                CASE WHEN aif.incident_id IS NULL THEN 'MISSING' ELSE 'SYNCED' END AS sync_status
+            FROM wims.fire_incidents fi
+            LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
+            LEFT JOIN wims.analytics_incident_facts aif       ON aif.incident_id = fi.incident_id
+            LEFT JOIN wims.ref_regions r                      ON r.region_id = fi.region_id
+            WHERE fi.incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    # Fail if not VERIFIED or is archived
+    if row[4]:  # is_archived
+        raise HTTPException(status_code=404, detail="Incident not found")
+    if row[3] != "VERIFIED":  # verification_status
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    # Check wildland AFOR existence
+    wildland_row = db.execute(
+        text("SELECT 1 FROM wims.incident_wildland_afor WHERE incident_id = :iid LIMIT 1"),
+        {"iid": incident_id},
+    ).fetchone()
+    has_wildland_afor = wildland_row is not None
+
+    # Encoder username (from users table)
+    encoder_username = None
+    if row[2] is not None:
+        encoder_row = db.execute(
+            text("SELECT username FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
+            {"uid": str(row[2])},
+        ).fetchone()
+        encoder_username = encoder_row[0] if encoder_row else None
+
+    return {
+        "incident_id": row[0],
+        "reference_number": row[1],
+        "encoder_id": str(row[2]) if row[2] is not None else None,
+        "encoder_username": encoder_username,
+        "verification_status": row[3],
+        "created_at": row[5].isoformat() if row[5] else None,
+        "notification_dt": row[7].isoformat() if row[7] else None,
+        "region": row[8],
+        "province_name": row[9],
+        "municipality_name": row[10],
+        "general_category": row[11],
+        "sub_category": row[12],
+        "alarm_level": row[13],
+        "estimated_damage_php": float(row[14]) if row[14] is not None else None,
+        "total_response_time_minutes": row[15],
+        "casualty_severity": row[16],
+        "data_hash": row[6],
+        "sync_status": row[17],
+        "has_wildland_afor": has_wildland_afor,
+    }
+
+
+@router.get("/incidents/analyst/{incident_id}/wildland")
+def get_analyst_incident_wildland_detail(
+    incident_id: int,
+    _user: Annotated[dict, Depends(get_analyst_or_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """
+    National Analyst wildland AFOR detail for a verified, non-archived incident.
+
+    Requires: NATIONAL_ANALYST or SYSTEM_ADMIN.
+    """
+    incident_row = db.execute(
+        text("""
+            SELECT incident_id, reference_number, verification_status, is_archived
+            FROM wims.fire_incidents
+            WHERE incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if not incident_row or incident_row[2] != "VERIFIED" or bool(incident_row[3]):
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    wildland_row = db.execute(
+        text("""
+            SELECT *
+            FROM wims.incident_wildland_afor
+            WHERE incident_id = :iid
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if not wildland_row:
+        raise HTTPException(status_code=404, detail="Wildland AFOR not found")
+
+    wildland_id = wildland_row._mapping["incident_wildland_afor_id"]
+    alarm_rows = db.execute(
+        text("""
+            SELECT sort_order, alarm_status, time_declared, ground_commander
+            FROM wims.wildland_afor_alarm_statuses
+            WHERE incident_wildland_afor_id = :wildland_id
+            ORDER BY sort_order, wildland_afor_alarm_status_id
+        """),
+        {"wildland_id": wildland_id},
+    ).fetchall()
+    assistance_rows = db.execute(
+        text("""
+            SELECT sort_order, organization_or_unit, detail
+            FROM wims.wildland_afor_assistance_rows
+            WHERE incident_wildland_afor_id = :wildland_id
+            ORDER BY sort_order, wildland_afor_assistance_row_id
+        """),
+        {"wildland_id": wildland_id},
+    ).fetchall()
+
+    return {
+        "incident_id": incident_row[0],
+        "reference_number": incident_row[1],
+        "wildland": _analyst_row_dict(wildland_row),
+        "alarm_statuses": [_analyst_row_dict(row) for row in alarm_rows],
+        "assistance_rows": [_analyst_row_dict(row) for row in assistance_rows],
     }

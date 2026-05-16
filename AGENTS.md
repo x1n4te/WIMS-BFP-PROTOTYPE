@@ -4,6 +4,31 @@
 
 This repository is a Dockerized WIMS-BFP full-stack prototype. Primary implementation lives in `src/`: `src/backend/` contains the FastAPI API, Celery tasks, models, schemas, and pytest tests; `src/frontend/` contains the Next.js App Router application, React components, client libraries, public assets, and Vitest tests. Database bootstrap SQL is in `src/postgres-init/`. Keycloak files are in `src/keycloak/`, Nginx config is in `src/nginx/`, and Suricata rules/log mounts are in `src/suricata/`. Project notes live in `docs/`; seed and utility scripts live in `scripts/`.
 
+## System Wiki & Agent Context Routing
+
+A project-local system knowledgebase lives in `system-wiki/`. This is the authoritative agent-routing wiki for the current implementation state of this repository, separate from any thesis-level wiki or external research vault.
+
+Before making non-trivial changes, agents should read:
+
+1. `AGENTS.md`
+2. `system-wiki/SCHEMA.md`
+3. `system-wiki/index.md`
+4. `system-wiki/mocs/system-map.md`
+5. The relevant subsystem page listed in `system-wiki/operations/agent-routing-guide.md`
+
+Key system-wiki pages:
+
+- `system-wiki/mocs/system-map.md`: high-level entry point and source-of-truth flow.
+- `system-wiki/operations/agent-routing-guide.md`: subsystem-specific context packs for auth, incident workflow, validation, immutable records, analytics, public DMZ, and reference data work.
+- `system-wiki/concepts/frs-module-map.md`: 15-module FRS-to-code routing map.
+- `system-wiki/backend/api-route-map.md`: FastAPI route ownership snapshot.
+- `system-wiki/frontend/route-map.md`: Next.js route surface map.
+- `system-wiki/database/schema-overview.md`: PostgreSQL/PostGIS table and migration map.
+- `system-wiki/security/security-baseline.md`: auth/RBAC/RLS/audit/IDS/XAI security baseline.
+- `system-wiki/gaps/frs-codebase-gap-register.md`: known FRS/codebase gaps and verification targets.
+
+Raw FRS files are copied under `system-wiki/raw/frs/` and must be treated as source material. Do not edit raw wiki sources directly unless replacing them with a newer authoritative FRS batch. When desk checks reveal the current true system state, update the relevant synthesis page plus `system-wiki/gaps/frs-codebase-gap-register.md` and append the change to `system-wiki/log.md`.
+
 ## Build, Test, and Development Commands
 
 - `cd src && docker compose up --build`: build and run the local stack.
