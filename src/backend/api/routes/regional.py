@@ -7,9 +7,10 @@ import io
 import hashlib
 import json
 import logging
+import uuid
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -193,6 +194,20 @@ def _incident_verification_history_has_column(db: Session, column_name: str) -> 
             """),
             {"column_name": column_name},
         ).scalar()
+    )
+
+
+def _incident_verification_history_has_hash_columns(db: Session) -> bool:
+    """Return True when IVH table has columns needed for correction hash chaining."""
+    return all(
+        _incident_verification_history_has_column(db, column_name)
+        for column_name in (
+            "old_data_hash",
+            "new_data_hash",
+            "corrected_fields",
+            "prev_ivh_hash",
+            "ivh_row_hash",
+        )
     )
 
 
@@ -3924,6 +3939,13 @@ class VerificationActionRequest(BaseModel):
     original_incident_id: int | None = None
 
 
+class CorrectionRequest(BaseModel):
+    """Body for PATCH /api/regional/incidents/{incident_id}/correct."""
+
+    corrections: dict
+    notes: str | None = None
+
+
 @router.get("/validator/incidents")
 def get_validator_incident_queue(
     user: Annotated[dict, Depends(get_national_validator)],
@@ -4388,6 +4410,223 @@ def verify_incident(
         "region_id": inc_region_id,
         "reference_number": ref_num,
         "parent_archived": parent_to_archive,
+    }
+
+
+# ---------------------------------------------------------------------------
+# M6-D: Incident Correction Workflow
+# ---------------------------------------------------------------------------
+
+
+@router.patch("/incidents/{incident_id}/correct")
+async def correct_verified_incident(
+    incident_id: int,
+    body: CorrectionRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_wims_user),
+    db: Session = Depends(get_db_with_rls),
+):
+    """Apply a correction to a VERIFIED incident.
+
+    NATIONAL_VALIDATOR and NATIONAL_ANALYST may correct any VERIFIED incident.
+    The correction updates incident_nonsensitive_details fields, recomputes
+    data_hash, writes an IVH correction row with hash chain, and syncs analytics.
+
+    Corrections are only allowed on VERIFIED rows. Non-VERIFIED rows return 409.
+    """
+    if current_user.get("role") not in ("NATIONAL_VALIDATOR", "NATIONAL_ANALYST"):
+        raise HTTPException(status_code=403, detail="Insufficient role")
+
+    corrector_user_id = uuid.UUID(current_user["user_id"])
+
+    incident_row = db.execute(
+        text("""
+            SELECT
+                fi.incident_id,
+                fi.verification_status,
+                fi.region_id,
+                fi.encoder_id,
+                fi.data_hash,
+                fi.created_at,
+                u.keycloak_id
+            FROM wims.fire_incidents fi
+            JOIN wims.users u ON u.user_id = fi.encoder_id
+            WHERE fi.incident_id = :iid AND fi.is_archived = FALSE
+            FOR UPDATE OF fi
+        """),
+        {"iid": incident_id},
+    ).fetchone()
+
+    if not incident_row:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    (
+        inc_id,
+        inc_status,
+        inc_region_id,
+        inc_encoder_id,
+        old_data_hash,
+        inc_created_at,
+        inc_keycloak_id,
+    ) = incident_row
+
+    if inc_status != "VERIFIED":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Corrections only allowed on VERIFIED incidents. Current status: {inc_status}",
+        )
+    if not _incident_verification_history_has_hash_columns(db):
+        raise HTTPException(
+            status_code=500,
+            detail="incident_verification_history hash-chain columns missing; apply SQL migrations",
+        )
+
+    ALLOWED_NSD_FIELDS = {
+        "alarm_level",
+        "general_category",
+        "sub_category",
+        "specific_type",
+        "occupancy_type",
+        "estimated_damage_php",
+        "civilian_injured",
+        "civilian_deaths",
+        "firefighter_injured",
+        "firefighter_deaths",
+        "families_affected",
+        "water_tankers_used",
+        "foam_liters_used",
+        "breathing_apparatus_used",
+        "responder_type",
+        "fire_origin",
+        "extent_of_damage",
+        "structures_affected",
+        "households_affected",
+        "individuals_affected",
+        "fire_station_name",
+        "total_response_time_minutes",
+        "total_gas_consumed_liters",
+        "stage_of_fire",
+        "recommendations",
+    }
+    corrected_fields = sorted(f for f in body.corrections if f in ALLOWED_NSD_FIELDS)
+    if not corrected_fields:
+        raise HTTPException(status_code=422, detail="No valid correction fields provided")
+
+    try:
+        db.execute(
+            text("""
+                INSERT INTO wims.incident_nonsensitive_details (incident_id)
+                SELECT :iid
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM wims.incident_nonsensitive_details WHERE incident_id = :iid
+                )
+            """),
+            {"iid": inc_id},
+        )
+
+        set_clause = ", ".join(f"{f} = :{f}" for f in corrected_fields)
+        params = {f: body.corrections[f] for f in corrected_fields}
+        params["iid"] = inc_id
+        db.execute(
+            text(
+                f"UPDATE wims.incident_nonsensitive_details SET {set_clause} WHERE incident_id = :iid"
+            ),
+            params,
+        )
+
+        canonical = {
+            "encoder_id": str(inc_encoder_id),
+            "keycloak_id": str(inc_keycloak_id),
+            "incident_id": str(inc_id),
+            "region_id": str(inc_region_id),
+            "verification_status": "VERIFIED",
+            "created_at": inc_created_at.isoformat(),
+        }
+        new_data_hash = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
+
+        db.execute(
+            text("UPDATE wims.fire_incidents SET data_hash = :h WHERE incident_id = :iid"),
+            {"h": new_data_hash, "iid": inc_id},
+        )
+
+        prev_ivh_hash = db.execute(
+            text("""
+                SELECT ivh_row_hash
+                FROM wims.incident_verification_history
+                WHERE target_type = 'OFFICIAL'
+                  AND target_id = :tid
+                  AND ivh_row_hash IS NOT NULL
+                ORDER BY action_timestamp DESC, history_id DESC
+                LIMIT 1
+            """),
+            {"tid": inc_id},
+        ).scalar()
+        action_timestamp = datetime.now(timezone.utc)
+        chain_payload = {
+            "prev_ivh_hash": prev_ivh_hash or "",
+            "new_data_hash": new_data_hash,
+            "corrected_fields": corrected_fields,
+            "action_timestamp": action_timestamp.isoformat(),
+        }
+        ivh_row_hash = hashlib.sha256(
+            json.dumps(chain_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+        db.execute(
+            text("""
+                INSERT INTO wims.incident_verification_history
+                  (target_type, target_id, action_by_user_id,
+                   previous_status, new_status, notes,
+                   old_data_hash, new_data_hash, corrected_fields,
+                   prev_ivh_hash, ivh_row_hash, action_timestamp)
+                VALUES
+                  ('OFFICIAL', :tid, :uid,
+                   'VERIFIED', 'VERIFIED', :notes,
+                   :old_hash, :new_hash, :fields,
+                   :prev_hash, :row_hash, :action_timestamp)
+            """),
+            {
+                "tid": inc_id,
+                "uid": corrector_user_id,
+                "notes": body.notes,
+                "old_hash": old_data_hash,
+                "new_hash": new_data_hash,
+                "fields": corrected_fields,
+                "prev_hash": prev_ivh_hash,
+                "row_hash": ivh_row_hash,
+                "action_timestamp": action_timestamp,
+            },
+        )
+
+        log_system_audit(
+            db=db,
+            user_id=corrector_user_id,
+            action_type="CORRECTION",
+            table_affected="fire_incidents",
+            record_id=inc_id,
+            request=request,
+        )
+
+        db.commit()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    try:
+        sync_incident_to_analytics(db, inc_id)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.exception("Analytics sync failed for corrected incident %s: %s", inc_id, e)
+
+    return {
+        "incident_id": inc_id,
+        "old_data_hash": old_data_hash,
+        "new_data_hash": new_data_hash,
+        "corrected_fields": corrected_fields,
     }
 
 
