@@ -492,11 +492,10 @@ def get_incidents(
                    nd.households_affected, nd.individuals_affected,
                    nd.responder_type, nd.fire_origin, nd.extent_of_damage,
                    sd.owner_name, sd.establishment_name, sd.caller_name,
-                   rb.barangay_name, nd.specific_type
+                   nd.specific_type
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
-            LEFT JOIN wims.ref_barangays rb ON rb.barangay_id = nd.barangay_id
             WHERE {where_sql}
             ORDER BY fi.created_at DESC
             LIMIT :limit OFFSET :offset
@@ -538,8 +537,7 @@ def get_incidents(
                 "owner_name": r[13],
                 "establishment_name": r[14],
                 "caller_name": r[15],
-                "barangay": r[16],
-                "specific_type": r[17],
+                "specific_type": r[16],
             }
             for r in rows
         ],
@@ -556,7 +554,6 @@ ANALYST_LIST_SORT_COLUMNS = {
     "notification_dt",
     "region",
     "municipality_name",
-    "barangay_name",
     "general_category",
     "sub_category",
     "alarm_level",
@@ -720,7 +717,6 @@ def get_analyst_incident_list(
             nd.notification_dt,
             COALESCE(aif.province_name, '')             AS province_name,
             COALESCE(aif.municipality_name, '')         AS municipality_name,
-            COALESCE(aif.barangay_name, rb.barangay_name, '') AS barangay_name,
             COALESCE(nd.general_category, '')           AS general_category,
             COALESCE(nd.sub_category, '')              AS sub_category,
             COALESCE(nd.alarm_level, '')               AS alarm_level,
@@ -734,7 +730,6 @@ def get_analyst_incident_list(
         LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
         LEFT JOIN wims.analytics_incident_facts aif       ON aif.incident_id = fi.incident_id
         LEFT JOIN wims.ref_regions r                      ON r.region_id = fi.region_id
-        LEFT JOIN wims.ref_barangays rb                   ON rb.barangay_id = nd.barangay_id
         WHERE {where_sql}
         {order_sql}
         LIMIT :limit OFFSET :offset
@@ -750,7 +745,6 @@ def get_analyst_incident_list(
         FROM wims.fire_incidents fi
         LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
         LEFT JOIN wims.analytics_incident_facts aif     ON aif.incident_id = fi.incident_id
-        LEFT JOIN wims.ref_barangays rb                 ON rb.barangay_id = nd.barangay_id
         WHERE {where_sql}
     """
     total = (
@@ -772,16 +766,15 @@ def get_analyst_incident_list(
                 "notification_dt": r[1].isoformat() if r[1] else None,
                 "province_name": r[2],
                 "municipality_name": r[3],
-                "barangay_name": r[4],
-                "general_category": r[5],
-                "sub_category": r[6],
-                "alarm_level": r[7],
-                "estimated_damage_php": float(r[8]) if r[8] is not None else None,
-                "total_response_time_minutes": r[9],
-                "region": r[10],
-                "verification_status": r[11],
-                "reference_number": r[12],
-                "created_at": r[13].isoformat() if r[13] else None,
+                "general_category": r[4],
+                "sub_category": r[5],
+                "alarm_level": r[6],
+                "estimated_damage_php": float(r[7]) if r[7] is not None else None,
+                "total_response_time_minutes": r[8],
+                "region": r[9],
+                "verification_status": r[10],
+                "reference_number": r[11],
+                "created_at": r[12].isoformat() if r[12] else None,
             }
             for r in rows
         ],
@@ -821,7 +814,6 @@ def get_analyst_incident_detail(
                 COALESCE(r.region_code, r.region_name, '') AS region,
                 COALESCE(aif.province_name, '')     AS province_name,
                 COALESCE(aif.municipality_name, '')  AS municipality_name,
-                COALESCE(aif.barangay_name, rb.barangay_name, '') AS barangay_name,
                 COALESCE(nd.general_category, '')    AS general_category,
                 COALESCE(nd.sub_category, '')       AS sub_category,
                 COALESCE(nd.alarm_level, '')        AS alarm_level,
@@ -837,7 +829,6 @@ def get_analyst_incident_detail(
             LEFT JOIN wims.incident_nonsensitive_details nd  ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.analytics_incident_facts aif       ON aif.incident_id = fi.incident_id
             LEFT JOIN wims.ref_regions r                      ON r.region_id = fi.region_id
-            LEFT JOIN wims.ref_barangays rb                   ON rb.barangay_id = nd.barangay_id
             WHERE fi.incident_id = :iid
         """),
         {"iid": incident_id},
@@ -877,15 +868,14 @@ def get_analyst_incident_detail(
         "region": row[8],
         "province_name": row[9],
         "municipality_name": row[10],
-        "barangay_name": row[11],
-        "general_category": row[12],
-        "sub_category": row[13],
-        "alarm_level": row[14],
-        "estimated_damage_php": float(row[15]) if row[15] is not None else None,
-        "total_response_time_minutes": row[16],
-        "casualty_severity": row[17],
+        "general_category": row[11],
+        "sub_category": row[12],
+        "alarm_level": row[13],
+        "estimated_damage_php": float(row[14]) if row[14] is not None else None,
+        "total_response_time_minutes": row[15],
+        "casualty_severity": row[16],
         "data_hash": row[6],
-        "sync_status": row[18],
+        "sync_status": row[17],
         "has_wildland_afor": has_wildland_afor,
     }
 

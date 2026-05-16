@@ -92,11 +92,9 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                        nd.civilian_injured, nd.civilian_deaths,
                        nd.firefighter_injured, nd.firefighter_deaths,
                        nd.total_response_time_minutes, nd.estimated_damage_php,
-                       nd.fire_station_name, nd.city_municipality, nd.province_district,
-                       rb.barangay_name
+                       nd.fire_station_name, nd.city_municipality, nd.province_district
                 FROM wims.fire_incidents fi
                 LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
-                LEFT JOIN wims.ref_barangays rb ON rb.barangay_id = nd.barangay_id
                 WHERE fi.incident_id = :iid
             """),
             {"iid": incident_id},
@@ -141,7 +139,6 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
     fire_station_name = row[14]
     municipality_name = row[15]
     province_name = row[16]
-    barangay_name = row[17]
 
     try:
         db.execute(
@@ -151,12 +148,12 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                      alarm_level, general_category,
                      civilian_injured, civilian_deaths, firefighter_injured, firefighter_deaths,
                      total_response_time_minutes, estimated_damage_php,
-                     fire_station_name, municipality_name, province_name, barangay_name)
+                     fire_station_name, municipality_name, province_name)
                 SELECT :iid, :region_id, location, :notification_dt, :notification_date,
                        :alarm_level, :general_category,
                        :civilian_injured, :civilian_deaths, :firefighter_injured, :firefighter_deaths,
                        :total_response_time_minutes, :estimated_damage_php,
-                       :fire_station_name, :municipality_name, :province_name, :barangay_name
+                       :fire_station_name, :municipality_name, :province_name
                 FROM wims.fire_incidents WHERE incident_id = :iid
                 ON CONFLICT (incident_id) DO UPDATE SET
                     region_id = EXCLUDED.region_id,
@@ -174,7 +171,6 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                     fire_station_name = EXCLUDED.fire_station_name,
                     municipality_name = EXCLUDED.municipality_name,
                     province_name = EXCLUDED.province_name,
-                    barangay_name = EXCLUDED.barangay_name,
                     synced_at = now()
             """),
             {
@@ -193,7 +189,6 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                 "fire_station_name": fire_station_name,
                 "municipality_name": municipality_name,
                 "province_name": province_name,
-                "barangay_name": barangay_name,
             },
         )
     except Exception as e:
@@ -209,7 +204,7 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
     if not incident_ids:
         return
 
-    # Bulk fetch: join fire_incidents + incident_nonsensitive_details + ref_barangays
+    # Bulk fetch: join fire_incidents + incident_nonsensitive_details
     # Partition into delete-candidates vs upsert-candidates in SQL
     rows = db.execute(
         text("""
@@ -230,13 +225,10 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                 nd.estimated_damage_php,
                 nd.fire_station_name,
                 nd.city_municipality,
-                nd.province_district,
-                rb.barangay_name
+                nd.province_district
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd
                 ON nd.incident_id = fi.incident_id
-            LEFT JOIN wims.ref_barangays rb
-                ON rb.barangay_id = nd.barangay_id
             WHERE fi.incident_id = ANY(:iids)
         """),
         {"iids": incident_ids},
@@ -285,7 +277,6 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                     "fire_station_name": r[14],
                     "municipality_name": r[15],
                     "province_name": r[16],
-                    "barangay_name": r[17],
                 }
                 for r in to_upsert
             ]
@@ -296,7 +287,7 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                          alarm_level, general_category,
                          civilian_injured, civilian_deaths, firefighter_injured, firefighter_deaths,
                          total_response_time_minutes, estimated_damage_php,
-                         fire_station_name, municipality_name, province_name, barangay_name)
+                         fire_station_name, municipality_name, province_name)
                     SELECT
                         data.iid, data.region_id, fi.location,
                         data.notification_dt, data.notification_date,
@@ -304,8 +295,7 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                         data.civilian_injured, data.civilian_deaths,
                         data.firefighter_injured, data.firefighter_deaths,
                         data.total_response_time_minutes, data.estimated_damage_php,
-                        data.fire_station_name, data.municipality_name, data.province_name,
-                        data.barangay_name
+                        data.fire_station_name, data.municipality_name, data.province_name
                     FROM jsonb_to_recordset(:rows::jsonb) AS data(
                         iid INTEGER,
                         region_id INTEGER,
@@ -322,8 +312,7 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                         estimated_damage_php NUMERIC,
                         fire_station_name TEXT,
                         municipality_name TEXT,
-                        province_name TEXT,
-                        barangay_name TEXT
+                        province_name TEXT
                     )
                     JOIN wims.fire_incidents fi ON fi.incident_id = data.iid
                     ON CONFLICT (incident_id) DO UPDATE SET
@@ -342,7 +331,6 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                         fire_station_name = EXCLUDED.fire_station_name,
                         municipality_name = EXCLUDED.municipality_name,
                         province_name = EXCLUDED.province_name,
-                        barangay_name = EXCLUDED.barangay_name,
                         synced_at = now()
                 """),
                 {"rows": json.dumps(upsert_rows)},
@@ -378,13 +366,10 @@ def backfill_analytics_facts(db: Session) -> int:
                 nd.estimated_damage_php,
                 nd.fire_station_name,
                 nd.city_municipality,
-                nd.province_district,
-                rb.barangay_name
+                nd.province_district
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd
                 ON nd.incident_id = fi.incident_id
-            LEFT JOIN wims.ref_barangays rb
-                ON rb.barangay_id = nd.barangay_id
             WHERE fi.verification_status = 'VERIFIED' AND fi.is_archived = FALSE
         """)
     ).fetchall()
@@ -410,7 +395,6 @@ def backfill_analytics_facts(db: Session) -> int:
             "fire_station_name": r[12],
             "municipality_name": r[13],
             "province_name": r[14],
-            "barangay_name": r[15],
         }
         for r in rows
     ]
@@ -423,7 +407,7 @@ def backfill_analytics_facts(db: Session) -> int:
                      alarm_level, general_category,
                      civilian_injured, civilian_deaths, firefighter_injured, firefighter_deaths,
                      total_response_time_minutes, estimated_damage_php,
-                     fire_station_name, municipality_name, province_name, barangay_name)
+                     fire_station_name, municipality_name, province_name)
                 SELECT
                     data.iid, data.region_id, fi.location,
                     data.notification_dt, data.notification_date,
@@ -431,8 +415,7 @@ def backfill_analytics_facts(db: Session) -> int:
                     data.civilian_injured, data.civilian_deaths,
                     data.firefighter_injured, data.firefighter_deaths,
                     data.total_response_time_minutes, data.estimated_damage_php,
-                    data.fire_station_name, data.municipality_name, data.province_name,
-                    data.barangay_name
+                    data.fire_station_name, data.municipality_name, data.province_name
                 FROM jsonb_to_recordset(:rows::jsonb) AS data(
                     iid INTEGER,
                     region_id INTEGER,
@@ -449,8 +432,7 @@ def backfill_analytics_facts(db: Session) -> int:
                     estimated_damage_php NUMERIC,
                     fire_station_name TEXT,
                     municipality_name TEXT,
-                    province_name TEXT,
-                    barangay_name TEXT
+                    province_name TEXT
                 )
                 JOIN wims.fire_incidents fi ON fi.incident_id = data.iid
                 ON CONFLICT (incident_id) DO UPDATE SET
@@ -469,7 +451,6 @@ def backfill_analytics_facts(db: Session) -> int:
                     fire_station_name = EXCLUDED.fire_station_name,
                     municipality_name = EXCLUDED.municipality_name,
                     province_name = EXCLUDED.province_name,
-                    barangay_name = EXCLUDED.barangay_name,
                     synced_at = now()
             """),
             {"rows": json.dumps(upsert_rows)},
@@ -684,7 +665,6 @@ def get_export_rows(
         "region_id",
         "verification_status",
         "estimated_damage_php",
-        "barangay_name",
         "municipality_name",
         "province_name",
     }
@@ -705,7 +685,6 @@ def get_export_rows(
         "total_response_time_minutes",
         "estimated_damage_php",
         "fire_station_name",
-        "barangay_name",
         "municipality_name",
         "province_name",
     }
@@ -882,55 +861,6 @@ def get_type_distribution(
     return [{"type": r[0], "count": r[1]} for r in rows]
 
 
-def get_top_barangays(
-    db: Session,
-    *,
-    limit: int = 10,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    region_id: Optional[int] = None,
-    province: Optional[str] = None,
-    municipality: Optional[str] = None,
-    incident_type: Optional[str] = None,
-    alarm_level: Optional[str] = None,
-    casualty_severity: Optional[str] = None,
-    damage_min: Optional[float] = None,
-    damage_max: Optional[float] = None,
-) -> list[dict[str, Any]]:
-    """Top N barangays by incident count."""
-    clauses = ["a.barangay_name IS NOT NULL"]
-    params: dict[str, Any] = {}
-    _append_common_filters(
-        clauses,
-        params,
-        start_date=start_date,
-        end_date=end_date,
-        region_id=region_id,
-        province=province,
-        municipality=municipality,
-        incident_type=incident_type,
-        alarm_level=alarm_level,
-        casualty_severity=casualty_severity,
-        damage_min=damage_min,
-        damage_max=damage_max,
-    )
-
-    params["limit"] = min(limit, 50)
-    where_sql = " AND ".join(clauses)
-    rows = db.execute(
-        text(f"""
-            SELECT a.barangay_name, COUNT(*) AS cnt
-            FROM wims.analytics_incident_facts a
-            WHERE {where_sql}
-            GROUP BY a.barangay_name
-            ORDER BY cnt DESC
-            LIMIT :limit
-        """),
-        params,
-    ).fetchall()
-    return [{"barangay": r[0], "count": r[1]} for r in rows]
-
-
 def get_response_time_by_region(
     db: Session,
     *,
@@ -1048,7 +978,6 @@ def get_compare_regions(
 
 VALID_TOP_N_METRICS = ("incidents", "response_time", "casualties")
 VALID_TOP_N_DIMENSIONS = {
-    "barangay": "a.barangay_name",
     "fire_station": "a.fire_station_name",
     "region": "a.region_id::text",
     "municipality": "a.municipality_name",

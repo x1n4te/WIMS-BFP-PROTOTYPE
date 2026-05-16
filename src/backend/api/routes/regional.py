@@ -2837,7 +2837,6 @@ class IncidentCreateRequest(BaseModel):
     specific_type: str | None = None
     occupancy_type: str | None = None
     city_id: int | None = None
-    barangay_id: int | None = None
     distance_from_station_km: float | None = None
     estimated_damage_php: float | None = None
     civilian_injured: int = 0
@@ -2889,7 +2888,6 @@ class IncidentUpdateRequest(BaseModel):
     specific_type: str | None = None
     occupancy_type: str | None = None
     city_id: int | None = None
-    barangay_id: int | None = None
     distance_from_station_km: float | None = None
     estimated_damage_php: float | None = None
     civilian_injured: int | None = None

@@ -41,7 +41,6 @@ ALLOWED_EXPORT_COLUMNS = {
     "region_id",
     "verification_status",
     "estimated_damage_php",
-    "barangay_name",
     "municipality_name",
     "province_name",
 }
@@ -52,7 +51,6 @@ DEFAULT_EXPORT_COLUMNS = [
     "region_id",
     "province_name",
     "municipality_name",
-    "barangay_name",
     "alarm_level",
     "general_category",
     "sub_category",
