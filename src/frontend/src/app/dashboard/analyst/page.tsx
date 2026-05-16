@@ -12,7 +12,6 @@ import {
   fetchComparativeData,
   fetchRegions,
   fetchTypeDistribution,
-  fetchTopBarangays,
   fetchResponseTimeByRegion,
   fetchCompareRegions,
   fetchTopN,
@@ -21,7 +20,6 @@ import {
   type TrendsResponse,
   type ComparativeResponse,
   type TypeDistributionItem,
-  type TopBarangayItem,
   type ResponseTimeRegionItem,
   type CompareRegionItem,
   type TopNItem,
@@ -29,7 +27,6 @@ import {
 } from '@/lib/api';
 import { TrendCharts } from '@/components/analytics/TrendCharts';
 import { TypeDistributionChart } from '@/components/analytics/TypeDistributionChart';
-import { TopBarangaysChart } from '@/components/analytics/TopBarangaysChart';
 import { ResponseTimeChart } from '@/components/analytics/ResponseTimeChart';
 import { AnalystIncidentList } from '@/components/analytics/AnalystIncidentList';
 import {
@@ -255,8 +252,6 @@ export default function AnalystDashboardPage() {
   const [exportModal, setExportModal] = useState<{ format: ExportFormat; open: boolean } | null>(null);
   // AQ-06: Type distribution
   const [typeDistribution, setTypeDistribution] = useState<TypeDistributionItem[] | null>(null);
-  // AQ-07: Top barangays
-  const [topBarangays, setTopBarangays] = useState<TopBarangayItem[] | null>(null);
   // AQ-08: Response time by region
   const [responseTime, setResponseTime] = useState<ResponseTimeRegionItem[] | null>(null);
   // AQ-13: Cross-region comparison
@@ -264,7 +259,7 @@ export default function AnalystDashboardPage() {
   // AQ-14: Top-N
   const [topNData, setTopNData] = useState<TopNItem[] | null>(null);
   const [topNMetric, setTopNMetric] = useState('incidents');
-  const [topNDimension, setTopNDimension] = useState('barangay');
+  const [topNDimension, setTopNDimension] = useState('municipality');
   const [appliedIncidentFilters, setAppliedIncidentFilters] = useState<AnalystIncidentListParams>({});
 
   type FilterOverrides = {
@@ -323,7 +318,7 @@ export default function AnalystDashboardPage() {
         ? (regions.length >= 2 ? regions.map((r) => r.region_id) : PH_REGIONS.map((r) => r.regionId))
         : [];
       setAppliedIncidentFilters(filters as AnalystIncidentListParams);
-      const [heatmapRes, trendsRes, comparativeRes, typeDistRes, topBgyRes, respTimeRes, cmpRegionsRes, topNRes] = await Promise.all([
+      const [heatmapRes, trendsRes, comparativeRes, typeDistRes, respTimeRes, cmpRegionsRes, topNRes] = await Promise.all([
         fetchHeatmapData(filters),
         fetchTrendData({ ...filters, interval: iv }),
         fetchComparativeData({
@@ -334,7 +329,6 @@ export default function AnalystDashboardPage() {
           ...filters,
         }),
         fetchTypeDistribution(filters),
-        fetchTopBarangays({ ...filters, limit: 10 }),
         fetchResponseTimeByRegion(filters),
         comparisonRegionIds.length >= 2
           ? fetchCompareRegions({
@@ -349,7 +343,6 @@ export default function AnalystDashboardPage() {
       setTrends(trendsRes);
       setComparative(comparativeRes);
       setTypeDistribution(typeDistRes);
-      setTopBarangays(topBgyRes);
       setResponseTime(respTimeRes);
       setCompareRegions(cmpRegionsRes.length >= 2 ? cmpRegionsRes : null);
       setTopNData(topNRes);
@@ -972,18 +965,6 @@ export default function AnalystDashboardPage() {
                   />
                   <div className="p-5">
                     <TypeDistributionChart data={typeDistribution ?? []} />
-                  </div>
-                </div>
-
-                {/* AQ-07: Top barangays horizontal bar chart */}
-                <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
-                  <PanelHeader
-                    icon={<MapPinned className="h-5 w-5" />}
-                    title="Top Barangays"
-                    description="Highest verified incident count"
-                  />
-                  <div className="p-5">
-                    <TopBarangaysChart data={topBarangays ?? []} />
                   </div>
                 </div>
 
