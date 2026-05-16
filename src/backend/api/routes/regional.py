@@ -1529,6 +1529,52 @@ def parse_xlsx_content(content: bytes, region_id: int) -> tuple[list[AforParsedR
 
 
 # ---------------------------------------------------------------------------
+# Region name alias matching (for AFOR import region mismatch check)
+# ---------------------------------------------------------------------------
+
+# Maps DB region_name (uppercase) → accepted alternative abbreviations/spellings.
+# The existing substring check handles most cases (e.g. "ILOCOS REGION" is already
+# in "REGION I - ILOCOS REGION"), so only add entries that substring matching misses.
+_REGION_ALIASES: dict[str, list[str]] = {
+    "NATIONAL CAPITAL REGION": ["NCR", "METRO MANILA"],
+    "CORDILLERA ADMINISTRATIVE REGION": ["CAR"],
+    "REGION I - ILOCOS REGION": ["REGION 1"],
+    "REGION II - CAGAYAN VALLEY": ["REGION 2"],
+    "REGION III - CENTRAL LUZON": ["REGION 3"],
+    "REGION IV-A - CALABARZON": ["REGION 4-A", "REGION 4A", "REGION IVA"],
+    "REGION IV-B - MIMAROPA": ["REGION 4-B", "REGION 4B", "REGION IVB"],
+    "REGION V - BICOL REGION": ["REGION 5"],
+    "REGION VI - WESTERN VISAYAS": ["REGION 6"],
+    "REGION VII - CENTRAL VISAYAS": ["REGION 7"],
+    "REGION VIII - EASTERN VISAYAS": ["REGION 8"],
+    "REGION IX - ZAMBOANGA PENINSULA": ["REGION 9"],
+    "REGION X - NORTHERN MINDANAO": ["REGION 10"],
+    "REGION XI - DAVAO REGION": ["REGION 11"],
+    "REGION XII - SOCCSKSARGEN": ["REGION 12"],
+    "REGION XIII - CARAGA": ["REGION 13"],
+    "BARMM": ["BANGSAMORO", "ARMM", "BANGSAMORO AUTONOMOUS REGION IN MUSLIM MINDANAO"],
+    "NIR - NEGROS ISLAND REGION": ["NIR", "NEGROS ISLAND REGION"],
+}
+
+
+def _region_text_matches(encoder_region_name: str, xlsx_region_text: str) -> bool:
+    """Return True if xlsx_region_text refers to the same PH region as encoder_region_name.
+
+    Handles acronym equivalents (NCR = National Capital Region, CAR = Cordillera
+    Administrative Region, etc.) and Arabic/Roman numeral variants for numbered regions.
+    """
+    enc = encoder_region_name.strip().upper()
+    xlsx = xlsx_region_text.strip().upper()
+    if enc in xlsx or xlsx in enc:
+        return True
+    for alias in _REGION_ALIASES.get(enc, []):
+        a = alias.upper()
+        if a == xlsx or a in xlsx or xlsx in a:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -1586,9 +1632,7 @@ async def import_afor_file(
                 {"rid": region_id},
             ).fetchone()
             if encoder_region_row:
-                encoder_name = encoder_region_row[0].strip().upper()
-                xlsx_upper = xlsx_region_text.upper()
-                if encoder_name not in xlsx_upper and xlsx_upper not in encoder_name:
+                if not _region_text_matches(encoder_region_row[0], xlsx_region_text):
                     raise HTTPException(
                         status_code=400,
                         detail=(
