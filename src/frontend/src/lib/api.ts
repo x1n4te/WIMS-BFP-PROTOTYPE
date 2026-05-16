@@ -905,11 +905,6 @@ export interface TypeDistributionItem {
   count: number;
 }
 
-export interface TopBarangayItem {
-  barangay: string;
-  count: number;
-}
-
 export interface ResponseTimeRegionItem {
   region_id: number;
   region_name: string;
@@ -950,23 +945,6 @@ export async function fetchTypeDistribution(filters: AnalyticsGlobalFilters = {}
     damage_max: filters.damage_max,
   });
   return apiFetch<TypeDistributionItem[]>(`/analytics/type-distribution${qs}`);
-}
-
-export async function fetchTopBarangays(filters: AnalyticsGlobalFilters & { limit?: number } = {}): Promise<TopBarangayItem[]> {
-  const qs = buildAnalyticsParams({
-    limit: filters.limit,
-    start_date: filters.start_date,
-    end_date: filters.end_date,
-    region_id: filters.region_id,
-    province: filters.province,
-    municipality: filters.municipality,
-    incident_type: filters.incident_type,
-    alarm_level: filters.alarm_level,
-    casualty_severity: filters.casualty_severity,
-    damage_min: filters.damage_min,
-    damage_max: filters.damage_max,
-  });
-  return apiFetch<TopBarangayItem[]>(`/analytics/top-barangays${qs}`);
 }
 
 export async function fetchResponseTimeByRegion(filters: AnalyticsGlobalFilters = {}): Promise<ResponseTimeRegionItem[]> {
