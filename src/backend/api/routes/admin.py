@@ -1008,3 +1008,60 @@ def update_rate_limits(
         "login_threshold": body.limit,
         "updated_at": updated_at,
     }
+
+
+# ---------------------------------------------------------------------------
+# System Monitoring
+# ---------------------------------------------------------------------------
+
+
+@router.get("/monitoring/workers")
+def get_worker_status(
+    current_user: dict = Depends(get_system_admin),
+    db: Session = Depends(get_db),
+):
+    """Return current Celery worker liveness status."""
+    rows = db.execute(
+        text("""
+            SELECT worker_id, hostname, last_seen, active_tasks, status
+            FROM wims.worker_heartbeat
+            ORDER BY last_seen DESC
+        """)
+    ).fetchall()
+
+    return [
+        {
+            "worker_id": r[0],
+            "hostname": r[1],
+            "last_seen": r[2].isoformat() if r[2] else None,
+            "active_tasks": r[3],
+            "status": r[4],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/monitoring/system")
+def get_system_metrics(
+    current_user: dict = Depends(get_system_admin),
+):
+    """Return current system resource metrics (CPU, memory, disk)."""
+    import psutil as _psutil
+
+    cpu = _psutil.cpu_percent(interval=0.1)
+    mem = _psutil.virtual_memory()
+    disk = _psutil.disk_usage("/")
+
+    return {
+        "cpu_percent": cpu,
+        "memory": {
+            "total_mb": round(mem.total / 1024 / 1024),
+            "used_mb": round(mem.used / 1024 / 1024),
+            "percent": mem.percent,
+        },
+        "disk": {
+            "total_gb": round(disk.total / 1024 / 1024 / 1024, 1),
+            "used_gb": round(disk.used / 1024 / 1024 / 1024, 1),
+            "percent": disk.percent,
+        },
+    }
