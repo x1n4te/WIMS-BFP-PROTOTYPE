@@ -132,7 +132,7 @@ def get_trends_route(
     municipality: Optional[str] = Query(None),
     incident_type: Optional[str] = None,
     alarm_level: Optional[str] = None,
-    interval: str = Query("daily", pattern="^(daily|weekly|monthly)$"),
+    interval: str = Query("daily", pattern="^(daily|weekly|monthly|quarterly|yearly)$"),
     casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
     damage_min: Optional[float] = Query(None, ge=0),
     damage_max: Optional[float] = Query(None, ge=0),

@@ -584,7 +584,13 @@ def get_trends(
     )
 
     where_sql = " AND ".join(clauses)
-    trunc_val = {"daily": "day", "weekly": "week", "monthly": "month"}[interval]
+    trunc_val = {
+        "daily": "day",
+        "weekly": "week",
+        "monthly": "month",
+        "quarterly": "quarter",
+        "yearly": "year",
+    }[interval]
 
     rows = db.execute(
         text(f"""
@@ -648,6 +654,7 @@ def get_export_rows(
     db: Session,
     filters: dict[str, Any],
     columns: list[str],
+    incident_ids: Optional[list[int]] = None,
 ) -> list[dict[str, Any]]:
     """
     Fetch analyst-safe rows for CSV export from analytics_incident_facts.
@@ -730,6 +737,9 @@ def get_export_rows(
     if filters.get("incident_id") is not None:
         clauses.append("a.incident_id = :incident_id")
         params["incident_id"] = filters.get("incident_id")
+    if incident_ids:
+        clauses.append("a.incident_id = ANY(:incident_ids)")
+        params["incident_ids"] = sorted(set(incident_ids))
 
     where_sql = " AND ".join(clauses)
     col_list = ", ".join(select_parts)
@@ -744,6 +754,17 @@ def get_export_rows(
 
     rows = db.execute(text(sql), params).fetchall()
     return [dict(zip(valid_cols, r)) for r in rows]
+
+
+def get_analyst_export_rows(
+    db: Session,
+    filters: dict[str, Any],
+    columns: list[str],
+    incident_ids: Optional[list[int]] = None,
+) -> list[dict[str, Any]]:
+    """Fetch analyst incident export rows, optionally intersected by selected IDs."""
+    deduped_ids = sorted(set(incident_ids or [])) or None
+    return get_export_rows(db, filters, columns, incident_ids=deduped_ids)
 
 
 def count_export_rows(db: Session, filters: dict[str, Any]) -> int:

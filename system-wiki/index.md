@@ -1,6 +1,6 @@
 # WIMS-BFP System Wiki Index
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 Total synthesis pages: 13
 Purpose: project-local knowledgebase for agents routing themselves to relevant WIMS-BFP context.
 

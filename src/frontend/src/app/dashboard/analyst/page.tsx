@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useCallback, type MouseEvent, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import type { Region } from '@/types/api';
@@ -46,6 +47,10 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { ExportPreviewModal, type ExportFormat } from '@/components/analytics/ExportPreviewModal';
+import {
+  createAnalystWorkflowTransferUrl,
+  type AnalystWorkflowSlug,
+} from '@/lib/analyst-workflow-transfer';
 import { getShortRegionName, PH_REGIONS } from '@/lib/ph-regions';
 
 const HeatmapViewer = dynamic(
@@ -76,6 +81,51 @@ const INTERVALS = [
 ];
 
 const ANALYST_ROLES = ['NATIONAL_ANALYST', 'SYSTEM_ADMIN'];
+
+const WORKFLOW_LINKS = [
+  {
+    slug: 'comparative',
+    href: '/dashboard/analyst/comparative',
+    title: 'Comparative',
+    description: 'Period variance, calculations, export, and evidence table',
+    icon: <BarChart3 className="h-5 w-5" />,
+  },
+  {
+    slug: 'heatmap',
+    href: '/dashboard/analyst/heatmap',
+    title: 'Heatmap',
+    description: 'Map-first geographic review with filtered records',
+    icon: <MapPinned className="h-5 w-5" />,
+  },
+  {
+    slug: 'trends',
+    href: '/dashboard/analyst/trends',
+    title: 'Trends',
+    description: 'Interval controls, bucket totals, and incident table',
+    icon: <TrendingUp className="h-5 w-5" />,
+  },
+  {
+    slug: 'response-time',
+    href: '/dashboard/analyst/response-time',
+    title: 'Response Time',
+    description: 'Regional min, max, average detail, and export',
+    icon: <Clock className="h-5 w-5" />,
+  },
+  {
+    slug: 'top-n',
+    href: '/dashboard/analyst/top-n',
+    title: 'Top-N Hotspots',
+    description: 'Metric and dimension controls for hotspot ranking',
+    icon: <ListChecks className="h-5 w-5" />,
+  },
+  {
+    slug: 'incident-explorer',
+    href: '/dashboard/analyst/incident-explorer',
+    title: 'Incident Explorer',
+    description: 'Dedicated verified incident table and detail drawer',
+    icon: <Search className="h-5 w-5" />,
+  },
+];
 
 function FilterField({
   label,
@@ -395,6 +445,33 @@ export default function AnalystDashboardPage() {
   const averageResponseTime = responseTime && responseTime.length > 0
     ? responseTime.reduce((sum, item) => sum + Number(item.avg_response_time || 0), 0) / responseTime.length
     : null;
+  const dashboardTransferFilters = useMemo<AnalystIncidentListParams>(() => ({
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
+    region_id: regionId ? parseInt(regionId, 10) : undefined,
+    province: province || undefined,
+    municipality: municipality || undefined,
+    incident_type: incidentType || undefined,
+    alarm_level: alarmLevel || undefined,
+    casualty_severity: casualtySeverity ? casualtySeverity as 'high' | 'medium' | 'low' : undefined,
+    damage_min: damageMin ? parseFloat(damageMin) : undefined,
+    damage_max: damageMax ? parseFloat(damageMax) : undefined,
+  }), [
+    alarmLevel,
+    casualtySeverity,
+    damageMax,
+    damageMin,
+    endDate,
+    incidentType,
+    municipality,
+    province,
+    regionId,
+    startDate,
+  ]);
+  const openWorkflow = (event: MouseEvent<HTMLAnchorElement>, workflow: AnalystWorkflowSlug) => {
+    event.preventDefault();
+    router.push(createAnalystWorkflowTransferUrl(workflow, { filters: dashboardTransferFilters }));
+  };
 
   if (loading) {
     return (
@@ -472,6 +549,34 @@ export default function AnalystDashboardPage() {
             value={String(activeFilterCount)}
             detail={activeFilterCount === 0 ? 'Showing all verified incidents' : 'Filters are limiting the dashboard'}
           />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+        <PanelHeader
+          icon={<BarChart3 className="h-5 w-5" />}
+          title="Analyst Workflows"
+          description="Open a dedicated workspace for calculations, export actions, and the matching incident table."
+        />
+        <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+          {WORKFLOW_LINKS.map((workflow) => (
+            <Link
+              key={workflow.href}
+              href={workflow.href}
+              onClick={(event) => openWorkflow(event, workflow.slug as AnalystWorkflowSlug)}
+              className="group rounded-md border border-gray-200 bg-white p-4 transition-colors hover:border-red-200 hover:bg-red-50/40"
+            >
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-red-50 text-red-700 group-hover:bg-white">
+                  {workflow.icon}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-bold text-gray-900">{workflow.title}</span>
+                  <span className="mt-1 block text-sm text-gray-500">{workflow.description}</span>
+                </span>
+              </div>
+            </Link>
+          ))}
         </div>
       </div>
 
@@ -986,7 +1091,12 @@ export default function AnalystDashboardPage() {
                 </div>
               </div>
 
-              <AnalystIncidentList filters={appliedIncidentFilters} />
+              <AnalystIncidentList
+                filters={appliedIncidentFilters}
+                prominent
+                title="Incident Analysis Set"
+                description="Select verified incidents across pages, then send that selected set to a dedicated analyst workflow."
+              />
             </div>
 
             {/* Heatmap: portrait side column on desktop */}

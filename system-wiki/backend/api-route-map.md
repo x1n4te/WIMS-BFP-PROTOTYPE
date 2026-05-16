@@ -94,7 +94,9 @@ FastAPI route ownership snapshot from `src/backend/api/routes`.
 ## Routing Notes
 - `regional.py` owns a large share of encoder/validator incident workflow. Avoid opportunistic refactors; see [[architecture/system-overview]].
 - `analytics.py` maps to M5 analytics and exports. It includes export dispatch/download, geography filter-options, Recharts-backed chart endpoints, top-N municipality support, and global filter support for comparative/cross-region analytics.
-- `incidents.py` now includes National Analyst read-only incident list/detail/wildland endpoints. These require `NATIONAL_ANALYST` or `SYSTEM_ADMIN`, use `get_db_with_rls`, and expose only verified, non-archived incidents.
+- `incidents.py` now includes National Analyst read-only incident list/detail/wildland endpoints. These require `NATIONAL_ANALYST` or `SYSTEM_ADMIN`, use `get_db_with_rls`, and expose only verified, non-archived incidents. The analyst list endpoint accepts an optional comma-separated `incident_ids` query for selected-set evidence tables.
+- `analytics.py` trends now accepts `daily`, `weekly`, `monthly`, `quarterly`, and `yearly` intervals.
+- Planned post-grill analyst export module: selected-record/full-AFOR exports should be implemented as separate `incidents.py` analyst export endpoints (`POST /api/incidents/analyst/export`, `GET /api/incidents/analyst/export/{task_id}`), not as extensions of the aggregate analytics export endpoint. A status endpoint is deferred until after the MVP dashboard.
 - `public_dmz.py` is the unauthenticated public submission surface; fail closed on all adjacent changes and read [[security/security-baseline]].
 - `ref.py` is the reference data read API tied to `wims.ref_*` tables in [[database/schema-overview]].
 

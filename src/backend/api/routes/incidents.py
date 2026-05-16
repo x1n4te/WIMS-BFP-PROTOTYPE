@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ from auth import get_current_wims_user, get_analyst_or_admin
 from database import get_db_with_rls
 from schemas.incident import IncidentCreate, IncidentResponse
 from services.analytics_read_model import sync_incident_to_analytics
+from tasks.exports import export_analyst_incidents_task
 from api.routes.regional import _normalize_general_category
 
 router = APIRouter(prefix="/api", tags=["incidents"])
@@ -563,6 +565,12 @@ ANALYST_LIST_SORT_COLUMNS = {
 }
 
 
+class AnalystIncidentExportRequest(BaseModel):
+    filters: dict[str, Any] = {}
+    columns: list[str] = []
+    incident_ids: Optional[list[int]] = None
+
+
 def _append_analyst_casualty_filter(
     where_clauses: list[str],
     casualty_severity: str,
@@ -596,6 +604,27 @@ def _analyst_row_dict(row: Any) -> dict[str, Any]:
     return {key: _analyst_json_value(value) for key, value in row._mapping.items()}
 
 
+@router.post("/incidents/analyst/export/{export_format}")
+def export_analyst_incidents(
+    export_format: str,
+    body: AnalystIncidentExportRequest,
+    current_user: Annotated[dict, Depends(get_analyst_or_admin)],
+):
+    """Queue analyst incident export for selected IDs or the supplied filters."""
+    if export_format not in {"csv", "pdf", "excel"}:
+        raise HTTPException(status_code=422, detail="format must be csv, pdf, or excel")
+
+    incident_ids = sorted(set(body.incident_ids or [])) or None
+    result = export_analyst_incidents_task.delay(
+        user_id=str(current_user["user_id"]),
+        filters=body.filters,
+        columns=body.columns,
+        incident_ids=incident_ids,
+        format=export_format,
+    )
+    return {"task_id": result.id}
+
+
 @router.get("/incidents/analyst-list")
 def get_analyst_incident_list(
     _user: Annotated[dict, Depends(get_analyst_or_admin)],
@@ -610,6 +639,7 @@ def get_analyst_incident_list(
     casualty_severity: Optional[str] = Query(None, pattern="^(high|medium|low)$"),
     damage_min: Optional[float] = Query(None, ge=0),
     damage_max: Optional[float] = Query(None, ge=0),
+    incident_ids: Optional[str] = Query(None, description="Comma-separated incident IDs"),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     sort_by: Optional[str] = Query(None),
@@ -648,6 +678,15 @@ def get_analyst_incident_list(
     if alarm_level:
         where_clauses.append("nd.alarm_level = :alarm_level")
         params["alarm_level"] = alarm_level
+
+    if incident_ids:
+        try:
+            parsed_incident_ids = [int(x.strip()) for x in incident_ids.split(",") if x.strip()]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="incident_ids must be comma-separated integers") from exc
+        if parsed_incident_ids:
+            where_clauses.append("fi.incident_id = ANY(:incident_ids)")
+            params["incident_ids"] = parsed_incident_ids
 
     if casualty_severity:
         _append_analyst_casualty_filter(where_clauses, casualty_severity)

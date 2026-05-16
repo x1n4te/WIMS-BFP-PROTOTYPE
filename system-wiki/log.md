@@ -80,3 +80,93 @@ Format: `## [YYYY-MM-DD] action | subject`
 ## [2026-05-15] handoff | National analyst validation and Keycloak fixes
 - Created `system-wiki/sessions/2026-05-15_1148_xynate_national-analyst-validation-keycloak-handoff.md`.
 - Handoff points the next session toward a docs-driven/grill pass for dedicated National Analyst pages and references existing wiki artifacts instead of duplicating them.
+## [2026-05-15] update | Dedicated National Analyst workflow pages
+- Added `/dashboard/analyst/[workflow]` with focused workflow pages for `comparative`, `heatmap`, `trends`, `response-time`, `top-n`, and `incident-explorer`.
+- Added dashboard workflow launch cards and expanded the `NATIONAL_ANALYST` sidebar section with direct workflow links.
+- Updated frontend route map, National Analyst evaluation, UI/UX gap register, FRS/codebase gap register, and index date. Validation completed: frontend lint, existing analyst Vitest suites, and frontend production build.
+## [2026-05-15] decision | Analyst workflow filter handoff
+- Dedicated analyst workflow pages should initialize their local filters from the active `/dashboard/analyst` global filters when opened from the overview dashboard.
+- Each workflow page also needs a local reset/clear action that resets only that workflow page's filter inputs and does not mutate the overview dashboard's current filters.
+## [2026-05-15] decision | Comparative workflow and selected incident export
+- Comparative analysis should apply the same non-date global/local filters to both periods; only `Range A` and `Range B` date windows differ.
+- The analyst incident list should become more prominent and support a selected incident set that can be exported independently to CSV/PDF, instead of only exporting the full filtered analytics result.
+## [2026-05-15] decision | Analyst incident-list pagination and selection persistence
+- Dashboard incident-list selections should persist across pagination while filters remain unchanged.
+- The dedicated incident-explorer page should present a denser 100-row page size for bulk review, while the dashboard can keep its smaller overview page size.
+## [2026-05-15] decision | Selected-set workflow transfer
+- Normal dedicated-workflow navigation transfers active filters only.
+- Explicit "Analyze selected" actions should transfer active filters plus selected incident IDs, with a selected-set banner, selected-default exports, and local reset that clears the selected IDs.
+- Aggregate charts should not imply selected-ID calculations until backend analytics endpoints support explicit incident ID sets.
+## [2026-05-15] decision | Selected export modes
+- Selected-record CSV/PDF exports should use a dedicated column-selection modal for list/table columns.
+- Full AFOR export means all AFOR fields/columns for selected incidents, not just visible list columns.
+- Multi-incident full AFOR PDF export should generate one combined PDF with each incident starting on a new page or clearly separated section.
+## [2026-05-15] decision | Full AFOR CSV shape
+- Full AFOR CSV export should be one row per incident with all AFOR fields flattened into stable columns.
+- Repeating/nested sections should be serialized into readable semicolon-separated cell values, not expanded into multiple incident rows.
+## [2026-05-15] decision | Heatmap workflow map-area filtering
+- The dedicated heatmap/geospatial workflow should follow shared map/global filters and selected map area.
+- The incident table below the map should follow both the active map filters and the selected area.
+- Recommended local controls: map metric, aggregation level, intensity mode, incident pins toggle, administrative boundaries toggle, and map snapshot export.
+## [2026-05-15] handoff | Analyst dedicated pages grill pass
+- Created `system-wiki/sessions/2026-05-15_1223_xynate_analyst-dedicated-pages-grill-handoff.md`.
+- Handoff captures the dedicated-page decisions, current dirty files, validation results, implementation caveats, and next-session questions.
+## [2026-05-16] decision | Selected incident transfer storage
+- Selected incident handoff from `/dashboard/analyst` into dedicated workflow pages should use `sessionStorage` keyed by a short transfer ID.
+- Workflow URLs should carry only the transfer ID, e.g. `/dashboard/analyst/{workflow}?transfer={uuid}`, then initialize local filters and selected incident IDs from the browser-local payload.
+## [2026-05-16] decision | Trends workflow controls
+- Trends interval options should be daily, weekly, monthly, quarterly, and yearly.
+- Trends should also include manual Range A to Range B date inputs for the exact trend window.
+- Recommended additional controls: measure, compare-by split, and rolling average; outputs should include chart, summary tiles, and matching incident evidence table.
+## [2026-05-16] decision | Response-time workflow controls
+- Response Time should use `total_response_time_minutes` as the primary metric.
+- Recommended controls: group-by dimension, statistic, target threshold minutes, exclude incomplete timestamps default-on, and editable inherited local date range.
+- Outputs should include grouped charting, average/median/fastest/slowest/within-threshold tiles, slowest-incident outlier table, and the incident evidence table.
+## [2026-05-16] decision | Top-N workflow controls
+- Top-N / Hotspot should default to Top 10 municipalities by incident count.
+- Controls should include dimension, metric, N, and sort direction.
+- Do not add a minimum incident count threshold; truthful low-sample rankings should remain visible.
+- Outputs should include ranked chart/table, click-to-filter incident table behavior, and ranking plus evidence export.
+## [2026-05-16] decision | Incident Explorer workflow
+- Incident Explorer should be the selected-set control center.
+- It should support shared local filters, 100 rows/page, column visibility, sorting, row selection across pagination, quick search if backend-supported, drawer/detail navigation, selected-count action bar, Analyze Selected, selected-column export, full AFOR export, and Clear Selection.
+## [2026-05-16] decision | Modular selected export backend
+- Selected incident/AFOR export should be a parallel modular export system, not an extension of the existing analytics aggregate export endpoint.
+- Rationale: selected-record/full-AFOR exports have different payload shape, flattening rules, and failure modes; separation avoids turning analytics export into a single point of failure.
+## [2026-05-16] decision | Selected export API contract
+- MVP selected export endpoints should live under analyst incident routes: `POST /api/incidents/analyst/export` and `GET /api/incidents/analyst/export/{task_id}`.
+- Request body should include incident IDs, export mode (`selected_columns` or `full_afor`), format (`csv` or `pdf`), and columns for selected-column export.
+- Backend must enforce analyst/admin RBAC, re-check verified/non-archived incident eligibility, allowlist columns, and log export metadata.
+- Optional future enhancement after MVP: `GET /api/incidents/analyst/export/{task_id}/status`.
+## [2026-05-16] decision | Incident export scopes
+- The new incident export module should support both explicit selected IDs and current filtered result exports.
+- UI actions should be labeled separately as "Export selected" and "Export current result".
+- Current-result export should apply local filters across all matching verified incidents, not just the current page, and should show estimated-count confirmation before queueing.
+## [2026-05-16] decision | Dedicated workflow current-result export
+- Every dedicated analyst workflow page should support exporting its current filtered result.
+- Export UI should clearly label selected incidents, current filtered result, full AFOR for selected incidents, and full AFOR for current result.
+- Large full-AFOR current-result exports should be queued asynchronously with stronger confirmation.
+## [2026-05-16] decision | Selected-ID analytics MVP boundary
+- MVP aggregate charts/calculations should remain filter-scoped.
+- Selected incident IDs should drive table/export behavior only, with UI labeling that charts use current filters while selected exports use selected incidents.
+- Backend ID-scoped aggregate analytics is post-MVP.
+## [2026-05-16] decision | Dedicated analyst workflow MVP phasing
+- Implement in two phases for efficiency.
+- Phase 1: workflow UI and selection, including transfer-ID filter/selection handoff, local reset, prominent dashboard list, persistent selection, 100-row Incident Explorer, filter-scoped charts/evidence tables, and clear selected/export labeling.
+- Phase 2: modular incident export backend, including analyst incident export endpoints, selected/current-result scopes, selected-column CSV/PDF, full AFOR CSV/PDF, export audit logging, and focused tests.
+## [2026-05-16] implement | National Analyst Phase 1 workflow UI and selection
+- Added `src/frontend/src/lib/analyst-workflow-transfer.ts` for `sessionStorage` transfer-ID handoff from dashboard to dedicated workflow pages.
+- Made the analyst incident list prominent/selectable, with persistent selection across pagination, column visibility, selected-count actions, and "Analyze selected" workflow transfer.
+- Wired `/dashboard/analyst/[workflow]` to read transfer payloads, initialize local filters/selected IDs, provide local reset, label selected-set behavior, keep charts filter-scoped, and use 100 rows/page for Incident Explorer.
+- Added `incident_ids` support to `GET /api/incidents/analyst-list` for selected-set evidence tables.
+- Extended analytics trends interval support to daily/weekly/monthly/quarterly/yearly.
+- Validation: frontend lint passed with pre-existing warnings only; analyst Vitest suites passed (`33 passed`); backend py-compile plus focused analyst SQL contract tests passed (`4 passed`); production frontend build passed with network access for Google Fonts.
+## [2026-05-16] implement | National Analyst Phase 2 analyst incident export backend
+- Added `POST /api/incidents/analyst/export/{csv|pdf|excel}` to queue analyst incident exports for filtered results or selected `incident_ids`.
+- Added `export_analyst_incidents_task` in `src/backend/tasks/exports.py`, reusing the existing `_export`, `_write_csv`, `_write_xlsx`, and `_write_pdf` helpers.
+- Added `get_analyst_export_rows` in `src/backend/services/analytics_read_model.py`; selected IDs are deduplicated and intersected through the RLS-protected analytics read model query.
+- Schema change: `src/postgres-init/28_analytics_geography_denorm.sql` now adds `analytics_export_log.export_type`, and analyst exports log `export_type = 'analyst'`.
+- Validation: `src/backend/tests/test_analyst_export.py` added 8 tests and passed (`8 passed`); compile gates passed for `api/routes/incidents.py`, `tasks/exports.py`, and `services/analytics_read_model.py`; existing analyst SQL contract tests passed (`4 passed`).
+## [2026-05-16] implement | Deterministic incident seed data
+- Added `src/postgres-init/29_seed_incidents.sql`, an idempotent seed file with 12 verified incidents across NCR, Region IV-A, and Region V.
+- Seed data includes `fire_incidents`, nonsensitive and sensitive detail rows, verification history, analytics facts, geography denormalization fields, and materialized view refreshes for analyst dashboard/export workflows.

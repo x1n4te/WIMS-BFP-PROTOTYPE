@@ -59,6 +59,8 @@ Source: [[ui-ux/evaluation-system-admin-hub]]
 | Export backend incomplete | PDF/XLSX/download/audit backend infrastructure missing | Fixed in code; verify Celery retention/cleanup before production |
 | Analyst detail/wildland routes missing | No read-only analyst full-page incident detail or wildland detail route | Fixed in code; needs UI verification |
 | Dashboard scanability and incident-list failure state | Dashboard did not provide enough at-a-glance context, and the incident list surfaced raw 500 text during backend failures | Fixed in code; needs browser verification |
+| Dedicated analyst workflow pages missing | Major dashboard functions had no focused pages for deeper controls, exports, calculations, and incident evidence | Fixed in code via `/dashboard/analyst/[workflow]`; needs browser verification |
+| Incident list selection/export workflow | Incident list should be prominent, persist selected records across pagination, support selected-record CSV/PDF column-selection export, and provide separate full AFOR export with all AFOR fields; multi-incident full PDF should be one file with one incident per page/section | Phase 1 UI/selection fixed in code; Phase 2 modular export backend remains |
 
 Source: [[ui-ux/evaluation-national-analyst]]
 

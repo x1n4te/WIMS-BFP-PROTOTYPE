@@ -217,7 +217,7 @@ def test_analytics_trends_invalid_interval_rejected(client: TestClient):
     app.dependency_overrides[auth.get_current_wims_user] = _mock_user("NATIONAL_ANALYST")
     app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-    response = client.get("/api/analytics/trends", params={"interval": "yearly"})
+    response = client.get("/api/analytics/trends", params={"interval": "decade"})
     assert response.status_code == 422
 
 

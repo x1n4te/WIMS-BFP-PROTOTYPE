@@ -26,6 +26,14 @@ def test_analyst_list_derives_casualty_severity_from_counts():
     assert "firefighter_injured" in helper_source
 
 
+def test_analyst_list_supports_selected_incident_ids_filter():
+    source = inspect.getsource(get_analyst_incident_list)
+
+    assert "incident_ids" in source
+    assert "fi.incident_id = ANY(:incident_ids)" in source
+    assert "comma-separated integers" in source
+
+
 def test_analyst_detail_uses_provenance_columns_from_real_tables():
     source = inspect.getsource(get_analyst_incident_detail)
 

@@ -815,7 +815,7 @@ export interface HeatmapFilters {
 }
 
 export interface TrendFilters extends HeatmapFilters {
-  interval?: 'daily' | 'weekly' | 'monthly';
+  interval?: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 }
 
 export interface ComparativeFilters {
@@ -934,7 +934,7 @@ export interface TopNItem {
 export type AnalyticsFilterOptionsField = 'province' | 'municipality';
 
 export interface AnalyticsGlobalFilters extends HeatmapFilters {
-  interval?: 'daily' | 'weekly' | 'monthly';
+  interval?: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 }
 
 export async function fetchTypeDistribution(filters: AnalyticsGlobalFilters = {}): Promise<TypeDistributionItem[]> {
@@ -1112,6 +1112,7 @@ export interface AnalystIncidentListParams {
   casualty_severity?: 'high' | 'medium' | 'low';
   damage_min?: number;
   damage_max?: number;
+  incident_ids?: number[];
   page?: number;
   page_size?: number;
   sort_by?: AnalystListSortField;
@@ -1130,6 +1131,7 @@ function buildAnalystIncidentListParams(params: AnalystIncidentListParams): stri
   if (params.casualty_severity) parts.push(`casualty_severity=${params.casualty_severity}`);
   if (params.damage_min !== undefined) parts.push(`damage_min=${params.damage_min}`);
   if (params.damage_max !== undefined) parts.push(`damage_max=${params.damage_max}`);
+  if (params.incident_ids && params.incident_ids.length > 0) parts.push(`incident_ids=${encodeURIComponent(params.incident_ids.join(','))}`);
   if (params.page !== undefined) parts.push(`page=${params.page}`);
   if (params.page_size !== undefined) parts.push(`page_size=${params.page_size}`);
   if (params.sort_by) parts.push(`sort_by=${params.sort_by}`);
