@@ -7,35 +7,20 @@ Queries wims.analytics_incident_facts (read model) instead of raw operational ta
 
 from __future__ import annotations
 
-import os
-from typing import Annotated, Any, Optional
+from typing import Annotated, Optional
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from celery_config import celery_app
 from auth import get_analyst_or_admin
 from database import get_db_with_rls
 from services.analytics_read_model import (
-    count_in_range,
-    get_filter_options,
     get_heatmap_points,
-    get_trends,
-    get_type_distribution,
     get_response_time_by_region,
     get_compare_regions,
     get_top_n,
-    verify_indexed_access,
 )
 
-from tasks.exports import (
-    export_incidents_csv_task,
-    export_incidents_pdf_task,
-    export_incidents_excel_task,
-)
 from tasks.analytics_refresh import refresh_materialized_views
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
@@ -103,7 +88,7 @@ def get_heatmap(
         damage_min=damage_min,
         damage_max=damage_max,
     )
-    return data
+    return points
 
 
 @router.post("/incidents/{incident_id}/narrative")
@@ -184,7 +169,6 @@ def compare_regions_route(
     damage_max: Optional[float] = Query(None, ge=0),
 ):
     """Cross-region comparison. Requires at least 2 region IDs."""
-    from fastapi import HTTPException
 
     try:
         parsed = [int(x.strip()) for x in region_ids.split(",") if x.strip()]
