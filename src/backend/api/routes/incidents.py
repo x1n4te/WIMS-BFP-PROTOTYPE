@@ -851,16 +851,18 @@ def get_analyst_incident_detail(
     has_wildland_afor = wildland_row is not None
 
     # Encoder username (from users table)
-    encoder_row = db.execute(
-        text("SELECT username FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
-        {"uid": str(row[2])},
-    ).fetchone()
-    encoder_username = encoder_row[0] if encoder_row else None
+    encoder_username = None
+    if row[2] is not None:
+        encoder_row = db.execute(
+            text("SELECT username FROM wims.users WHERE user_id = CAST(:uid AS uuid)"),
+            {"uid": str(row[2])},
+        ).fetchone()
+        encoder_username = encoder_row[0] if encoder_row else None
 
     return {
         "incident_id": row[0],
         "reference_number": row[1],
-        "encoder_id": str(row[2]),
+        "encoder_id": str(row[2]) if row[2] is not None else None,
         "encoder_username": encoder_username,
         "verification_status": row[3],
         "created_at": row[5].isoformat() if row[5] else None,
