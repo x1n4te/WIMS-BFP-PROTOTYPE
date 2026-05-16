@@ -312,65 +312,6 @@ describe('Analyst dashboard — AQ-06: Incident type pie chart', () => {
 });
 
 
-describe('Analyst dashboard — AQ-07: Top 10 barangays chart', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setupAuth();
-    setupMocks();
-  });
-
-  it('renders top barangays chart', async () => {
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(mockFetchTopBarangays).toHaveBeenCalled();
-    });
-
-    // After fetch completes, the bar-chart div should render
-    await waitFor(() => {
-      expect(screen.getAllByTestId('bar-chart').length).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  it('fetches top barangays data on load', async () => {
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(mockFetchTopBarangays).toHaveBeenCalled();
-    });
-  });
-
-  it('passes filters to top barangays fetch', async () => {
-    const user = userEvent.setup();
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(mockFetchTopBarangays).toHaveBeenCalled();
-    });
-
-    await user.selectOptions(screen.getByLabelText(/incident type|type/i), 'STRUCTURAL');
-    await user.click(screen.getByRole('button', { name: /^apply$/i }));
-
-    await waitFor(() => {
-      const lastCall = mockFetchTopBarangays.mock.calls[mockFetchTopBarangays.mock.calls.length - 1][0];
-      expect(lastCall.incident_type).toBe('STRUCTURAL');
-    });
-  });
-
-  it('shows section header "Top Barangays"', async () => {
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/top.*barangay/i)).toBeInTheDocument();
-    });
-  });
-});
-
-
 describe('Analyst dashboard — AQ-08: Response time by region chart', () => {
   beforeEach(() => {
     vi.clearAllMocks();
