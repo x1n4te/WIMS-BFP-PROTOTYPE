@@ -85,17 +85,46 @@ ALTER TABLE wims.incident_nonsensitive_details
 
 ## Test Checklist
 
-- [ ] Import a filled XLSX → Activity Log shows "Created Draft"; incident shows General Description, Commander names, "Others: \<text\>", and correct Prepared/Noted by
-- [ ] Import XLSX with a different region as encoder → error shown naming both regions, no redirect
-- [ ] Log in as VALIDATOR role user → open any incident → detail view loads (no 404)
-- [ ] Create manual AFOR, select Extent of Damage with sub-fields → switch to another option → sub-fields clear; save → verify only the relevant fields persisted
-- [ ] Edit existing incident: change owner name, general description, vehicles affected, floor area → save → all changes appear in detail view and list
-- [ ] Try submitting with Prepared by blank or "N/A" → validation blocks submission in both create form and detail view
-- [ ] Open Regional Dashboard → incident rows show correct city and province (not "Agoncillo, Batangas")
-- [ ] Click map outside Philippines bounds → error shown, pin does not move
-- [ ] Open incident with alarm timeline → Date (MM-DD-YYYY) and Time (HH:MM) appear in separate columns; Commander column present
-- [ ] Validator Audit Trail: apply Username filter → results filter correctly (no 500 error)
-- [ ] Encoder Activity Log: apply action and city filters; pagination controls show (15/page)
-- [ ] Validator dashboard: if >10 incidents, pagination controls appear
-- [ ] Validator Audit Trail visible in sidebar for NATIONAL_VALIDATOR
+- [x] Import a filled XLSX → Activity Log shows "Created Draft"; incident shows General Description, Commander names, "Others: \<text\>", and correct Prepared/Noted by
+  - `_insert_incident_verification_history(..., action_label="CREATED_DRAFT")` called in commit_afor_import ✅
+  - Commander names read from F88–F98 per alarm level ✅
+  - Others free-text read from C219 ✅
+  - Prepared/Noted by read from C239/E239 via `_first_nonempty` ✅
+  - **Fixed**: general_description_of_involved was missing from commit_afor_import INSERT (bug found and fixed in this review)
+- [x] Import XLSX with a different region as encoder → error shown naming both regions, no redirect
+  - Backend: 400 with "Region mismatch: this AFOR is for '...', but you are assigned to '...'" ✅
+  - Frontend: `setError(...)` shown, no router.push ✅
+- [x] Log in as VALIDATOR role user → open any incident → detail view loads (no 404)
+  - `is_validator = role in ("NATIONAL_VALIDATOR", "SYSTEM_ADMIN", "NATIONAL_ANALYST", "VALIDATOR")` ✅
+- [x] Create manual AFOR, select Extent of Damage with sub-fields → switch to another option → sub-fields clear; save → verify only the relevant fields persisted
+  - `handleRadioChange('extent_of_damage', ...)` clears extent_description, floor_area, land_area, objects_count ✅
+- [x] Edit existing incident: change owner name, general description, vehicles affected, floor area → save → all changes appear in detail view and list
+  - All fields in IncidentUpdateRequest and _apply_incident_field_updates ✅
+  - owner_name mirrors to plaintext column ✅
+- [x] Try submitting with Prepared by blank or "N/A" → validation blocks submission in both create form and detail view
+  - Edit path: `isNaOrBlank` check at line ~999 in IncidentForm.tsx ✅
+  - **Fixed**: Create path was missing the same check (bug found and fixed in this review) ✅
+  - Detail view submit: `isEmpty` check in handleSubmitClick ✅
+- [x] Open Regional Dashboard → incident rows show correct city and province (not "Agoncillo, Batangas")
+  - List query uses `nd.city_municipality, nd.province_district` text columns; `_location_display` helper ✅
+- [x] Click map outside Philippines bounds → error shown, pin does not move
+  - `isInPhilippines` check with PH_BOUNDS {minLat:4.5, maxLat:21.5, minLng:116.0, maxLng:127.0} ✅
+- [x] Open incident with alarm timeline → Date (MM-DD-YYYY) and Time (HH:MM) appear in separate columns; Commander column present
+  - AlarmTimelineSection renders 4-column grid: Stage / Date / Time / Commander ✅
+- [x] Validator Audit Trail: apply Username filter → results filter correctly (no 500 error)
+  - COUNT query has `LEFT JOIN wims.users u ON u.user_id = ivh.action_by_user_id` ✅
+- [x] Encoder Activity Log: apply action and city filters; pagination controls show (15/page)
+  - PAGE_SIZE = 15; action + city_municipality + date filters; Prev/Next controls ✅
+- [x] Validator dashboard: if >10 incidents, pagination controls appear
+  - PAGE_SIZE = 10; Prev/Next controls ✅
+- [x] Validator Audit Trail visible in sidebar for NATIONAL_VALIDATOR
+  - `role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR'` → "Audit Trail" link ✅
 - [ ] Rebuild: `cd src && docker-compose up -d --build backend frontend`
+
+## Bugs Found and Fixed (code review pass, commit b95a7dc)
+
+| # | File | Bug | Fix |
+|---|------|-----|-----|
+| 1 | `regional.py` `commit_afor_import` | `general_description_of_involved` not written to DB on XLSX import | Added to INSERT column/value list; reads from `ns._response.general_description_of_involved` |
+| 2 | `IncidentForm.tsx` | Create path (manual entry) missing N/A guard for Prepared by / Noted by | Added `isNaOrBlank` check before `uploadBundle` call, matching the edit-path guard |
+| 3 | `regional.py` `list_regional_incidents` | Category filter `VEHICULAR→TRANSPORTATION` mapping broken after canonical rename | Changed `if cat_key == "TRANSPORTATION": cat_key = "VEHICULAR"` to `if cat_key == "VEHICULAR": cat_key = "TRANSPORTATION"` |
