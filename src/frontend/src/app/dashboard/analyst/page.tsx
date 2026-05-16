@@ -1069,7 +1069,6 @@ export default function AnalystDashboardPage() {
                         style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                         aria-label="Dimension"
                       >
-                        <option value="barangay">Barangay</option>
                         <option value="fire_station">Fire Station</option>
                         <option value="region">Region</option>
                         <option value="municipality">Municipality</option>

@@ -1,7 +1,7 @@
 # WIMS-BFP System Wiki Index
 
-Last updated: 2026-05-15
-Total synthesis pages: 13
+Last updated: 2026-05-16
+Total synthesis pages: 31
 Purpose: project-local knowledgebase for agents routing themselves to relevant WIMS-BFP context.
 
 ## Start Here
@@ -11,18 +11,36 @@ Purpose: project-local knowledgebase for agents routing themselves to relevant W
 ## Architecture
 - [[architecture/system-overview]] — Dockerized full-stack architecture, runtime services, and evidence sources.
 - [[architecture/context-map]] — source-of-truth hierarchy and how FRS, code, and this wiki relate.
+- [[architecture/infrastructure-config]] — Docker Compose, Nginx reverse proxy, Suricata IDS, Keycloak realm config (2641-line export).
+- [[architecture/pwa-tests-cicd]] — PWA/offline-first (IndexedDB, sync engine, service worker), test infrastructure (30 test files), CI/CD pipelines (GitHub Actions).
+- [[architecture/docs-and-scripts]] — Project documentation (10 files: ARCHITECTURE, CHANGELOG, API docs, M4 specs, PR docs) and utility scripts (14 files: seeding, geography, code generation, AFOR preview tool).
 
 ## Concepts
 - [[concepts/frs-module-map]] — 15-module FRS map with current source availability and code anchors.
 
 ## Backend
 - [[backend/api-route-map]] — FastAPI route files, endpoints, and likely module ownership.
+- [[backend/services]] — Analytics read model, duplicate detection, Keycloak admin, AI/XAI service, Suricata ingestion.
+- [[backend/utilities-and-tasks]] — Crypto (AES-256-GCM), audit trail, Redis session revocation, backup crypto, Celery export tasks (CSV/PDF/XLSX).
+- [[backend/backend-infrastructure]] — Auth module (7 dependencies), database session (RLS GUC), FastAPI entry point, ORM models (6), Pydantic schemas (6), Celery config (3 periodic tasks).
+- [[backend/remaining-routes]] — incidents.py (8 routes), analytics.py (15 routes), public_dmz.py, civilian.py (2), sessions.py (2), user.py (3), ref.py (3).
 
 ## Frontend
 - [[frontend/route-map]] — Next.js App Router pages and UI surface mapping.
+- [[frontend/frontend-infrastructure]] — Auth context, 47 API client functions, utility libraries, component tree documentation.
+- [[frontend/components-deep]] — Deep docs for all 12 analytics/modal/layout components (props, state, effects, behavior).
+
+## Subsystems (Dashboard Deep-Dives)
+- [[subsystems/admin-hub]] — System admin hub: identity, security telemetry, audit, backups, health.
+  - [[subsystems/references/admin-api-ref]] — full function-level API reference for admin.py.
+- [[subsystems/regional-dashboard]] — Regional encoder dashboard: AFOR import, incident CRUD, stats, drafts.
+  - [[subsystems/references/regional-api-ref]] — full function-level API reference for regional.py.
+  - [[subsystems/references/triage-api-ref]] — full function-level API reference for triage.py.
+- [[subsystems/validator-hub]] — National validator dashboard: verification queue, duplicate resolution, audit trail.
 
 ## Database
 - [[database/schema-overview]] — PostgreSQL/PostGIS tables and migration source files.
+- [[database/sql-init-files]] — Complete documentation of all 31 SQL init files: RLS policies, helper functions, analytics materialized views, immutable records, seed data, and migration intent.
 
 ## Security
 - [[security/security-baseline]] — auth, RBAC, RLS, audit, IDS/XAI, and fail-closed notes.

@@ -636,7 +636,6 @@ export default function AnalystWorkflowPage() {
               <FilterField label="Dimension">
                 <select value={topNDimension} onChange={(e) => setTopNDimension(e.target.value)} className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm">
                   <option value="municipality">Municipality</option>
-                  <option value="barangay">Barangay</option>
                   <option value="fire_station">Fire Station</option>
                   <option value="region">Region</option>
                 </select>
