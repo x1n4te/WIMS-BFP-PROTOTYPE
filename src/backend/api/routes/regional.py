@@ -311,15 +311,16 @@ _CATEGORY_CANONICAL: dict[str, str] = {
     "STRUCTURAL": "STRUCTURAL",
     "NON_STRUCTURAL": "NON_STRUCTURAL",
     "NON-STRUCTURAL": "NON_STRUCTURAL",
-    "VEHICULAR": "VEHICULAR",
-    "TRANSPORTATION": "VEHICULAR",
+    "VEHICULAR": "TRANSPORTATION",
+    "TRANSPORTATION": "TRANSPORTATION",
+    "WILDLAND": "WILDLAND",
 }
 
 # All known DB values for each canonical category (covers legacy form submissions)
 _CATEGORY_DB_VARIANTS: dict[str, list[str]] = {
     "STRUCTURAL": ["STRUCTURAL", "Structural"],
     "NON_STRUCTURAL": ["NON_STRUCTURAL", "Non-Structural", "NON-STRUCTURAL"],
-    "VEHICULAR": ["VEHICULAR", "Transportation", "TRANSPORTATION", "Vehicular"],
+    "TRANSPORTATION": ["TRANSPORTATION", "VEHICULAR", "Transportation", "Vehicular"],
 }
 
 
@@ -1466,6 +1467,7 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
         ],
         "_city_text": data.get("city") or "",
         "_province_text": data.get("province") or "",
+        "_region_text": data.get("region") or "",
     }
 
     if not notif_dt:
@@ -1571,6 +1573,30 @@ async def import_afor_file(
 
     if len(rows) == 0:
         raise HTTPException(status_code=400, detail="No data rows found in file")
+
+    # Region mismatch check: if the XLSX specifies a region, it must match the encoder's assigned region.
+    if form_kind == "STRUCTURAL_AFOR":
+        first_valid = next((r for r in rows if r.status == "VALID"), None)
+        xlsx_region_text = (
+            (first_valid.data.get("_region_text") or "") if first_valid else ""
+        ).strip()
+        if xlsx_region_text:
+            encoder_region_row = db.execute(
+                text("SELECT region_name FROM wims.ref_regions WHERE region_id = :rid"),
+                {"rid": region_id},
+            ).fetchone()
+            if encoder_region_row:
+                encoder_name = encoder_region_row[0].strip().upper()
+                xlsx_upper = xlsx_region_text.upper()
+                if encoder_name not in xlsx_upper and xlsx_upper not in encoder_name:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Region mismatch: this AFOR is for '{xlsx_region_text}', "
+                            f"but you are assigned to '{encoder_region_row[0]}'. "
+                            "You can only import AFORs within your assigned region."
+                        ),
+                    )
 
     valid_count = sum(1 for r in rows if r.status == "VALID")
 
@@ -2100,7 +2126,8 @@ async def commit_afor_import(
                     fire_station_name, total_response_time_minutes, total_gas_consumed_liters,
                     stage_of_fire, extent_total_floor_area_sqm, extent_total_land_area_hectares,
                     vehicles_affected, province_district, city_municipality,
-                    extent_description, extent_objects_count
+                    extent_description, extent_objects_count,
+                    general_description_of_involved
                 ) VALUES (
                     :incident_id, :city_id, :distance_from_station_km, CAST(:notification_dt AS timestamptz),
                     :alarm_level, :general_category, :sub_category,
@@ -2112,7 +2139,8 @@ async def commit_afor_import(
                     :fire_station_name, :total_response_time_minutes, :total_gas_consumed_liters,
                     :stage_of_fire, :floor_area, :land_area, :vehicles_affected,
                     :province_district, :city_municipality,
-                    :extent_description, :extent_objects_count
+                    :extent_description, :extent_objects_count,
+                    :general_description_of_involved
                 )
             """),
             {
@@ -2151,6 +2179,9 @@ async def commit_afor_import(
                 "city_municipality": row_data.get("_city_text", ""),
                 "extent_description": ns.get("extent_description") or None,
                 "extent_objects_count": ns.get("extent_objects_count"),
+                "general_description_of_involved": (ns.get("_response") or {}).get(
+                    "general_description_of_involved"
+                ) or ns.get("general_description_of_involved") or None,
             },
         )
 
@@ -2359,8 +2390,8 @@ def get_regional_incidents(
 
     if category:
         cat_key = category.strip().upper().replace("-", "_").replace(" ", "_")
-        if cat_key == "TRANSPORTATION":
-            cat_key = "VEHICULAR"
+        if cat_key == "VEHICULAR":
+            cat_key = "TRANSPORTATION"
         variants = _CATEGORY_DB_VARIANTS.get(cat_key, [category])
         where_clauses.append("nd.general_category = ANY(:categories)")
         params["categories"] = variants

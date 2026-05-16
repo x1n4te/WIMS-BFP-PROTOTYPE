@@ -471,6 +471,8 @@ export function IncidentForm({
           'Structural': 'STRUCTURAL', 'Non-Structural': 'NON_STRUCTURAL',
           'Transportation': 'TRANSPORTATION', 'Vehicular': 'TRANSPORTATION',
           'Wildland': 'WILDLAND',
+          // Backend normalizes TRANSPORTATION → VEHICULAR; map it back for the form dropdown
+          'VEHICULAR': 'TRANSPORTATION',
         };
         return legacyMap[raw] ?? raw;
       })(),
@@ -487,6 +489,7 @@ export function IncidentForm({
         const legacyCM: Record<string, string> = {
           'Structural': 'STRUCTURAL', 'Non-Structural': 'NON_STRUCTURAL',
           'Transportation': 'TRANSPORTATION', 'Vehicular': 'TRANSPORTATION', 'Wildland': 'WILDLAND',
+          'VEHICULAR': 'TRANSPORTATION',
         };
         const classification = legacyCM[rawClass] ?? rawClass;
         const opts = getTypeOptionsForClassification(classification);
@@ -1016,6 +1019,17 @@ export function IncidentForm({
     }
 
     // ── Create mode ──────────────────────────────────────────────────────────
+    const isNaOrBlank = (v: string | undefined) => !v?.trim() || v.trim().toUpperCase() === 'N/A';
+    const naErrors = new Set<string>();
+    if (isNaOrBlank(formState.disposition_prepared_by)) naErrors.add('disposition_prepared_by');
+    if (isNaOrBlank(formState.disposition_noted_by)) naErrors.add('disposition_noted_by');
+    if (naErrors.size > 0) {
+      setFieldErrors(naErrors);
+      showToast('Prepared by and Noted by cannot be empty or "N/A".');
+      setLoading(false);
+      return;
+    }
+
     const payload = { region_id: effectiveRegionId, incidents: [incident] };
 
     try {
