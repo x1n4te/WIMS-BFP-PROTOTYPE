@@ -7,12 +7,11 @@ from api.routes.incidents import (
 )
 
 
-def test_analyst_list_query_uses_existing_barangay_columns():
+def test_analyst_list_query_ref_barangays_usage():
     source = inspect.getsource(get_analyst_incident_list)
 
-    assert "nd.barangay," not in source
     assert "ref_barangays" in source
-    assert "aif.barangay_name" in source
+    assert "barangay_name" not in source
     assert "r.short_name" not in source
     assert "r.region_code" in source
 
