@@ -2226,7 +2226,9 @@ async def commit_afor_import(
                 "extent_objects_count": ns.get("extent_objects_count"),
                 "general_description_of_involved": (ns.get("_response") or {}).get(
                     "general_description_of_involved"
-                ) or ns.get("general_description_of_involved") or None,
+                )
+                or ns.get("general_description_of_involved")
+                or None,
             },
         )
 
