@@ -962,7 +962,12 @@ class BfpXlsxParser:
         }
         for c, flavor in prob_map.items():
             row_num = int(c[1:])
-            if self._is_marked_on_row(row_num):
+            if c == "B219":
+                others_text = (str(self.get("C219") or "")).strip()
+                if self._is_marked_on_row(row_num) or others_text:
+                    label = others_text if others_text else "Others"
+                    problems.append(label)
+            elif self._is_marked_on_row(row_num):
                 problems.append(flavor)
 
         icp_present = self._is_marked_on_row(102)
@@ -1028,20 +1033,28 @@ class BfpXlsxParser:
             "stage": stage,
             "extent": extent,
             "extent_total_floor_area_sqm": (
-                self.get("D58") if extent == "Confined to Room"
-                else self.get("D59") if extent == "Confined to Structure"
-                else self.get("D60") if extent in ("Total Loss", "Extended Beyond Structure")
+                self.get("D58")
+                if extent == "Confined to Room"
+                else self.get("D59")
+                if extent == "Confined to Structure"
+                else self.get("D60")
+                if extent in ("Total Loss", "Extended Beyond Structure")
                 else None
             ),
             "extent_total_land_area_hectares": (
-                self.get("E59") or self.get("D60") if extent == "Confined to Structure"
-                else self.get("E60") if extent == "Total Loss"
+                self.get("E59") or self.get("D60")
+                if extent == "Confined to Structure"
+                else self.get("E60")
+                if extent == "Total Loss"
                 else None
             ),
             "extent_description": (
-                str(self.get("D56") or "").strip() or None if extent == "None / Minor"
-                else str(self.get("D57") or "").strip() or None if extent == "Confined to Object"
-                else str(self.get("D61") or "").strip() or None if extent == "Extended Beyond Structure"
+                str(self.get("D56") or "").strip() or None
+                if extent == "None / Minor"
+                else str(self.get("D57") or "").strip() or None
+                if extent == "Confined to Object"
+                else str(self.get("D61") or "").strip() or None
+                if extent == "Extended Beyond Structure"
                 else None
             ),
             "extent_objects_count": (
@@ -1068,19 +1081,71 @@ class BfpXlsxParser:
             "tool_others": self.get("D84"),
             "hydrant_dist": self.get("D85"),
             "timeline": {
-                "alarm_foua": {"time": self.get("D88"), "date": self.get("E88")},
-                "alarm_1st": {"time": self.get("D89"), "date": self.get("E89")},
-                "alarm_2nd": {"time": self.get("D90"), "date": self.get("E90")},
-                "alarm_3rd": {"time": self.get("D91"), "date": self.get("E91")},
-                "alarm_4th": {"time": self.get("D92"), "date": self.get("E92")},
-                "alarm_5th": {"time": self.get("D93"), "date": self.get("E93")},
-                "tf_alpha": {"time": self.get("D94"), "date": self.get("E94")},
-                "tf_bravo": {"time": self.get("D95"), "date": self.get("E95")},
-                "tf_charlie": {"time": self.get("D96"), "date": self.get("E96")},
-                "tf_delta": {"time": self.get("D97"), "date": self.get("E97")},
-                "general": {"time": self.get("D98"), "date": self.get("E98")},
-                "fuc": {"time": self.get("D99"), "date": self.get("E99")},
-                "fo": {"time": self.get("D100"), "date": self.get("E100")},
+                "alarm_foua": {
+                    "time": self.get("D88"),
+                    "date": self.get("E88"),
+                    "commander": self.get("F88"),
+                },
+                "alarm_1st": {
+                    "time": self.get("D89"),
+                    "date": self.get("E89"),
+                    "commander": self.get("F89"),
+                },
+                "alarm_2nd": {
+                    "time": self.get("D90"),
+                    "date": self.get("E90"),
+                    "commander": self.get("F90"),
+                },
+                "alarm_3rd": {
+                    "time": self.get("D91"),
+                    "date": self.get("E91"),
+                    "commander": self.get("F91"),
+                },
+                "alarm_4th": {
+                    "time": self.get("D92"),
+                    "date": self.get("E92"),
+                    "commander": self.get("F92"),
+                },
+                "alarm_5th": {
+                    "time": self.get("D93"),
+                    "date": self.get("E93"),
+                    "commander": self.get("F93"),
+                },
+                "tf_alpha": {
+                    "time": self.get("D94"),
+                    "date": self.get("E94"),
+                    "commander": self.get("F94"),
+                },
+                "tf_bravo": {
+                    "time": self.get("D95"),
+                    "date": self.get("E95"),
+                    "commander": self.get("F95"),
+                },
+                "tf_charlie": {
+                    "time": self.get("D96"),
+                    "date": self.get("E96"),
+                    "commander": self.get("F96"),
+                },
+                "tf_delta": {
+                    "time": self.get("D97"),
+                    "date": self.get("E97"),
+                    "commander": self.get("F97"),
+                },
+                "general": {
+                    "time": self.get("D98"),
+                    "date": self.get("E98"),
+                    "commander": self.get("F98"),
+                },
+                "fuc": {
+                    "time": self.get("D99"),
+                    "date": self.get("E99"),
+                    "commander": self.get("F99"),
+                },
+                "fo": {
+                    "time": self.get("D100"),
+                    "date": self.get("E100"),
+                    "commander": self.get("F100"),
+                },
             },
             "icp_present": icp_present,
             "icp_location": icp_location,
@@ -1109,8 +1174,8 @@ class BfpXlsxParser:
             "problems": problems,
             "recommendations": self.get("B222"),
             "disposition": self.get("B229"),
-            "prepared_by": self.get("C238"),
-            "noted_by": self.get("F238"),
+            "prepared_by": self._first_nonempty("C239", "C240", "C238"),
+            "noted_by": self._first_nonempty("E239", "E240", "F238"),
             # Backward-compatible aliases used by older tests/scripts.
             "extent_of_damage": extent,
             "structures_affected": self.get("D62"),
@@ -1236,11 +1301,23 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
     ]:
         eng_name = data.get(name_key)
         if eng_name:
-            engines.append({
-                "name": str(eng_name).strip(),
-                "time_dispatched": _time_str(data.get(disp_key)),
-                "time_arrived": _time_str(data.get(arr_key)),
-            })
+            engines.append(
+                {
+                    "name": str(eng_name).strip(),
+                    "time_dispatched": _time_str(data.get(disp_key)),
+                    "time_arrived": _time_str(data.get(arr_key)),
+                }
+            )
+
+    def _alarm_entry(key: str) -> dict | None:
+        t = timeline.get(key) or {}
+        if not isinstance(t, dict):
+            return None
+        dt_val = _dt(t.get("date"), t.get("time"))
+        cmd = (str(t.get("commander") or "")).strip() or None
+        if dt_val or cmd:
+            return {"time": dt_val, "commander": cmd}
+        return None
 
     incident_nonsensitive_details = {
         "notification_dt": notif_dt,
@@ -1254,7 +1331,9 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
         "fire_origin": data.get("origin") or data.get("area_of_origin"),
         "extent_of_damage": normalized_extent,
         "extent_description": data.get("extent_description") or "",
-        "extent_objects_count": _safe_int(data.get("extent_objects_count"), default=None) if data.get("extent_objects_count") is not None else None,
+        "extent_objects_count": _safe_int(data.get("extent_objects_count"), default=None)
+        if data.get("extent_objects_count") is not None
+        else None,
         "stage_of_fire": data.get("stage") or data.get("stage_of_fire_upon_arrival"),
         "structures_affected": _safe_int(
             data.get("struct_aff")
@@ -1304,22 +1383,23 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
             "hydrant_distance": str(data.get("hydrant_dist") or ""),
         },
         "alarm_timeline": {
-            "alarm_foua": _dt(timeline.get("alarm_foua", {}).get("date"), timeline.get("alarm_foua", {}).get("time")),
-            "alarm_1st": _dt(timeline["alarm_1st"]["date"], timeline["alarm_1st"]["time"]),
-            "alarm_2nd": _dt(timeline["alarm_2nd"]["date"], timeline["alarm_2nd"]["time"]),
-            "alarm_3rd": _dt(timeline["alarm_3rd"]["date"], timeline["alarm_3rd"]["time"]),
-            "alarm_4th": _dt(timeline["alarm_4th"]["date"], timeline["alarm_4th"]["time"]),
-            "alarm_5th": _dt(timeline["alarm_5th"]["date"], timeline["alarm_5th"]["time"]),
-            "alarm_tf_alpha": _dt(timeline["tf_alpha"]["date"], timeline["tf_alpha"]["time"]),
-            "alarm_tf_bravo": _dt(timeline["tf_bravo"]["date"], timeline["tf_bravo"]["time"]),
-            "alarm_tf_charlie": _dt(timeline["tf_charlie"]["date"], timeline["tf_charlie"]["time"]),
-            "alarm_tf_delta": _dt(timeline["tf_delta"]["date"], timeline["tf_delta"]["time"]),
-            "alarm_general": _dt(timeline["general"]["date"], timeline["general"]["time"]),
-            "alarm_fuc": _dt(timeline["fuc"]["date"], timeline["fuc"]["time"]),
-            "alarm_fo": _dt(timeline["fo"]["date"], timeline["fo"]["time"]),
+            "alarm_foua": _alarm_entry("alarm_foua"),
+            "alarm_1st": _alarm_entry("alarm_1st"),
+            "alarm_2nd": _alarm_entry("alarm_2nd"),
+            "alarm_3rd": _alarm_entry("alarm_3rd"),
+            "alarm_4th": _alarm_entry("alarm_4th"),
+            "alarm_5th": _alarm_entry("alarm_5th"),
+            "alarm_tf_alpha": _alarm_entry("tf_alpha"),
+            "alarm_tf_bravo": _alarm_entry("tf_bravo"),
+            "alarm_tf_charlie": _alarm_entry("tf_charlie"),
+            "alarm_tf_delta": _alarm_entry("tf_delta"),
+            "alarm_general": _alarm_entry("general"),
+            "alarm_fuc": _alarm_entry("fuc"),
+            "alarm_fo": _alarm_entry("fo"),
             "_engines": engines,
             "_response": {
                 "time_returned_to_base": _time_str(data.get("time_returned")),
+                "general_description_of_involved": data.get("description") or "",
             },
         },
         "problems_encountered": data.get("problems", []),
@@ -1345,8 +1425,14 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
                 "engine_crew": data.get("pod_crew") or "",
                 "driver": data.get("pod_dpo") or "",
                 "pump_operator": data.get("pod_dpo") or "",
-                "safety_officer": {"name": data.get("pod_safety") or "", "contact": data.get("pod_safety_contact") or ""},
-                "fire_arson_investigator": {"name": data.get("pod_inv") or "", "contact": data.get("pod_inv_contact") or ""},
+                "safety_officer": {
+                    "name": data.get("pod_safety") or "",
+                    "contact": data.get("pod_safety_contact") or "",
+                },
+                "fire_arson_investigator": {
+                    "name": data.get("pod_inv") or "",
+                    "contact": data.get("pod_inv_contact") or "",
+                },
             },
             "other_personnel": data.get("others_list", []),
             "casualty_details": casualty_details,
@@ -2294,13 +2380,11 @@ def get_regional_incidents(
                    sd.owner_name, sd.establishment_name, sd.caller_name,
                    CASE WHEN iwa.incident_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_wildland,
                    fi.updated_at,
-                   c.city_name, p.province_name, rr.region_name
+                   nd.city_municipality, nd.province_district, rr.region_name
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_sensitive_details sd ON sd.incident_id = fi.incident_id
             LEFT JOIN wims.incident_wildland_afor iwa ON iwa.incident_id = fi.incident_id
-            LEFT JOIN wims.ref_cities c ON c.city_id = nd.city_id
-            LEFT JOIN wims.ref_provinces p ON p.province_id = c.province_id
             LEFT JOIN wims.ref_regions rr ON rr.region_id = fi.region_id
             WHERE {where_sql}
             ORDER BY fi.updated_at DESC NULLS LAST, fi.created_at DESC
@@ -3042,9 +3126,13 @@ class IncidentUpdateRequest(BaseModel):
     responder_type: str | None = None
     fire_origin: str | None = None
     extent_of_damage: str | None = None
+    extent_total_floor_area_sqm: float | None = None
+    extent_total_land_area_hectares: float | None = None
     stage_of_fire: str | None = None
+    general_description_of_involved: str | None = None
     fire_station_name: str | None = None
     total_response_time_minutes: int | None = None
+    vehicles_affected: int | None = None
     recommendations: str | None = None
     # Location text (free-text, replaces city_id/province join for display)
     province_district: str | None = None
@@ -3306,9 +3394,13 @@ def _apply_incident_field_updates(
         "responder_type",
         "fire_origin",
         "extent_of_damage",
+        "extent_total_floor_area_sqm",
+        "extent_total_land_area_hectares",
         "stage_of_fire",
+        "general_description_of_involved",
         "fire_station_name",
         "total_response_time_minutes",
+        "vehicles_affected",
         "recommendations",
         "station_code",
     }
@@ -3360,6 +3452,10 @@ def _apply_incident_field_updates(
         if val is not None:
             if field in pii_fields:
                 has_pii_update = True
+                # owner_name also mirrors to the plaintext column (used by list queries)
+                if field == "owner_name":
+                    sd_updates.append(f"{field} = :{field}")
+                    sd_params[field] = val
             else:
                 sd_updates.append(f"{field} = :{field}")
                 sd_params[field] = val
@@ -3787,7 +3883,9 @@ def delete_incident(
         action_label=action_label,
     )
     db.commit()
-    logger.info("Soft-deleted incident %s (status=%s) by encoder %s", incident_id, incident[1], encoder_id)
+    logger.info(
+        "Soft-deleted incident %s (status=%s) by encoder %s", incident_id, incident[1], encoder_id
+    )
     return {"status": "deleted", "incident_id": incident_id}
 
 
@@ -4073,6 +4171,7 @@ def get_validator_incident_queue(
     status: Optional[str] = None,
     show_all: bool = Query(default=False),
     encoder_id: Optional[str] = None,
+    region_id: Optional[int] = None,
     archived: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -4120,6 +4219,10 @@ def get_validator_incident_queue(
     if encoder_id:
         where_clauses.append("fi.encoder_id = CAST(:encoder_id AS uuid)")
         params["encoder_id"] = encoder_id
+
+    if region_id is not None:
+        where_clauses.append("fi.region_id = :region_id")
+        params["region_id"] = region_id
 
     where_sql = " AND ".join(where_clauses)
 
@@ -4406,22 +4509,21 @@ def verify_incident(
             )
 
     # --- 6. Apply update + audit in one transaction ---
+    #
+    # Order matters to avoid the no_update_verified rule (migration 17/29):
+    #   - The rule blocks ALL updates to VERIFIED rows except VERIFIED→REPLACED.
+    #   - We must archive the original (VERIFIED→REPLACED) BEFORE verifying the new
+    #     incident so the unique constraint on reference_number is released first.
+    #   - All updates to the new incident are combined into ONE statement executed
+    #     while its status is still the pre-transition value (e.g. PENDING), so
+    #     the rule never fires for those columns.
+    clear_dup = action == "accept_replace" and bool(effective_original_id)
     try:
-        db.execute(
-            text("""
-                UPDATE wims.fire_incidents
-                SET verification_status = :new_status,
-                    data_hash = COALESCE(:data_hash, data_hash),
-                    updated_at = now()
-                WHERE incident_id = :iid
-            """),
-            {"new_status": target_status, "iid": incident_id, "data_hash": data_hash},
-        )
-
         if parent_to_archive:
-            # Archive original first AND clear its reference_number so the unique
-            # constraint is released before we assign that ref_num to the update incident.
-            # Also set status to REPLACED so it appears correctly in the archive view.
+            # Step A: Archive the original first.
+            #   - Sets verification_status = 'REPLACED' (allowed by the fixed rule).
+            #   - NULLs reference_number so the unique constraint is released before
+            #     we assign that value to the new incident in the next statement.
             db.execute(
                 text("""
                     UPDATE wims.fire_incidents
@@ -4444,27 +4546,29 @@ def verify_incident(
                 action_label="REPLACED_EXISTING",
             )
 
-        if action == "accept_replace" and effective_original_id:
-            db.execute(
-                text("""
-                    UPDATE wims.fire_incidents
-                    SET is_duplicate = FALSE,
-                        duplicate_of = NULL,
-                        updated_at = now()
-                    WHERE incident_id = :iid
-                """),
-                {"iid": incident_id},
-            )
-
-        if ref_num:
-            db.execute(
-                text("""
-                    UPDATE wims.fire_incidents
-                    SET reference_number = :ref
-                    WHERE incident_id = :iid
-                """),
-                {"ref": ref_num, "iid": incident_id},
-            )
+        # Step B: Apply all updates to the new incident in ONE statement.
+        #   - Executed while the row still has its pre-transition status (e.g. PENDING)
+        #     so the no_update_verified rule does not fire.
+        #   - reference_number, duplicate flags, and the status change happen atomically.
+        db.execute(
+            text("""
+                UPDATE wims.fire_incidents
+                SET verification_status = :new_status,
+                    data_hash = COALESCE(:data_hash, data_hash),
+                    updated_at = now(),
+                    reference_number = COALESCE(:ref_num, reference_number),
+                    is_duplicate = CASE WHEN :clear_dup THEN FALSE ELSE is_duplicate END,
+                    duplicate_of = CASE WHEN :clear_dup THEN NULL ELSE duplicate_of END
+                WHERE incident_id = :iid
+            """),
+            {
+                "new_status": target_status,
+                "iid": incident_id,
+                "data_hash": data_hash,
+                "ref_num": ref_num,
+                "clear_dup": clear_dup,
+            },
+        )
 
         _action_label_map = {
             "accept": "APPROVED",
@@ -4862,7 +4966,9 @@ def get_encoder_audit_log(
     db: Annotated[Session, Depends(get_db_with_rls)],
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    limit: int = Query(default=50, ge=1, le=200),
+    action: Optional[str] = None,
+    city_municipality: Optional[str] = None,
+    limit: int = Query(default=15, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
     """Return the current encoder's own action history from incident_verification_history."""
@@ -4878,7 +4984,20 @@ def get_encoder_audit_log(
     if date_to:
         where_clauses.append("ivh.action_timestamp <= CAST(:date_to AS timestamptz)")
         params["date_to"] = date_to
+    if action:
+        where_clauses.append("ivh.action_label = :action")
+        params["action"] = action
+    if city_municipality:
+        where_clauses.append("nd.city_municipality ILIKE :city_municipality")
+        params["city_municipality"] = f"%{city_municipality}%"
     where_sql = " AND ".join(where_clauses)
+
+    need_nd_join = bool(city_municipality)
+    nd_join = (
+        "LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = ivh.target_id"
+        if need_nd_join
+        else ""
+    )
 
     rows = db.execute(
         text(
@@ -4888,6 +5007,7 @@ def get_encoder_audit_log(
                 ivh.action_label, ivh.previous_status, ivh.new_status,
                 ivh.notes, ivh.action_timestamp
             FROM wims.incident_verification_history ivh
+            {nd_join}
             WHERE {where_sql}
             ORDER BY ivh.action_timestamp DESC
             LIMIT :limit OFFSET :offset
@@ -4898,7 +5018,14 @@ def get_encoder_audit_log(
 
     total = (
         db.execute(
-            text(f"SELECT COUNT(*) FROM wims.incident_verification_history ivh WHERE {where_sql}"),
+            text(
+                f"""
+                SELECT COUNT(*)
+                FROM wims.incident_verification_history ivh
+                {nd_join}
+                WHERE {where_sql}
+                """
+            ),
             params,
         ).scalar()
         or 0
@@ -4928,7 +5055,8 @@ def _build_audit_log_query(
     date_from: str | None,
     date_to: str | None,
     region_id: int | None,
-    validator_id: str | None,
+    actor_username: str | None,
+    role: str | None,
     action: str | None,
 ) -> tuple[str, dict[str, Any]]:
     """Compose a parameterized WHERE clause for audit log queries.
@@ -4946,9 +5074,12 @@ def _build_audit_log_query(
     if region_id is not None:
         where_clauses.append("fi.region_id = :region_id")
         params["region_id"] = region_id
-    if validator_id:
-        where_clauses.append("ivh.action_by_user_id = CAST(:validator_id AS uuid)")
-        params["validator_id"] = validator_id
+    if actor_username:
+        where_clauses.append("u.username ILIKE :actor_username")
+        params["actor_username"] = f"%{actor_username}%"
+    if role:
+        where_clauses.append("u.role = :role")
+        params["role"] = role
     if action:
         where_clauses.append("ivh.action_label = :action")
         params["action"] = action
@@ -4962,7 +5093,8 @@ def get_validator_audit_logs(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     region_id: Optional[int] = None,
-    validator_id: Optional[str] = None,
+    actor_username: Optional[str] = None,
+    role: Optional[str] = None,
     action: Optional[str] = None,  # filter by action_label (APPROVED/REJECTED/BULK_APPROVED/etc.)
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -4972,7 +5104,8 @@ def get_validator_audit_logs(
         date_from=date_from,
         date_to=date_to,
         region_id=region_id,
-        validator_id=validator_id,
+        actor_username=actor_username,
+        role=role,
         action=action,
     )
     list_params = {**params, "limit": limit, "offset": offset}
@@ -5006,6 +5139,7 @@ def get_validator_audit_logs(
             SELECT COUNT(*)
             FROM wims.incident_verification_history ivh
             JOIN wims.fire_incidents fi ON fi.incident_id = ivh.target_id
+            LEFT JOIN wims.users u ON u.user_id = ivh.action_by_user_id
             WHERE {where_sql}
             """
             ),
@@ -5044,7 +5178,8 @@ def export_validator_audit_logs(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     region_id: Optional[int] = None,
-    validator_id: Optional[str] = None,
+    actor_username: Optional[str] = None,
+    role: Optional[str] = None,
     action: Optional[str] = None,
 ):
     """Return an audit-log CSV. Honors the same filters as the list endpoint."""
@@ -5052,7 +5187,8 @@ def export_validator_audit_logs(
         date_from=date_from,
         date_to=date_to,
         region_id=region_id,
-        validator_id=validator_id,
+        actor_username=actor_username,
+        role=role,
         action=action,
     )
 

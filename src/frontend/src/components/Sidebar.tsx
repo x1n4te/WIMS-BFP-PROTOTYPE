@@ -216,6 +216,7 @@ function getNavSections(role: string | null): NavSection[] {
             label: 'Workflow',
             items: [
                 { label: 'Triage Queue', href: '/incidents/triage', icon: ClipboardList },
+                { label: 'Audit Trail', href: '/dashboard/validator/audit', icon: History },
             ],
         });
         sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });

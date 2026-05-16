@@ -96,20 +96,24 @@ export function IncidentForm({
   initialData,
   existingIncidentId,
   onSaved,
+  initialErrors,
 }: {
   initialData?: Incident;
   existingIncidentId?: number;
   onSaved?: () => void;
+  initialErrors?: string[];
 }) {
   const router = useRouter();
   const { assignedRegionId, role } = useUserProfile();
   const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
   const [loading, setLoading] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
-  const [selectedRegionId, setSelectedRegionId] = useState<number | null>(null);
+  const [selectedRegionId, setSelectedRegionId] = useState<number | null>(
+    initialData?.region_id && initialData.region_id > 0 ? initialData.region_id : null
+  );
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Set<string>>(new Set());
+  const [fieldErrors, setFieldErrors] = useState<Set<string>>(new Set(initialErrors ?? []));
   const locationHydratedRef = useRef(false);
   const formHydratedRef = useRef(false);
 
@@ -347,14 +351,28 @@ export function IncidentForm({
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
-  // Lock encoder to their assigned region on mount
+  // Lock encoder to their assigned region always — also clears province/city if import brought wrong-region data
   useEffect(() => {
-    if (assignedRegionId && !selectedRegionId && !initialData) {
+    if (!assignedRegionId) return;
+    if (isEncoder) {
+      setSelectedRegionId(assignedRegionId);
+      const r = PH_REGIONS.find((r) => r.regionId === assignedRegionId);
+      setFormState((prev) => {
+        const validProvinces = getProvincesForRegion(assignedRegionId).map((p) => p.provinceName);
+        const provinceOk = validProvinces.includes(prev.province_district);
+        return {
+          ...prev,
+          region: r?.regionName ?? '',
+          province_district: provinceOk ? prev.province_district : '',
+          city_municipality: provinceOk ? prev.city_municipality : '',
+        };
+      });
+    } else if (!selectedRegionId && !initialData) {
       setSelectedRegionId(assignedRegionId);
       const r = PH_REGIONS.find((r) => r.regionId === assignedRegionId);
       setFormState((prev) => ({ ...prev, region: r?.regionName ?? '' }));
     }
-  }, [assignedRegionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [assignedRegionId, isEncoder]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!initialData || formHydratedRef.current) return;
@@ -648,6 +666,16 @@ export function IncidentForm({
     return 0;
   };
 
+  // Scroll to first highlighted error field when initialErrors are provided (edit→submit flow)
+  useEffect(() => {
+    if (!initialErrors?.length) return;
+    const timer = setTimeout(() => {
+      const el = document.querySelector('[data-field-error="true"]');
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Event handlers ─────────────────────────────────────────────────────────
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -664,7 +692,18 @@ export function IncidentForm({
   };
 
   const handleRadioChange = (name: string, value: string) => {
-    setFormState((prev) => ({ ...prev, [name]: value }));
+    if (name === 'extent_of_damage') {
+      setFormState((prev) => ({
+        ...prev,
+        [name]: value,
+        extent_description: '',
+        extent_total_floor_area_sqm: '',
+        extent_total_land_area_hectares: '',
+        extent_objects_count: '',
+      }));
+    } else {
+      setFormState((prev) => ({ ...prev, [name]: value }));
+    }
   };
 
   const handleOtherPersonnelChange = (index: number, field: string, value: string) => {
@@ -726,6 +765,27 @@ export function IncidentForm({
   };
 
   const doCreateIncident = async (effectiveRegionId: number) => {
+    const locationErrors = new Set<string>();
+    if (!effectiveRegionId) locationErrors.add('region');
+    if (!formState.province_district?.trim()) locationErrors.add('province_district');
+    if (!formState.city_municipality?.trim()) locationErrors.add('city_municipality');
+    // Guard: encoder cannot submit province/city from a different region
+    if (isEncoder && effectiveRegionId && formState.province_district?.trim()) {
+      const validProvinces = getProvincesForRegion(effectiveRegionId).map((p) => p.provinceName);
+      if (validProvinces.length > 0 && !validProvinces.includes(formState.province_district)) {
+        locationErrors.add('province_district');
+        locationErrors.add('city_municipality');
+      }
+    }
+    if (locationErrors.size > 0) {
+      setFieldErrors(locationErrors);
+      showToast('Region, Province/District, and City/Municipality are required before saving.');
+      setTimeout(() => {
+        const el = document.querySelector('[data-field-error="true"]');
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+      return;
+    }
     setLoading(true);
     const fs = formState as Record<string, unknown>;
     const alarmEntry = (key: string) => {
@@ -757,9 +817,6 @@ export function IncidentForm({
         time_returned_to_base: formState.time_returned_to_base || 'N/A',
         total_gas_consumed_liters: parseFloat(formState.total_gas_consumed_liters) || 0,
         // B
-        city_id: 1,
-        district_id: 1,
-        province_id: 1,
         barangay: formState.incident_address.split(',')[2] || 'Unknown',
         general_category: formState.classification_of_involved,
         incident_type: formState.type_of_involved_general_category,
@@ -881,8 +938,8 @@ export function IncidentForm({
         },
         narrative_report: formState.narrative_report,
         disposition: formState.disposition || 'N/A',
-        prepared_by_officer: formState.disposition_prepared_by || 'N/A',
-        noted_by_officer: formState.disposition_noted_by || 'N/A',
+        prepared_by_officer: formState.disposition_prepared_by,
+        noted_by_officer: formState.disposition_noted_by,
       },
     } as unknown as Incident;
 
@@ -902,7 +959,11 @@ export function IncidentForm({
         extent_of_damage: incident.incident_nonsensitive_details.extent_of_damage,
         extent_description: formState.extent_description || null,
         extent_objects_count: parseInt(formState.extent_objects_count) || null,
+        extent_total_floor_area_sqm: parseFloat(formState.extent_total_floor_area_sqm) || 0,
+        extent_total_land_area_hectares: parseFloat(formState.extent_total_land_area_hectares) || 0,
         stage_of_fire: incident.incident_nonsensitive_details.stage_of_fire,
+        general_description_of_involved: formState.general_description_of_involved || null,
+        vehicles_affected: parseInt(formState.vehicles_affected) || 0,
         structures_affected: incident.incident_nonsensitive_details.structures_affected,
         households_affected: incident.incident_nonsensitive_details.households_affected,
         families_affected: incident.incident_nonsensitive_details.families_affected,
@@ -932,6 +993,16 @@ export function IncidentForm({
         station_code: formState.station_code || 'TBA',
         incident_type_code: incidentTypeCode || undefined,
       };
+      const isNaOrBlank = (v: string | undefined) => !v?.trim() || v.trim().toUpperCase() === 'N/A';
+      const naErrors = new Set<string>();
+      if (isNaOrBlank(formState.disposition_prepared_by)) naErrors.add('disposition_prepared_by');
+      if (isNaOrBlank(formState.disposition_noted_by)) naErrors.add('disposition_noted_by');
+      if (naErrors.size > 0) {
+        setFieldErrors(naErrors);
+        showToast('Prepared by and Noted by cannot be empty or "N/A".');
+        setLoading(false);
+        return;
+      }
       try {
         await updateRegionalIncident(existingIncidentId, updatePayload);
         showToast('Incident saved successfully.');
@@ -965,7 +1036,8 @@ export function IncidentForm({
         (err instanceof Error && err.message.includes('REGION_MISMATCH'));
       if (isRegionMismatch) {
         setFieldErrors((prev) => new Set([...prev, 'region']));
-        showToast('Region mismatch — this incident\'s region doesn\'t match your assigned region. Contact your administrator if you believe this is an error.');
+        const assignedRegionName = PH_REGIONS.find((r) => r.regionId === assignedRegionId)?.regionName ?? `Region ${assignedRegionId ?? ''}`;
+        showToast(`Your assigned region '${assignedRegionName}' does not match the incident's assigned region.`);
         setTimeout(() => {
           const regionEl = document.querySelector('[data-field-error="true"]');
           regionEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1204,27 +1276,29 @@ export function IncidentForm({
 
             <div data-field-error={fieldErrors.has('region') ? 'true' : undefined}>
               <label className={labelCls}>Region{reqMark}</label>
-              <select
-                className={fieldErrors.has('region') ? errCls('region') : inputCls}
-                value={selectedRegionId ?? ''}
-                disabled={isEncoder && !!assignedRegionId}
-                onChange={(e) => {
-                  const rid = Number(e.target.value);
-                  setSelectedRegionId(rid || null);
-                  const r = PH_REGIONS.find((r) => r.regionId === rid);
-                  setFormState((prev) => ({ ...prev, region: r?.regionName ?? '', province_district: '', city_municipality: '' }));
-                }}
-              >
-                <option value="">Select Region</option>
-                {(isEncoder && assignedRegionId
-                  ? PH_REGIONS.filter((r) => r.regionId === assignedRegionId)
-                  : PH_REGIONS
-                ).map((r) => (
-                  <option key={r.regionId} value={r.regionId}>{r.regionName}</option>
-                ))}
-              </select>
-              {isEncoder && assignedRegionId && (
-                <p className="mt-1 text-xs text-gray-400">Region is set to your assigned area.</p>
+              {isEncoder && assignedRegionId ? (
+                <>
+                  <p className={`${inputCls} text-gray-700 bg-gray-50 cursor-default`}>
+                    {PH_REGIONS.find((r) => r.regionId === assignedRegionId)?.regionName ?? formState.region}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-400">Region is set to your assigned area.</p>
+                </>
+              ) : (
+                <select
+                  className={fieldErrors.has('region') ? errCls('region') : inputCls}
+                  value={selectedRegionId ?? ''}
+                  onChange={(e) => {
+                    const rid = Number(e.target.value);
+                    setSelectedRegionId(rid || null);
+                    const r = PH_REGIONS.find((r) => r.regionId === rid);
+                    setFormState((prev) => ({ ...prev, region: r?.regionName ?? '', province_district: '', city_municipality: '' }));
+                  }}
+                >
+                  <option value="">Select Region</option>
+                  {PH_REGIONS.map((r) => (
+                    <option key={r.regionId} value={r.regionId}>{r.regionName}</option>
+                  ))}
+                </select>
               )}
             </div>
 
@@ -1362,17 +1436,6 @@ export function IncidentForm({
               <label className={labelCls}>Total Gas Consumed (liters)</label>
               <input name="total_gas_consumed_liters" type="number" min="0" step="0.1" className={inputCls} value={formState.total_gas_consumed_liters} onChange={handleChange} />
             </div>
-
-            {referenceNumberPreview && (
-              <div className="md:col-span-2">
-                <label className={labelCls}>Reference Number Preview</label>
-                <div className="flex items-center gap-2 bg-gray-50 border border-gray-300 rounded px-3 py-2">
-                  <span className="font-mono text-sm text-gray-800 tracking-wide">{referenceNumberPreview}</span>
-                  <span className="ml-2 text-xs text-gray-400 italic">(sequence XXXX assigned on save)</span>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">Format: AFOR-[Region]-[Station]-[Type]-[Month]-[Year]-[Sequence]</p>
-              </div>
-            )}
 
           </div>
         </section>
@@ -1693,12 +1756,11 @@ export function IncidentForm({
           <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">H. Fire Scene Location{reqMark}</h3>
           {fieldErrors.has('map_location') && <p className="text-xs font-semibold text-red-600">Pin the fire location on the map before saving.</p>}
           <p className="text-xs text-gray-500">Click on the map to pin the fire incident location. The coordinates will be saved with the report.</p>
-          <div className={`rounded overflow-hidden ${fieldErrors.has('map_location') ? 'border-2 border-red-500' : 'border border-gray-300'}`} style={{ height: '320px' }}>
+          <div className={`rounded ${fieldErrors.has('map_location') ? 'border-2 border-red-500' : 'border border-gray-300'}`}>
             <MapPicker
               center={latitude && longitude ? [latitude, longitude] : [14.5995, 120.9842]}
               value={latitude && longitude ? { lat: latitude, lng: longitude } : null}
               onChange={(lat, lng) => { setLatitude(lat); setLongitude(lng); }}
-              mapHeight="320px"
             />
           </div>
           {latitude !== null && longitude !== null ? (
@@ -1808,6 +1870,17 @@ export function IncidentForm({
             </div>
           </div>
         </section>
+
+        {referenceNumberPreview && (
+          <div className="border border-gray-200 rounded-lg bg-gray-50 px-4 py-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Reference Number Preview</p>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-sm text-gray-800 tracking-wide">{referenceNumberPreview}</span>
+              <span className="text-xs text-gray-400 italic">(sequence XXXX assigned on save)</span>
+            </div>
+            <p className="text-xs text-gray-400 mt-1">Format: AFOR-[Region]-[Station]-[Type]-[Month]-[Year]-[Sequence]</p>
+          </div>
+        )}
 
         <button type="submit" disabled={loading} className="w-full bg-red-800 text-white py-3 rounded font-bold hover:bg-red-700 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg">
           {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Save className="w-5 h-5" />}

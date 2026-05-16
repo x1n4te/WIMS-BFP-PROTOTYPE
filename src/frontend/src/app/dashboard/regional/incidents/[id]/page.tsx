@@ -173,6 +173,18 @@ function fmt24h(raw: string | null | undefined): string | null {
   });
 }
 
+function splitAlarmDateTime(raw: string | null | undefined): { date: string; time: string } | null {
+  if (!raw) return null;
+  const d = new Date(String(raw));
+  if (isNaN(d.getTime())) return null;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return { date: `${mm}-${dd}-${yyyy}`, time: `${hh}:${min}` };
+}
+
 // ── Section card ─────────────────────────────────────────────────────────────
 function Section({
   title,
@@ -198,7 +210,7 @@ type AlarmTimelineEntry = { time?: string | null; commander?: string };
 type AlarmTimeline = Record<string, AlarmTimelineEntry | string | null>;
 
 function AlarmTimelineSection({ timeline }: { timeline: AlarmTimeline }) {
-  const keys = Object.keys(timeline);
+  const keys = Object.keys(timeline).filter((k) => !k.startsWith('_'));
   const hasData = keys.some((k) => {
     const v = timeline[k];
     return v && (typeof v === 'string' ? v : (v as AlarmTimelineEntry).time);
@@ -207,18 +219,24 @@ function AlarmTimelineSection({ timeline }: { timeline: AlarmTimeline }) {
 
   return (
     <div className="space-y-1">
+      <div className="grid grid-cols-4 gap-4 text-xs font-semibold text-gray-500 border-b border-gray-200 pb-1">
+        <span>Stage</span>
+        <span>Date</span>
+        <span>Time</span>
+        <span>Commander</span>
+      </div>
       {keys.map((k) => {
         const entry = timeline[k];
-        const timeStr = entry ? (typeof entry === 'string' ? entry : (entry as AlarmTimelineEntry).time ?? '') : '';
+        const rawTime = entry ? (typeof entry === 'string' ? entry : (entry as AlarmTimelineEntry).time ?? '') : '';
         const commander = entry && typeof entry !== 'string' ? (entry as AlarmTimelineEntry).commander ?? '' : '';
-        if (!timeStr) return null;
+        if (!rawTime && !commander) return null;
+        const split = splitAlarmDateTime(rawTime);
         return (
-          <div key={k} className="grid grid-cols-3 gap-4 text-sm border-b border-gray-100 pb-1 last:border-0">
+          <div key={k} className="grid grid-cols-4 gap-4 text-sm border-b border-gray-100 pb-1 last:border-0">
             <span className="font-medium text-gray-600">{FIELD_LABELS[k] ?? fieldLabel(k)}</span>
-            <span className="col-span-2 text-gray-900">
-              {timeStr}
-              {commander ? <span className="ml-2 text-gray-500 text-xs">— {commander}</span> : null}
-            </span>
+            <span className="text-gray-900">{split?.date ?? rawTime}</span>
+            <span className="text-gray-900">{split?.time ?? ''}</span>
+            <span className="text-gray-700 text-xs">{commander}</span>
           </div>
         );
       })}
@@ -235,6 +253,7 @@ export default function RegionalIncidentDetailPage() {
 
   const { user, loading: authLoading } = useAuth();
   const role = (user as { role?: string })?.role ?? null;
+  const encoderAssignedRegionId = (user as { assignedRegionId?: number | null })?.assignedRegionId ?? null;
   const canAccessRegional =
     role === 'REGIONAL_ENCODER' ||
     role === 'NATIONAL_VALIDATOR' ||
@@ -255,6 +274,7 @@ export default function RegionalIncidentDetailPage() {
   const [staleAlert, setStaleAlert] = useState(false);
   const [showMissingFieldsModal, setShowMissingFieldsModal] = useState(false);
   const [missingFieldsList, setMissingFieldsList] = useState<string[]>([]);
+  const [missingFieldKeys, setMissingFieldKeys] = useState<string[]>([]);
 
   const isEncoder = role === 'REGIONAL_ENCODER' || role === 'ENCODER';
   const isValidator = role === 'NATIONAL_VALIDATOR' || role === 'VALIDATOR';
@@ -364,26 +384,52 @@ export default function RegionalIncidentDetailPage() {
     }
   };
 
+  const MISSING_FIELD_KEY_MAP: Record<string, string> = {
+    'Type of Responder': 'responder_type',
+    'Name of Fire Station/Team': 'fire_station_name',
+    'Date and Time of Fire Notification Received': 'notification_dt_date',
+    'Region': 'region',
+    'Province / District': 'province_district',
+    'City / Municipality': 'city_municipality',
+    'Highest Alarm Level': 'alarm_level',
+    'Classification of Involved': 'classification_of_involved',
+    'Type of Involved': 'type_of_involved_general_category',
+    'Extent of Damage': 'extent_of_damage',
+    'Location Coordinates (set via map pin)': 'map_location',
+    'Prepared by (Officer)': 'disposition_prepared_by',
+    'Noted by (Officer)': 'disposition_noted_by',
+  };
+
   const handleSubmitClick = () => {
     if (!detail) return;
+
+    // Region constraint: encoder must only submit incidents in their assigned region
+    if (isEncoder && encoderAssignedRegionId && detail.region_id !== encoderAssignedRegionId) {
+      const assignedName = getShortRegionName(encoderAssignedRegionId) ?? `Region ${encoderAssignedRegionId}`;
+      setActionError(`You can only submit incidents for your assigned region (${assignedName}). This incident belongs to a different region.`);
+      return;
+    }
+
     const ns = (detail.nonsensitive as Record<string, unknown>) ?? {};
     const sen = (detail.sensitive as Record<string, unknown>) ?? {};
+    const isEmpty = (v: unknown) => !v || String(v).trim() === '' || String(v).trim().toUpperCase() === 'N/A';
     const missing: string[] = [];
     if (!ns.responder_type) missing.push('Type of Responder');
     if (!ns.fire_station_name) missing.push('Name of Fire Station/Team');
     if (!ns.notification_dt) missing.push('Date and Time of Fire Notification Received');
     if (!detail.region_id) missing.push('Region');
-    if (!ns.province_district) missing.push('Province / District');
-    if (!ns.city_municipality) missing.push('City / Municipality');
+    if (isEmpty(ns.province_district)) missing.push('Province / District');
+    if (isEmpty(ns.city_municipality)) missing.push('City / Municipality');
     if (!ns.alarm_level) missing.push('Highest Alarm Level');
     if (!ns.general_category) missing.push('Classification of Involved');
     if (ns.general_category && !detail.incident_type_code) missing.push('Type of Involved');
     if (!ns.extent_of_damage) missing.push('Extent of Damage');
     if (!detail.latitude || !detail.longitude) missing.push('Location Coordinates (set via map pin)');
-    if (!sen.prepared_by_officer && !sen.disposition_prepared_by) missing.push('Prepared by (Officer)');
-    if (!sen.noted_by_officer && !sen.disposition_noted_by) missing.push('Noted by (Officer)');
+    if (isEmpty(sen.prepared_by_officer) && isEmpty(sen.disposition_prepared_by)) missing.push('Prepared by (Officer)');
+    if (isEmpty(sen.noted_by_officer) && isEmpty(sen.disposition_noted_by)) missing.push('Noted by (Officer)');
     if (missing.length > 0) {
       setMissingFieldsList(missing);
+      setMissingFieldKeys(missing.map((f) => MISSING_FIELD_KEY_MAP[f]).filter(Boolean));
       setShowMissingFieldsModal(true);
       return;
     }
@@ -776,7 +822,7 @@ export default function RegionalIncidentDetailPage() {
             </ul>
             <div className="flex justify-end gap-3 pt-2">
               <button
-                onClick={() => setShowMissingFieldsModal(false)}
+                onClick={() => { setShowMissingFieldsModal(false); setMissingFieldKeys([]); }}
                 className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50"
               >
                 Dismiss
@@ -855,7 +901,7 @@ export default function RegionalIncidentDetailPage() {
             )}
             {isEditing && (
               <button
-                onClick={() => { setIsEditing(false); setActionError(null); }}
+                onClick={() => { setIsEditing(false); setActionError(null); setMissingFieldKeys([]); }}
                 className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-gray-300 bg-white hover:bg-gray-50 text-gray-700"
               >
                 ← Back to View
@@ -900,10 +946,12 @@ export default function RegionalIncidentDetailPage() {
         <IncidentForm
           initialData={incidentFormData}
           existingIncidentId={detail.incident_id}
+          initialErrors={missingFieldKeys.length > 0 ? missingFieldKeys : undefined}
           onSaved={() => {
             setSaveNotification('Incident saved successfully!');
             setTimeout(() => setSaveNotification(null), 5000);
             setIsEditing(false);
+            setMissingFieldKeys([]);
             void load();
           }}
         />
@@ -1268,23 +1316,27 @@ export default function RegionalIncidentDetailPage() {
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2 items-center">
-                  <button
-                    onClick={() => void submitValidatorAction({ action: 'accept' })}
-                    disabled={validatorLoading || detail?.verification_status === 'VERIFIED' || detail?.verification_status === 'REJECTED'}
-                    className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {validatorLoading && validatorAction === null ? 'Checking…' : 'Accept'}
-                  </button>
-                  <button
-                    onClick={() => setValidatorAction('reject')}
-                    disabled={validatorLoading || detail?.verification_status === 'REJECTED' || detail?.verification_status === 'VERIFIED'}
-                    className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    Reject
-                  </button>
+                  {validatorAction !== 'reject' && (
+                    <>
+                      <button
+                        onClick={() => void submitValidatorAction({ action: 'accept' })}
+                        disabled={validatorLoading || detail?.verification_status === 'VERIFIED' || detail?.verification_status === 'REJECTED'}
+                        className="px-4 py-2 text-sm rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {validatorLoading && validatorAction === null ? 'Checking…' : 'Accept'}
+                      </button>
+                      <button
+                        onClick={() => setValidatorAction('reject')}
+                        disabled={validatorLoading || detail?.verification_status === 'REJECTED' || detail?.verification_status === 'VERIFIED'}
+                        className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Reject
+                      </button>
+                    </>
+                  )}
                   <Link
                     href="/dashboard/validator"
-                    className="ml-auto px-4 py-2 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700"
+                    className="ml-auto px-4 py-2 text-sm rounded bg-yellow-400 text-gray-900 hover:bg-yellow-500 font-medium"
                   >
                     Back to Dashboard
                   </Link>

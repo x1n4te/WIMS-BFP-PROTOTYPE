@@ -124,8 +124,11 @@ class UserCreate(BaseModel):
         if not v:
             return None
         import re
-        if not re.match(r'^[a-zA-Z0-9_\-]{3,50}$', v):
-            raise ValueError("Username must be 3–50 characters and contain only letters, numbers, underscores, or hyphens")
+
+        if not re.match(r"^[a-zA-Z0-9_\-]{3,50}$", v):
+            raise ValueError(
+                "Username must be 3–50 characters and contain only letters, numbers, underscores, or hyphens"
+            )
         return v.lower()
 
 
