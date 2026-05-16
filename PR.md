@@ -1,68 +1,101 @@
-# fix(afor): form cleanup, audit trail, and validator role fixes
+# fix: AFOR import gaps, data persistence, audit trails, UI/UX polish
 
 ## Summary
 
-- XLSX import now writes `CREATED_DRAFT` audit log entries (was only logged on manual create)
-- `VALIDATOR` role now has full validator access in the backend (was missing from `is_validator` check, causing 404s)
-- `extent_description` and `extent_objects_count` added to `upload-bundle` INSERT (columns existed in DB via migration 25 but were never persisted for manually-created incidents)
-- Stage of Fire dropdown options capitalized consistently
-- Removed redundant Extended Beyond sub-fields from AFOR form (Structures/Objects/Vehicles already captured in Number Affected section)
-- Removed Remarks column from Other Personnel at the Scene section
-- Activity Log moved from Regional Dashboard header to sidebar nav
-- Add New Incident button added to Regional Dashboard
-- Back buttons styled consistently (bordered pill) across audit/import/create pages
-- Removed wildland hint text from manual entry page
+- AFOR XLSX import: General Description, Alarm Commanders, "Others" free-text (C219), and Prepared/Noted by now correctly read and stored
+- AFOR import blocked when XLSX region doesn't match encoder's assigned region
+- Encoder region lock hardened: province/city cleared if pre-filled from wrong region; save validates province belongs to encoder's region
+- All edited fields (owner name, general description, vehicles affected, floor/land area) now persist correctly on edit
+- Prepared by / Noted by block submission when blank or set to "N/A" (both create and edit paths)
+- Regional dashboard location fixed — was always showing "Agoncillo, Batangas" due to hardcoded ref IDs
+- Validator Audit Trail 500 error fixed; pagination added (15/page) with username, role, region, and action filters
+- Encoder Activity Log pagination added (15/page) with action, city, and date filters; added to sidebar
+- Validator and Encoder dashboards paginate at 10 incidents
+- Validator Audit Trail added as sidebar tab for NATIONAL_VALIDATOR
+- Map picker rejects coordinates outside Philippine bounds; search box always visible above map
+- Alarm timeline date/time display split into separate Date and Time columns with Commander column
+- Province/city/district validated before draft save and before submit; missing fields popup catches "N/A" stored values
+- Extent of Damage radio change clears stale sub-fields; floor/land area edits now persist
+- Region field rendered as plain text for encoders (no dropdown arrow)
+- Accept/Reject buttons hidden while reject textarea is open
+- Validator audit UUID filter replaced with username text search + role dropdown
+- Validator dashboard encoder UUID filter replaced with region dropdown
+- "VALIDATOR" role included in `is_validator` check (was causing 404s)
+- `extent_description` and `extent_objects_count` now persisted from manual entry form
+- XLSX import now logs `CREATED_DRAFT` in Activity Log
+- Back-to-dashboard buttons styled yellow for visibility
 
 ## Changed Files
 
 | File | Change |
 |------|--------|
-| `src/backend/api/routes/regional.py` | Add `"VALIDATOR"` to `is_validator` check; add `CREATED_DRAFT` audit log in XLSX commit loop |
-| `src/backend/api/routes/incidents.py` | Add `extent_description`, `extent_objects_count` to `upload-bundle` nonsensitive INSERT |
-| `src/postgres-init/25_extent_fields.sql` | New migration — `extent_description TEXT`, `extent_objects_count INT` on `incident_nonsensitive_details` |
-| `src/frontend/src/components/IncidentForm.tsx` | Capitalize Stage of Fire options; remove Extended Beyond sub-fields; remove Remarks from Other Personnel; update hydration/auto-fill accordingly |
-| `src/frontend/src/components/Sidebar.tsx` | Add Activity Log to REGIONAL_ENCODER sidebar nav |
-| `src/frontend/src/app/dashboard/regional/page.tsx` | Replace Activity Log link with Add New Incident button |
-| `src/frontend/src/app/dashboard/regional/audit/page.tsx` | Bordered back button style |
-| `src/frontend/src/app/dashboard/validator/audit/page.tsx` | Bordered back button style |
-| `src/frontend/src/app/afor/create/page.tsx` | Remove wildland hint text; bordered back button style |
-| `src/frontend/src/app/dashboard/regional/incidents/[id]/page.tsx` | View page fixes |
-| `src/frontend/src/lib/afor-utils.ts` | `displayValue` returns N/A for 0 / "0" |
+| `src/backend/api/routes/regional.py` | AFOR cell reads (commanders, prepared/noted by, Others C219, description); VALIDATOR in is_validator; audit COUNT query fix; location list uses text columns; owner_name plaintext mirror; general_description/vehicles_affected/floor-land-area in update; encoder audit filters; validator audit username/role filter |
+| `src/backend/api/routes/incidents.py` | Add extent_description, extent_objects_count to upload-bundle INSERT |
+| `src/postgres-init/25_extent_fields.sql` | New: extent_description TEXT, extent_objects_count INT |
+| `src/postgres-init/28_general_description_column.sql` | New: general_description_of_involved TEXT column |
+| `src/frontend/src/components/IncidentForm.tsx` | Region shown as plain text for encoders; extent sub-fields cleared on radio change; N/A validation; region mismatch message; update payload includes all edited fields; province/city save guard; scroll-to-error; province initialized from initialData on edit |
+| `src/frontend/src/components/MapPickerInner.tsx` | Philippines bounds validation; search box always visible at 280px height |
+| `src/frontend/src/components/Sidebar.tsx` | Activity Log in encoder sidebar; Audit Trail in validator sidebar |
+| `src/frontend/src/app/dashboard/regional/incidents/[id]/page.tsx` | Alarm timeline Date/Time/Commander columns; N/A guard on submit; region constraint check; missing field highlighting; yellow back button |
+| `src/frontend/src/app/dashboard/regional/page.tsx` | Add New Incident button; removed Activity Log link |
+| `src/frontend/src/app/dashboard/regional/audit/page.tsx` | Pagination (15/page); action, city, date filters; yellow back button |
+| `src/frontend/src/app/dashboard/validator/page.tsx` | Pagination (10/page); region dropdown filter |
+| `src/frontend/src/app/dashboard/validator/audit/page.tsx` | Pagination (15/page); username + role + action filters; encoder actions in filter list; yellow back button |
+| `src/frontend/src/app/afor/import/page.tsx` | Block import if AFOR region differs from encoder's assigned region |
+| `src/frontend/src/app/afor/create/page.tsx` | Removed wildland hint text |
+| `src/frontend/src/lib/afor-utils.ts` | displayValue returns N/A for 0/"0" |
 
-## Bug Fixes Detail
+## Key Bug Fixes
 
-### VALIDATOR role — 404 on incident detail
-`regional.py` `is_validator` only included `NATIONAL_VALIDATOR`, `SYSTEM_ADMIN`, `NATIONAL_ANALYST`. Users with the `VALIDATOR` role were routed through the encoder branch, which filters by `encoder_id`, returning 404 for any incident they didn't personally create.
+### AFOR XLSX Import — Data Gaps
+Four fields were not reaching the database from XLSX import: (1) General Description was parsed but never written to the stored JSON; (2) Incident/Ground Commander names (column F) were not read for any of the 13 alarm level rows; (3) "Others" problem checkbox appended the literal string "Others" but ignored the free-text in C219; (4) Prepared by / Noted by read from the label row (C238/F238) instead of the data row (C239/E239).
 
-**Fix:** Added `"VALIDATOR"` to the tuple.
+### Regional Dashboard — Wrong Location
+Every manually-created incident stored `city_id = 1` due to hardcoded values in the create payload. The list query joined the ref_cities table, always returning city #1 (Agoncillo, Batangas) regardless of the actual incident location. Fixed by removing the hardcoded IDs and switching the list query to use the city_municipality/province_district text columns directly.
 
-### extent_description / extent_objects_count never saved (manual entry)
-Migration 25 added these two columns but the `upload-bundle` INSERT in `incidents.py` didn't include them. Values entered in the form were silently dropped.
+### Edited Fields Not Persisting
+Several fields were excluded from the update path: owner_name was blob-only (plaintext column never written); general_description_of_involved and vehicles_affected were not in IncidentUpdateRequest; floor/land area fields were not in the update payload. All now persist correctly on edit.
 
-**Fix:** Added both columns + bound params to the INSERT.
+### Validator Audit Trail 500 Error
+The paginated audit-log COUNT query was missing the JOIN on wims.users, causing a SQL error whenever the actor_username or role filter was applied. Added the same LEFT JOIN to the COUNT query.
 
-### XLSX import missing CREATED_DRAFT audit entry
-The manual create path (`POST /incidents`) logged `CREATED_DRAFT` but the XLSX commit loop (`POST /regional/afor/commit`) did not. Encoder activity log was missing all import-originated incidents.
+### Prepared by / Noted by Accepted "N/A"
+The form payload defaulted empty values to the string "N/A", which passed all existing checks. Added pre-submit validation in both the create form and the edit/submit path that blocks submission when either field is blank or equals "N/A" (case-insensitive).
 
-**Fix:** Added `_insert_incident_verification_history()` call inside the per-row commit loop with `action_label="CREATED_DRAFT"`.
+### VALIDATOR Role — 404 on Incident Detail
+The is_validator check in regional.py did not include the "VALIDATOR" role string, routing those users through the encoder branch which filters by encoder_id — returning 404 for any incident they didn't create.
 
-## Test Checklist
+### Extent of Damage — Stale Sub-Fields
+Switching the Extent of Damage radio left previous sub-field values (floor area, land area, description, objects count) in form state. Those stale values were included in the submission. The radio handler now clears all sub-fields on each change, and floor/land area are included in the update payload.
 
-- [ ] Log in as `encoder_test`, import an XLSX — verify Activity Log shows `Created Draft` entries
-- [ ] Log in as `validator_test` (VALIDATOR role), open any incident — verify it loads (no 404)
-- [ ] Create a manual AFOR, select an Extent of Damage, fill sub-fields — save and verify `extent_description` appears in incident detail view
-- [ ] Verify Stage of Fire dropdown shows: Incipient / Growth / Fully Developed / Decay
-- [ ] Verify Other Personnel section has two columns (Name + Designation) — no Remarks input
-- [ ] Verify Extended Beyond Structure does not show extra sub-fields below the radio
-- [ ] Verify Activity Log appears in sidebar for encoder; Regional Dashboard shows Add New Incident button
-- [ ] Build: `cd src && docker-compose up -d --build backend frontend`
+## Migrations
 
-## Migration Note
-
-`25_extent_fields.sql` runs automatically on a fresh container start. If the Postgres container is already running with existing data, apply manually:
+Run on fresh container start automatically. To apply to an existing database:
 
 ```sql
+-- Migration 25
 ALTER TABLE wims.incident_nonsensitive_details
   ADD COLUMN IF NOT EXISTS extent_description TEXT,
   ADD COLUMN IF NOT EXISTS extent_objects_count INT;
+
+-- Migration 28
+ALTER TABLE wims.incident_nonsensitive_details
+  ADD COLUMN IF NOT EXISTS general_description_of_involved TEXT;
 ```
+
+## Test Checklist
+
+- [ ] Import a filled XLSX → Activity Log shows "Created Draft"; incident shows General Description, Commander names, "Others: \<text\>", and correct Prepared/Noted by
+- [ ] Import XLSX with a different region as encoder → error shown naming both regions, no redirect
+- [ ] Log in as VALIDATOR role user → open any incident → detail view loads (no 404)
+- [ ] Create manual AFOR, select Extent of Damage with sub-fields → switch to another option → sub-fields clear; save → verify only the relevant fields persisted
+- [ ] Edit existing incident: change owner name, general description, vehicles affected, floor area → save → all changes appear in detail view and list
+- [ ] Try submitting with Prepared by blank or "N/A" → validation blocks submission in both create form and detail view
+- [ ] Open Regional Dashboard → incident rows show correct city and province (not "Agoncillo, Batangas")
+- [ ] Click map outside Philippines bounds → error shown, pin does not move
+- [ ] Open incident with alarm timeline → Date (MM-DD-YYYY) and Time (HH:MM) appear in separate columns; Commander column present
+- [ ] Validator Audit Trail: apply Username filter → results filter correctly (no 500 error)
+- [ ] Encoder Activity Log: apply action and city filters; pagination controls show (15/page)
+- [ ] Validator dashboard: if >10 incidents, pagination controls appear
+- [ ] Validator Audit Trail visible in sidebar for NATIONAL_VALIDATOR
+- [ ] Rebuild: `cd src && docker-compose up -d --build backend frontend`
