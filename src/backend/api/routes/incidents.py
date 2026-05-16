@@ -19,7 +19,6 @@ from schemas.incident import IncidentCreate, IncidentResponse
 from services.analytics_read_model import sync_incident_to_analytics
 from api.routes.regional import _normalize_general_category, _insert_incident_verification_history
 from tasks.exports import export_analyst_incidents_task
-from api.routes.regional import _normalize_general_category
 
 router = APIRouter(prefix="/api", tags=["incidents"])
 logger = logging.getLogger("wims.incidents")
