@@ -303,7 +303,10 @@ class TestForgotPasswordConfiguration:
             )
 
         provider_positions = {provider: providers.index(provider) for provider in required_core}
-        assert provider_positions["reset-credentials-choose-user"] < provider_positions["reset-credential-email"]
+        assert (
+            provider_positions["reset-credentials-choose-user"]
+            < provider_positions["reset-credential-email"]
+        )
         assert provider_positions["reset-credential-email"] < provider_positions["reset-password"]
 
         # Core executions must be REQUIRED; optional/conditional extra factors are allowed.

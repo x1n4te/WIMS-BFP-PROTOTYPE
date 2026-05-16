@@ -582,7 +582,9 @@ def _append_analyst_casualty_filter(
         "firefighter_deaths": "COALESCE(aif.firefighter_deaths, nd.firefighter_deaths, 0)",
     }
     deaths = f"({casualty_columns['civilian_deaths']} + {casualty_columns['firefighter_deaths']})"
-    injuries = f"({casualty_columns['civilian_injured']} + {casualty_columns['firefighter_injured']})"
+    injuries = (
+        f"({casualty_columns['civilian_injured']} + {casualty_columns['firefighter_injured']})"
+    )
 
     if casualty_severity == "high":
         where_clauses.append(f"{deaths} > 0")
@@ -683,7 +685,9 @@ def get_analyst_incident_list(
         try:
             parsed_incident_ids = [int(x.strip()) for x in incident_ids.split(",") if x.strip()]
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail="incident_ids must be comma-separated integers") from exc
+            raise HTTPException(
+                status_code=422, detail="incident_ids must be comma-separated integers"
+            ) from exc
         if parsed_incident_ids:
             where_clauses.append("fi.incident_id = ANY(:incident_ids)")
             params["incident_ids"] = parsed_incident_ids
@@ -692,10 +696,14 @@ def get_analyst_incident_list(
         _append_analyst_casualty_filter(where_clauses, casualty_severity)
 
     if damage_min is not None:
-        where_clauses.append("COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) >= :damage_min")
+        where_clauses.append(
+            "COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) >= :damage_min"
+        )
         params["damage_min"] = damage_min
     if damage_max is not None:
-        where_clauses.append("COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) <= :damage_max")
+        where_clauses.append(
+            "COALESCE(aif.estimated_damage_php, nd.estimated_damage_php, 0) <= :damage_max"
+        )
         params["damage_max"] = damage_max
 
     where_sql = " AND ".join(where_clauses)
@@ -745,10 +753,17 @@ def get_analyst_incident_list(
         LEFT JOIN wims.ref_barangays rb                 ON rb.barangay_id = nd.barangay_id
         WHERE {where_sql}
     """
-    total = db.execute(
-        text(count_sql),
-        {k: v for k, v in params.items() if k not in ("limit", "offset", "sort_by", "sort_dir")},
-    ).scalar() or 0
+    total = (
+        db.execute(
+            text(count_sql),
+            {
+                k: v
+                for k, v in params.items()
+                if k not in ("limit", "offset", "sort_by", "sort_dir")
+            },
+        ).scalar()
+        or 0
+    )
 
     return {
         "incidents": [
@@ -895,11 +910,7 @@ def get_analyst_incident_wildland_detail(
         {"iid": incident_id},
     ).fetchone()
 
-    if (
-        not incident_row
-        or incident_row[2] != "VERIFIED"
-        or bool(incident_row[3])
-    ):
+    if not incident_row or incident_row[2] != "VERIFIED" or bool(incident_row[3]):
         raise HTTPException(status_code=404, detail="Incident not found")
 
     wildland_row = db.execute(

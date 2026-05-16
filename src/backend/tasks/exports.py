@@ -218,7 +218,9 @@ def _export(
 
 
 @celery_app.task(bind=True, name="tasks.exports.export_incidents_csv")
-def export_incidents_csv_task(self, user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
+def export_incidents_csv_task(
+    self, user_id: str, filters: dict[str, Any], columns: list[str]
+) -> str:
     """Export verified, non-archived incidents to a real CSV file."""
     return _export(
         task_id=getattr(self.request, "id", None),
@@ -233,7 +235,9 @@ def export_incidents_csv_task(self, user_id: str, filters: dict[str, Any], colum
 
 
 @celery_app.task(bind=True, name="tasks.exports.export_incidents_pdf")
-def export_incidents_pdf_task(self, user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
+def export_incidents_pdf_task(
+    self, user_id: str, filters: dict[str, Any], columns: list[str]
+) -> str:
     """Export verified, non-archived incidents to a real PDF file."""
     return _export(
         task_id=getattr(self.request, "id", None),
@@ -248,7 +252,9 @@ def export_incidents_pdf_task(self, user_id: str, filters: dict[str, Any], colum
 
 
 @celery_app.task(bind=True, name="tasks.exports.export_incidents_excel")
-def export_incidents_excel_task(self, user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
+def export_incidents_excel_task(
+    self, user_id: str, filters: dict[str, Any], columns: list[str]
+) -> str:
     """Export verified, non-archived incidents to a real XLSX file."""
     return _export(
         task_id=getattr(self.request, "id", None),

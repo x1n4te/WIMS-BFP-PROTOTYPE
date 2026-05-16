@@ -48,9 +48,7 @@ logger = logging.getLogger("wims.regional")
 # ---------------------------------------------------------------------------
 
 
-def _reverse_geocode_barangay(
-    db: Session, incident_id: int, lon: float, lat: float
-) -> None:
+def _reverse_geocode_barangay(db: Session, incident_id: int, lon: float, lat: float) -> None:
     """Look up the barangay containing the given point and backfill
     incident_nonsensitive_details.barangay_id, then sync to analytics.
 
@@ -85,7 +83,9 @@ def _reverse_geocode_barangay(
     if barangay_row is None:
         logger.debug(
             "No barangay polygon contains point (%s, %s) for incident %s",
-            lon, lat, incident_id,
+            lon,
+            lat,
+            incident_id,
         )
         return
 
