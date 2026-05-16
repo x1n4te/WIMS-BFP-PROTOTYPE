@@ -17,6 +17,66 @@ EXPORT_LOG_TABLE = "analytics_export_log"
 logger = logging.getLogger(__name__)
 
 
+def _append_common_filters(
+    clauses: list[str],
+    params: dict[str, Any],
+    *,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    region_id: Optional[int] = None,
+    region_ids: Optional[list[int]] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
+    incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
+) -> None:
+    if start_date:
+        clauses.append("a.notification_date >= CAST(:start_date AS date)")
+        params["start_date"] = start_date
+    if end_date:
+        clauses.append("a.notification_date <= CAST(:end_date AS date)")
+        params["end_date"] = end_date
+    if region_ids:
+        clauses.append("a.region_id = ANY(:region_ids)")
+        params["region_ids"] = region_ids
+    elif region_id is not None:
+        clauses.append("a.region_id = :region_id")
+        params["region_id"] = region_id
+    if province:
+        clauses.append("a.province_name = :province")
+        params["province"] = province
+    if municipality:
+        clauses.append("a.municipality_name = :municipality")
+        params["municipality"] = municipality
+    if alarm_level:
+        clauses.append("a.alarm_level = :alarm_level")
+        params["alarm_level"] = alarm_level
+    if incident_type:
+        clauses.append("a.general_category = :incident_type")
+        params["incident_type"] = incident_type
+    if casualty_severity == "high":
+        clauses.append("(a.civilian_deaths + a.firefighter_deaths) > 0")
+    elif casualty_severity == "medium":
+        clauses.append(
+            "(a.civilian_injured + a.firefighter_injured) > 0 "
+            "AND (a.civilian_deaths + a.firefighter_deaths) = 0"
+        )
+    elif casualty_severity == "low":
+        clauses.append(
+            "(a.civilian_injured + a.firefighter_injured + "
+            "a.civilian_deaths + a.firefighter_deaths) = 0"
+        )
+    if damage_min is not None:
+        clauses.append("a.estimated_damage_php >= :damage_min")
+        params["damage_min"] = damage_min
+    if damage_max is not None:
+        clauses.append("a.estimated_damage_php <= :damage_max")
+        params["damage_max"] = damage_max
+
+
 def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
     """
     Sync a single incident into analytics_incident_facts.
@@ -32,11 +92,9 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                        nd.civilian_injured, nd.civilian_deaths,
                        nd.firefighter_injured, nd.firefighter_deaths,
                        nd.total_response_time_minutes, nd.estimated_damage_php,
-                       nd.fire_station_name,
-                       rb.barangay_name
+                       nd.fire_station_name, nd.city_municipality, nd.province_district
                 FROM wims.fire_incidents fi
                 LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = fi.incident_id
-                LEFT JOIN wims.ref_barangays rb ON rb.barangay_id = nd.barangay_id
                 WHERE fi.incident_id = :iid
             """),
             {"iid": incident_id},
@@ -79,7 +137,8 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
     total_response_time_minutes = row[12]
     estimated_damage_php = row[13]
     fire_station_name = row[14]
-    barangay_name = row[15]
+    municipality_name = row[15]
+    province_name = row[16]
 
     try:
         db.execute(
@@ -89,12 +148,12 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                      alarm_level, general_category,
                      civilian_injured, civilian_deaths, firefighter_injured, firefighter_deaths,
                      total_response_time_minutes, estimated_damage_php,
-                     fire_station_name, barangay_name)
+                     fire_station_name, municipality_name, province_name)
                 SELECT :iid, :region_id, location, :notification_dt, :notification_date,
                        :alarm_level, :general_category,
                        :civilian_injured, :civilian_deaths, :firefighter_injured, :firefighter_deaths,
                        :total_response_time_minutes, :estimated_damage_php,
-                       :fire_station_name, :barangay_name
+                       :fire_station_name, :municipality_name, :province_name
                 FROM wims.fire_incidents WHERE incident_id = :iid
                 ON CONFLICT (incident_id) DO UPDATE SET
                     region_id = EXCLUDED.region_id,
@@ -110,7 +169,8 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                     total_response_time_minutes = EXCLUDED.total_response_time_minutes,
                     estimated_damage_php = EXCLUDED.estimated_damage_php,
                     fire_station_name = EXCLUDED.fire_station_name,
-                    barangay_name = EXCLUDED.barangay_name,
+                    municipality_name = EXCLUDED.municipality_name,
+                    province_name = EXCLUDED.province_name,
                     synced_at = now()
             """),
             {
@@ -127,7 +187,8 @@ def sync_incident_to_analytics(db: Session, incident_id: int) -> None:
                 "total_response_time_minutes": total_response_time_minutes,
                 "estimated_damage_php": estimated_damage_php,
                 "fire_station_name": fire_station_name,
-                "barangay_name": barangay_name,
+                "municipality_name": municipality_name,
+                "province_name": province_name,
             },
         )
     except Exception as e:
@@ -143,7 +204,7 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
     if not incident_ids:
         return
 
-    # Bulk fetch: join fire_incidents + incident_nonsensitive_details + ref_barangays
+    # Bulk fetch: join fire_incidents + incident_nonsensitive_details
     # Partition into delete-candidates vs upsert-candidates in SQL
     rows = db.execute(
         text("""
@@ -163,12 +224,11 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                 nd.total_response_time_minutes,
                 nd.estimated_damage_php,
                 nd.fire_station_name,
-                rb.barangay_name
+                nd.city_municipality,
+                nd.province_district
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd
                 ON nd.incident_id = fi.incident_id
-            LEFT JOIN wims.ref_barangays rb
-                ON rb.barangay_id = nd.barangay_id
             WHERE fi.incident_id = ANY(:iids)
         """),
         {"iids": incident_ids},
@@ -215,7 +275,8 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                     "total_response_time_minutes": r[12],
                     "estimated_damage_php": r[13],
                     "fire_station_name": r[14],
-                    "barangay_name": r[15],
+                    "municipality_name": r[15],
+                    "province_name": r[16],
                 }
                 for r in to_upsert
             ]
@@ -226,7 +287,7 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                          alarm_level, general_category,
                          civilian_injured, civilian_deaths, firefighter_injured, firefighter_deaths,
                          total_response_time_minutes, estimated_damage_php,
-                         fire_station_name, barangay_name)
+                         fire_station_name, municipality_name, province_name)
                     SELECT
                         data.iid, data.region_id, fi.location,
                         data.notification_dt, data.notification_date,
@@ -234,7 +295,7 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                         data.civilian_injured, data.civilian_deaths,
                         data.firefighter_injured, data.firefighter_deaths,
                         data.total_response_time_minutes, data.estimated_damage_php,
-                        data.fire_station_name, data.barangay_name
+                        data.fire_station_name, data.municipality_name, data.province_name
                     FROM jsonb_to_recordset(:rows::jsonb) AS data(
                         iid INTEGER,
                         region_id INTEGER,
@@ -250,7 +311,8 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                         total_response_time_minutes NUMERIC,
                         estimated_damage_php NUMERIC,
                         fire_station_name TEXT,
-                        barangay_name TEXT
+                        municipality_name TEXT,
+                        province_name TEXT
                     )
                     JOIN wims.fire_incidents fi ON fi.incident_id = data.iid
                     ON CONFLICT (incident_id) DO UPDATE SET
@@ -267,7 +329,8 @@ def sync_incidents_batch(db: Session, incident_ids: list[int]) -> None:
                         total_response_time_minutes = EXCLUDED.total_response_time_minutes,
                         estimated_damage_php = EXCLUDED.estimated_damage_php,
                         fire_station_name = EXCLUDED.fire_station_name,
-                        barangay_name = EXCLUDED.barangay_name,
+                        municipality_name = EXCLUDED.municipality_name,
+                        province_name = EXCLUDED.province_name,
                         synced_at = now()
                 """),
                 {"rows": json.dumps(upsert_rows)},
@@ -302,12 +365,11 @@ def backfill_analytics_facts(db: Session) -> int:
                 nd.total_response_time_minutes,
                 nd.estimated_damage_php,
                 nd.fire_station_name,
-                rb.barangay_name
+                nd.city_municipality,
+                nd.province_district
             FROM wims.fire_incidents fi
             LEFT JOIN wims.incident_nonsensitive_details nd
                 ON nd.incident_id = fi.incident_id
-            LEFT JOIN wims.ref_barangays rb
-                ON rb.barangay_id = nd.barangay_id
             WHERE fi.verification_status = 'VERIFIED' AND fi.is_archived = FALSE
         """)
     ).fetchall()
@@ -331,7 +393,8 @@ def backfill_analytics_facts(db: Session) -> int:
             "total_response_time_minutes": r[10],
             "estimated_damage_php": r[11],
             "fire_station_name": r[12],
-            "barangay_name": r[13],
+            "municipality_name": r[13],
+            "province_name": r[14],
         }
         for r in rows
     ]
@@ -344,7 +407,7 @@ def backfill_analytics_facts(db: Session) -> int:
                      alarm_level, general_category,
                      civilian_injured, civilian_deaths, firefighter_injured, firefighter_deaths,
                      total_response_time_minutes, estimated_damage_php,
-                     fire_station_name, barangay_name)
+                     fire_station_name, municipality_name, province_name)
                 SELECT
                     data.iid, data.region_id, fi.location,
                     data.notification_dt, data.notification_date,
@@ -352,7 +415,7 @@ def backfill_analytics_facts(db: Session) -> int:
                     data.civilian_injured, data.civilian_deaths,
                     data.firefighter_injured, data.firefighter_deaths,
                     data.total_response_time_minutes, data.estimated_damage_php,
-                    data.fire_station_name, data.barangay_name
+                    data.fire_station_name, data.municipality_name, data.province_name
                 FROM jsonb_to_recordset(:rows::jsonb) AS data(
                     iid INTEGER,
                     region_id INTEGER,
@@ -368,7 +431,8 @@ def backfill_analytics_facts(db: Session) -> int:
                     total_response_time_minutes NUMERIC,
                     estimated_damage_php NUMERIC,
                     fire_station_name TEXT,
-                    barangay_name TEXT
+                    municipality_name TEXT,
+                    province_name TEXT
                 )
                 JOIN wims.fire_incidents fi ON fi.incident_id = data.iid
                 ON CONFLICT (incident_id) DO UPDATE SET
@@ -385,7 +449,8 @@ def backfill_analytics_facts(db: Session) -> int:
                     total_response_time_minutes = EXCLUDED.total_response_time_minutes,
                     estimated_damage_php = EXCLUDED.estimated_damage_php,
                     fire_station_name = EXCLUDED.fire_station_name,
-                    barangay_name = EXCLUDED.barangay_name,
+                    municipality_name = EXCLUDED.municipality_name,
+                    province_name = EXCLUDED.province_name,
                     synced_at = now()
             """),
             {"rows": json.dumps(upsert_rows)},
@@ -405,6 +470,8 @@ def get_heatmap_points(
     end_date: Optional[str] = None,
     region_id: Optional[int] = None,
     region_ids: Optional[list[int]] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
     alarm_level: Optional[str] = None,
     incident_type: Optional[str] = None,
     casualty_severity: Optional[str] = None,
@@ -417,36 +484,21 @@ def get_heatmap_points(
     """
     clauses = ["1=1"]
     params: dict[str, Any] = {}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
-    if region_ids:
-        clauses.append("a.region_id = ANY(:region_ids)")
-        params["region_ids"] = region_ids
-    elif region_id is not None:
-        clauses.append("a.region_id = :region_id")
-        params["region_id"] = region_id
-    if alarm_level:
-        clauses.append("a.alarm_level = :alarm_level")
-        params["alarm_level"] = alarm_level
-    if incident_type:
-        clauses.append("a.general_category = :incident_type")
-        params["incident_type"] = incident_type
-    if casualty_severity == "high":
-        clauses.append("a.civilian_deaths > 0")
-    elif casualty_severity == "medium":
-        clauses.append("a.civilian_injured > 0 AND a.civilian_deaths = 0")
-    elif casualty_severity == "low":
-        clauses.append("a.civilian_injured = 0 AND a.civilian_deaths = 0")
-    if damage_min is not None:
-        clauses.append("a.estimated_damage_php >= :damage_min")
-        params["damage_min"] = damage_min
-    if damage_max is not None:
-        clauses.append("a.estimated_damage_php <= :damage_max")
-        params["damage_max"] = damage_max
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_id=region_id,
+        region_ids=region_ids,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     rows = db.execute(
@@ -481,10 +533,14 @@ def get_trends(
     end_date: Optional[str] = None,
     region_id: Optional[int] = None,
     region_ids: Optional[list[int]] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
     incident_type: Optional[str] = None,
     alarm_level: Optional[str] = None,
     interval: str = "daily",
     casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """
     Time-series counts from analytics_incident_facts.
@@ -492,33 +548,30 @@ def get_trends(
     """
     clauses = ["a.notification_dt IS NOT NULL"]
     params: dict[str, Any] = {}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
-    if region_ids:
-        clauses.append("a.region_id = ANY(:region_ids)")
-        params["region_ids"] = region_ids
-    elif region_id is not None:
-        clauses.append("a.region_id = :region_id")
-        params["region_id"] = region_id
-    if incident_type:
-        clauses.append("a.general_category = :incident_type")
-        params["incident_type"] = incident_type
-    if alarm_level:
-        clauses.append("a.alarm_level = :alarm_level")
-        params["alarm_level"] = alarm_level
-    if casualty_severity == "high":
-        clauses.append("a.civilian_deaths > 0")
-    elif casualty_severity == "medium":
-        clauses.append("a.civilian_injured > 0 AND a.civilian_deaths = 0")
-    elif casualty_severity == "low":
-        clauses.append("a.civilian_injured = 0 AND a.civilian_deaths = 0")
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_id=region_id,
+        region_ids=region_ids,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
-    trunc_val = {"daily": "day", "weekly": "week", "monthly": "month"}[interval]
+    trunc_val = {
+        "daily": "day",
+        "weekly": "week",
+        "monthly": "month",
+        "quarterly": "quarter",
+        "yearly": "year",
+    }[interval]
 
     rows = db.execute(
         text(f"""
@@ -540,8 +593,13 @@ def count_in_range(
     range_end: str,
     *,
     region_id: Optional[int] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
     incident_type: Optional[str] = None,
     alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> int:
     """Comparative range count from analytics_incident_facts."""
     clauses = [
@@ -549,15 +607,18 @@ def count_in_range(
         "a.notification_date <= CAST(:range_end AS date)",
     ]
     params: dict[str, Any] = {"range_start": range_start, "range_end": range_end}
-    if region_id is not None:
-        clauses.append("a.region_id = :region_id")
-        params["region_id"] = region_id
-    if incident_type:
-        clauses.append("a.general_category = :incident_type")
-        params["incident_type"] = incident_type
-    if alarm_level:
-        clauses.append("a.alarm_level = :alarm_level")
-        params["alarm_level"] = alarm_level
+    _append_common_filters(
+        clauses,
+        params,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     result = db.execute(
@@ -574,6 +635,7 @@ def get_export_rows(
     db: Session,
     filters: dict[str, Any],
     columns: list[str],
+    incident_ids: Optional[list[int]] = None,
 ) -> list[dict[str, Any]]:
     """
     Fetch analyst-safe rows for CSV export from analytics_incident_facts.
@@ -603,7 +665,8 @@ def get_export_rows(
         "region_id",
         "verification_status",
         "estimated_damage_php",
-        "barangay_name",
+        "municipality_name",
+        "province_name",
     }
     valid_cols = [c for c in columns if c in allowed]
     if not valid_cols:
@@ -622,7 +685,8 @@ def get_export_rows(
         "total_response_time_minutes",
         "estimated_damage_php",
         "fire_station_name",
-        "barangay_name",
+        "municipality_name",
+        "province_name",
     }
     select_parts = []
     for c in valid_cols:
@@ -635,19 +699,26 @@ def get_export_rows(
 
     clauses = ["1=1"]
     params: dict[str, Any] = {}
-    for k, v in filters.items():
-        if k == "start_date" and v:
-            clauses.append("a.notification_date >= CAST(:start_date AS date)")
-            params["start_date"] = v
-        elif k == "end_date" and v:
-            clauses.append("a.notification_date <= CAST(:end_date AS date)")
-            params["end_date"] = v
-        elif k == "region_id" and v is not None:
-            clauses.append("a.region_id = :region_id")
-            params["region_id"] = v
-        elif k == "incident_type" and v:
-            clauses.append("a.general_category = :incident_type")
-            params["incident_type"] = v
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=filters.get("start_date"),
+        end_date=filters.get("end_date"),
+        region_id=filters.get("region_id"),
+        province=filters.get("province"),
+        municipality=filters.get("municipality"),
+        incident_type=filters.get("incident_type"),
+        alarm_level=filters.get("alarm_level"),
+        casualty_severity=filters.get("casualty_severity"),
+        damage_min=filters.get("damage_min"),
+        damage_max=filters.get("damage_max"),
+    )
+    if filters.get("incident_id") is not None:
+        clauses.append("a.incident_id = :incident_id")
+        params["incident_id"] = filters.get("incident_id")
+    if incident_ids:
+        clauses.append("a.incident_id = ANY(:incident_ids)")
+        params["incident_ids"] = sorted(set(incident_ids))
 
     where_sql = " AND ".join(clauses)
     col_list = ", ".join(select_parts)
@@ -662,6 +733,62 @@ def get_export_rows(
 
     rows = db.execute(text(sql), params).fetchall()
     return [dict(zip(valid_cols, r)) for r in rows]
+
+
+def get_analyst_export_rows(
+    db: Session,
+    filters: dict[str, Any],
+    columns: list[str],
+    incident_ids: Optional[list[int]] = None,
+) -> list[dict[str, Any]]:
+    """Fetch analyst incident export rows, optionally intersected by selected IDs."""
+    deduped_ids = sorted(set(incident_ids or [])) or None
+    return get_export_rows(db, filters, columns, incident_ids=deduped_ids)
+
+
+def count_export_rows(db: Session, filters: dict[str, Any]) -> int:
+    """Count rows matching the export filter contract."""
+    return len(get_export_rows(db, filters, ["incident_id"]))
+
+
+def get_filter_options(
+    db: Session,
+    *,
+    field: str,
+    region_id: Optional[int] = None,
+    province: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> list[str]:
+    """Return sorted non-empty province or municipality names for cascading filters."""
+    field_map = {
+        "province": "a.province_name",
+        "municipality": "a.municipality_name",
+    }
+    if field not in field_map:
+        raise ValueError("field must be province or municipality")
+
+    clauses = [f"{field_map[field]} IS NOT NULL", f"btrim({field_map[field]}) <> ''"]
+    params: dict[str, Any] = {}
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_id=region_id,
+        province=province if field == "municipality" else None,
+    )
+    where_sql = " AND ".join(clauses)
+    rows = db.execute(
+        text(f"""
+            SELECT DISTINCT {field_map[field]} AS name
+            FROM wims.analytics_incident_facts a
+            WHERE {where_sql}
+            ORDER BY name
+        """),
+        params,
+    ).fetchall()
+    return [r[0] for r in rows]
 
 
 def verify_indexed_access(db: Session) -> dict[str, str]:
@@ -696,19 +823,29 @@ def get_type_distribution(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     region_id: Optional[int] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Incident count grouped by general_category (for pie chart)."""
     clauses = ["a.general_category IS NOT NULL"]
     params: dict[str, Any] = {}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
-    if region_id is not None:
-        clauses.append("a.region_id = :region_id")
-        params["region_id"] = region_id
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     rows = db.execute(
@@ -724,58 +861,37 @@ def get_type_distribution(
     return [{"type": r[0], "count": r[1]} for r in rows]
 
 
-def get_top_barangays(
-    db: Session,
-    *,
-    limit: int = 10,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    incident_type: Optional[str] = None,
-) -> list[dict[str, Any]]:
-    """Top N barangays by incident count."""
-    clauses = ["a.barangay_name IS NOT NULL"]
-    params: dict[str, Any] = {}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
-    if incident_type:
-        clauses.append("a.general_category = :incident_type")
-        params["incident_type"] = incident_type
-
-    params["limit"] = min(limit, 50)
-    where_sql = " AND ".join(clauses)
-    rows = db.execute(
-        text(f"""
-            SELECT a.barangay_name, COUNT(*) AS cnt
-            FROM wims.analytics_incident_facts a
-            WHERE {where_sql}
-            GROUP BY a.barangay_name
-            ORDER BY cnt DESC
-            LIMIT :limit
-        """),
-        params,
-    ).fetchall()
-    return [{"barangay": r[0], "count": r[1]} for r in rows]
-
-
 def get_response_time_by_region(
     db: Session,
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    region_id: Optional[int] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
+    incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Average/min/max response time grouped by region."""
     clauses = ["a.total_response_time_minutes IS NOT NULL"]
     params: dict[str, Any] = {}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     rows = db.execute(
@@ -808,20 +924,31 @@ def get_compare_regions(
     region_ids: list[int],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
     incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Cross-region comparison: per-region aggregate stats."""
-    clauses = ["a.region_id = ANY(:region_ids)"]
-    params: dict[str, Any] = {"region_ids": region_ids}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
-    if incident_type:
-        clauses.append("a.general_category = :incident_type")
-        params["incident_type"] = incident_type
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_ids=region_ids,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     rows = db.execute(
@@ -851,9 +978,9 @@ def get_compare_regions(
 
 VALID_TOP_N_METRICS = ("incidents", "response_time", "casualties")
 VALID_TOP_N_DIMENSIONS = {
-    "barangay": "a.barangay_name",
     "fire_station": "a.fire_station_name",
     "region": "a.region_id::text",
+    "municipality": "a.municipality_name",
 }
 
 
@@ -864,6 +991,14 @@ def get_top_n(
     limit: int = 10,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    region_id: Optional[int] = None,
+    province: Optional[str] = None,
+    municipality: Optional[str] = None,
+    incident_type: Optional[str] = None,
+    alarm_level: Optional[str] = None,
+    casualty_severity: Optional[str] = None,
+    damage_min: Optional[float] = None,
+    damage_max: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Configurable top-N analysis by metric and dimension."""
     if metric not in VALID_TOP_N_METRICS:
@@ -883,12 +1018,20 @@ def get_top_n(
 
     clauses = [f"{dim_col} IS NOT NULL"]
     params: dict[str, Any] = {"limit": min(limit, 50)}
-    if start_date:
-        clauses.append("a.notification_date >= CAST(:start_date AS date)")
-        params["start_date"] = start_date
-    if end_date:
-        clauses.append("a.notification_date <= CAST(:end_date AS date)")
-        params["end_date"] = end_date
+    _append_common_filters(
+        clauses,
+        params,
+        start_date=start_date,
+        end_date=end_date,
+        region_id=region_id,
+        province=province,
+        municipality=municipality,
+        incident_type=incident_type,
+        alarm_level=alarm_level,
+        casualty_severity=casualty_severity,
+        damage_min=damage_min,
+        damage_max=damage_max,
+    )
 
     where_sql = " AND ".join(clauses)
     rows = db.execute(

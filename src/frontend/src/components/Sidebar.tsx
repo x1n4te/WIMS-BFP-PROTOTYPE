@@ -17,6 +17,12 @@ import {
     X,
     UserCircle,
     History,
+    BarChart3,
+    Clock,
+    ListChecks,
+    MapPinned,
+    Search,
+    TrendingUp,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -34,6 +40,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         if (path === '/incidents' && pathname?.startsWith('/incidents/triage')) return false;
         // /dashboard/validator should not stay active when the user navigates to /incidents
         if (path === '/dashboard/validator' && (pathname?.startsWith('/incidents'))) return false;
+        if (path === '/dashboard/analyst' && pathname !== '/dashboard/analyst') return false;
         return pathname === path || pathname?.startsWith(`${path}/`);
     };
 
@@ -217,6 +224,29 @@ function getNavSections(role: string | null): NavSection[] {
             items: [
                 { label: 'Triage Queue', href: '/incidents/triage', icon: ClipboardList },
                 { label: 'Audit Trail', href: '/dashboard/validator/audit', icon: History },
+            ],
+        });
+        sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });
+        return sections;
+    }
+
+    if (role === 'NATIONAL_ANALYST') {
+        sections.push({
+            label: 'Navigation',
+            items: [
+                { label: 'Home', href: '/home', icon: Home },
+                { label: 'Analyst Dashboard', href: '/dashboard/analyst', icon: LayoutDashboard },
+            ],
+        });
+        sections.push({
+            label: 'Analysis',
+            items: [
+                { label: 'Comparative', href: '/dashboard/analyst/comparative', icon: BarChart3 },
+                { label: 'Heatmap', href: '/dashboard/analyst/heatmap', icon: MapPinned },
+                { label: 'Trends', href: '/dashboard/analyst/trends', icon: TrendingUp },
+                { label: 'Response Time', href: '/dashboard/analyst/response-time', icon: Clock },
+                { label: 'Top-N Hotspots', href: '/dashboard/analyst/top-n', icon: ListChecks },
+                { label: 'Incident Explorer', href: '/dashboard/analyst/incident-explorer', icon: Search },
             ],
         });
         sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });

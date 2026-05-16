@@ -41,6 +41,8 @@ const mockFetchTopBarangays = vi.fn();
 const mockFetchResponseTime = vi.fn();
 const mockFetchCompareRegions = vi.fn();
 const mockFetchTopN = vi.fn();
+const mockFetchAnalyticsFilterOptions = vi.fn();
+const mockFetchAnalystIncidentList = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   fetchHeatmapData: (f: object) => mockFetchHeatmapData(f),
@@ -52,6 +54,8 @@ vi.mock('@/lib/api', () => ({
   fetchResponseTimeByRegion: (f: object) => mockFetchResponseTime(f),
   fetchCompareRegions: (f: object) => mockFetchCompareRegions(f),
   fetchTopN: (f: object) => mockFetchTopN(f),
+  fetchAnalyticsFilterOptions: (field: string, filters: object) => mockFetchAnalyticsFilterOptions(field, filters),
+  fetchAnalystIncidentList: (params: object) => mockFetchAnalystIncidentList(params),
 }));
 
 vi.mock('react-leaflet', () => ({
@@ -70,17 +74,28 @@ vi.mock('recharts', () => ({
   PieChart: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="pie-chart">{children}</div>
   ),
-  Pie: ({ data }: { data: Array<{ name: string; value: number }> }) => (
+  Pie: ({ data }: { data: Array<{ name?: string; type?: string; value?: number; count?: number }> }) => (
     <div data-testid="pie-data">
-      {(data || []).map((d, i) => (
-        <span key={i} data-testid={`pie-segment-${d.name}`} data-value={d.value}>
-          {d.name}: {d.value}
-        </span>
-      ))}
+      {(data || []).map((d, i) => {
+        const name = d.name ?? d.type ?? `segment-${i}`;
+        const value = d.value ?? d.count ?? 0;
+        return (
+          <span key={i} data-testid={`pie-segment-${name}`} data-value={value}>
+            {name}: {value}
+          </span>
+        );
+      })}
     </div>
   ),
   BarChart: ({ children, data }: { children: React.ReactNode; data?: Array<Record<string, unknown>> }) => (
-    <div data-testid="bar-chart" data-count={data?.length ?? 0}>{children}</div>
+    <div data-testid="bar-chart" data-count={data?.length ?? 0}>
+      {children}
+      {(data || []).map((d, i) => (
+        <span key={i} data-testid={`bar-row-${i}`}>
+          {Object.values(d).join(' ')}
+        </span>
+      ))}
+    </div>
   ),
   Bar: () => <div data-testid="bar" />,
   XAxis: () => null,
@@ -141,6 +156,13 @@ function setupMocks() {
     { name: 'Barangay A', value: 120 },
     { name: 'Barangay B', value: 95 },
   ]);
+  mockFetchAnalyticsFilterOptions.mockResolvedValue([]);
+  mockFetchAnalystIncidentList.mockResolvedValue({
+    incidents: [],
+    total: 0,
+    page: 1,
+    page_size: 25,
+  });
 }
 
 
@@ -285,65 +307,6 @@ describe('Analyst dashboard — AQ-06: Incident type pie chart', () => {
       // Multiple sections show empty state text, so use getAllByText
       const emptyStates = screen.getAllByText(/no.*data|no incidents|no distribution/i);
       expect(emptyStates.length).toBeGreaterThanOrEqual(1);
-    });
-  });
-});
-
-
-describe('Analyst dashboard — AQ-07: Top 10 barangays chart', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setupAuth();
-    setupMocks();
-  });
-
-  it('renders top barangays chart', async () => {
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(mockFetchTopBarangays).toHaveBeenCalled();
-    });
-
-    // After fetch completes, the bar-chart div should render
-    await waitFor(() => {
-      expect(screen.getAllByTestId('bar-chart').length).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  it('fetches top barangays data on load', async () => {
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(mockFetchTopBarangays).toHaveBeenCalled();
-    });
-  });
-
-  it('passes filters to top barangays fetch', async () => {
-    const user = userEvent.setup();
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(mockFetchTopBarangays).toHaveBeenCalled();
-    });
-
-    await user.selectOptions(screen.getByLabelText(/incident type|type/i), 'STRUCTURAL');
-    await user.click(screen.getByRole('button', { name: /^apply$/i }));
-
-    await waitFor(() => {
-      const lastCall = mockFetchTopBarangays.mock.calls[mockFetchTopBarangays.mock.calls.length - 1][0];
-      expect(lastCall.incident_type).toBe('STRUCTURAL');
-    });
-  });
-
-  it('shows section header "Top Barangays"', async () => {
-    const { default: AnalystDashboardPage } = await import('@/app/dashboard/analyst/page');
-    render(<AnalystDashboardPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/top.*barangay/i)).toBeInTheDocument();
     });
   });
 });

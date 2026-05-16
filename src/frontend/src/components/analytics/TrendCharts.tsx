@@ -1,16 +1,31 @@
 'use client';
 
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 import type { TrendsResponse } from '@/lib/api';
 
 export interface TrendChartsProps {
   data: TrendsResponse;
 }
 
-function formatBucket(bucket: string | null): string {
+function formatBucket(bucket: string | null, interval: string = 'daily'): string {
   if (!bucket) return '—';
   try {
     const d = new Date(bucket);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
+    if (interval === 'monthly') {
+      return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+    }
+    if (interval === 'weekly') {
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   } catch {
     return String(bucket);
   }
@@ -30,37 +45,45 @@ export function TrendCharts({ data }: TrendChartsProps) {
     );
   }
 
-  const maxCount = Math.max(...buckets.map((b) => b.count), 1);
-  const barWidth = Math.max(20, Math.min(48, 400 / buckets.length));
+  const formatted = buckets.map((b) => ({
+    ...b,
+    label: formatBucket(b.bucket),
+    count: b.count,
+  }));
 
   return (
     <div className="rounded-md border border-gray-200 bg-white p-4">
       <h3 className="text-sm font-semibold text-gray-700 mb-4">Incidents by period</h3>
-      <div className="flex flex-wrap items-end gap-2" style={{ minHeight: 120 }}>
-        {buckets.map((b, i) => {
-          const heightPct = maxCount > 0 ? (b.count / maxCount) * 100 : 0;
-          return (
-            <div
-              key={i}
-              className="flex flex-col items-center"
-              style={{ width: barWidth }}
-            >
-              <span className="text-xs font-medium text-gray-600 mb-1">{b.count}</span>
-              <div
-                className="w-full rounded-t bg-red-600 transition-all"
-                style={{
-                  height: Math.max(4, heightPct),
-                  minHeight: b.count > 0 ? 8 : 0,
-                }}
-                title={`${formatBucket(b.bucket)}: ${b.count}`}
-              />
-              <span className="text-[10px] text-gray-500 mt-1 truncate w-full text-center">
-                {formatBucket(b.bucket)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      <ResponsiveContainer width="100%" height={200}>
+        <LineChart data={formatted} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 11, fill: '#6b7280' }}
+            tickLine={false}
+            axisLine={{ stroke: '#d1d5db' }}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            tick={{ fontSize: 11, fill: '#6b7280' }}
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+          />
+          <Tooltip
+            formatter={(value) => [`${value} incident${Number(value) !== 1 ? 's' : ''}`, 'Count']}
+            labelFormatter={(label) => `Period: ${label}`}
+          />
+          <Line
+            type="monotone"
+            dataKey="count"
+            stroke="#991b1b"
+            strokeWidth={2}
+            dot={{ r: 3, fill: '#991b1b', strokeWidth: 0 }}
+            activeDot={{ r: 5, fill: '#7f1d1d', strokeWidth: 0 }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }

@@ -121,12 +121,6 @@ class TestPhase1Foundation:
 
         assert "mv_incident_by_region" in MV_NAMES
 
-    def test_mv_incident_by_barangay_exists(self, client: TestClient):
-        """mv_incident_by_barangay materialized view must exist."""
-        from tasks.analytics_refresh import MV_NAMES
-
-        assert "mv_incident_by_barangay" in MV_NAMES
-
     def test_mv_incident_type_distribution_exists(self, client: TestClient):
         """mv_incident_type_distribution materialized view must exist."""
         from tasks.analytics_refresh import MV_NAMES
@@ -211,15 +205,6 @@ class TestPhase1Foundation:
 
         assert "estimated_damage_php" in ALLOWED_EXPORT_COLUMNS
 
-    def test_analytics_facts_has_barangay_column(self):
-        """analytics_incident_facts must have barangay_name for top-N queries."""
-        from tasks.exports import ALLOWED_EXPORT_COLUMNS
-
-        assert (
-            "barangay_name" in ALLOWED_EXPORT_COLUMNS
-            or "fire_station_name" in ALLOWED_EXPORT_COLUMNS
-        )
-
     def test_analytics_facts_has_fire_station_column(self):
         """analytics_incident_facts must have fire_station_name."""
         from tasks.exports import ALLOWED_EXPORT_COLUMNS
@@ -238,13 +223,12 @@ class TestPhase1Foundation:
         assert "civilian_deaths" in source, "sync must populate civilian_deaths"
         assert "total_response_time_minutes" in source, "sync must populate response time"
 
-    def test_sync_incident_populates_barangay_and_station(self):
-        """sync_incident_to_analytics must populate barangay and fire_station_name."""
+    def test_sync_incident_populates_station(self):
+        """sync_incident_to_analytics must populate fire_station_name."""
         import inspect
         from services.analytics_read_model import sync_incident_to_analytics
 
         source = inspect.getsource(sync_incident_to_analytics)
-        assert "barangay" in source, "sync must populate barangay"
         assert "fire_station_name" in source, "sync must populate fire_station_name"
 
 
@@ -360,47 +344,6 @@ class TestPhase2FiltersAndCharts:
         """REGIONAL_ENCODER must receive 403 on type-distribution."""
         app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
         response = client.get("/api/analytics/type-distribution")
-        assert response.status_code == 403
-
-    # -- AQ-07: Top barangays endpoint -----------------------------------
-
-    def test_top_barangays_endpoint_exists(self, client: TestClient):
-        """GET /api/analytics/top-barangays must exist and return 200."""
-        mock_db = _set_analyst(client)
-        mock_db.execute.return_value.fetchall.return_value = [
-            ("Barangay 1", 120),
-            ("Barangay 2", 95),
-            ("Barangay 3", 87),
-        ]
-        response = client.get("/api/analytics/top-barangays")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-        assert len(data) == 3
-        assert data[0]["barangay"] == "Barangay 1"
-        assert data[0]["count"] == 120
-
-    def test_top_barangays_respects_limit_param(self, client: TestClient):
-        """Top barangays must accept limit parameter (default 10)."""
-        mock_db = _set_analyst(client)
-        mock_db.execute.return_value.fetchall.return_value = [
-            (f"Barangay {i}", 100 - i) for i in range(1, 6)
-        ]
-        response = client.get("/api/analytics/top-barangays", params={"limit": 5})
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data) <= 5
-
-    def test_top_barangays_limit_max_50(self, client: TestClient):
-        """Top barangays limit > 50 must be rejected by FastAPI validation."""
-        _set_analyst(client)
-        response = client.get("/api/analytics/top-barangays", params={"limit": 999})
-        assert response.status_code == 422
-
-    def test_top_barangays_rejects_regional_encoder(self, client: TestClient):
-        """REGIONAL_ENCODER must receive 403 on top-barangays."""
-        app.dependency_overrides[auth.get_current_wims_user] = _mock_user("REGIONAL_ENCODER")
-        response = client.get("/api/analytics/top-barangays")
         assert response.status_code == 403
 
     # -- AQ-08: Response time by region endpoint -------------------------
@@ -700,14 +643,14 @@ class TestPhase4Extensions:
         """GET /api/analytics/top-n must accept metric, dimension, limit."""
         mock_db = _set_analyst(client)
         mock_db.execute.return_value.fetchall.return_value = [
-            ("Barangay A", 120),
-            ("Barangay B", 95),
+            ("Station A", 120),
+            ("Station B", 95),
         ]
         response = client.get(
             "/api/analytics/top-n",
             params={
                 "metric": "incidents",
-                "dimension": "barangay",
+                "dimension": "fire_station",
                 "limit": 10,
             },
         )
@@ -725,16 +668,16 @@ class TestPhase4Extensions:
                 "/api/analytics/top-n",
                 params={
                     "metric": metric,
-                    "dimension": "barangay",
+                    "dimension": "fire_station",
                 },
             )
             assert response.status_code == 200, f"metric={metric} must be accepted"
 
     def test_top_n_supports_all_dimensions(self, client: TestClient):
-        """Top-N must support barangay, fire_station, region dimensions."""
+        """Top-N must support fire_station and region dimensions."""
         mock_db = _set_analyst(client)
         mock_db.execute.return_value.fetchall.return_value = []
-        for dim in ("barangay", "fire_station", "region"):
+        for dim in ("fire_station", "region"):
             response = client.get(
                 "/api/analytics/top-n",
                 params={
@@ -751,7 +694,7 @@ class TestPhase4Extensions:
             "/api/analytics/top-n",
             params={
                 "metric": "invalid_metric",
-                "dimension": "barangay",
+                "dimension": "fire_station",
             },
         )
         assert response.status_code == 422
@@ -775,7 +718,7 @@ class TestPhase4Extensions:
             "/api/analytics/top-n",
             params={
                 "metric": "incidents",
-                "dimension": "barangay",
+                "dimension": "fire_station",
             },
         )
         assert response.status_code == 403

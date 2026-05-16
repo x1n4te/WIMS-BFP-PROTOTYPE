@@ -52,5 +52,5 @@ CLAUDE.md
 AFORs/afor_filled.xlsx
 
 # nathan local wiki AI tools
-wiki/
 .codex/
+system-wiki/.obsidian/
