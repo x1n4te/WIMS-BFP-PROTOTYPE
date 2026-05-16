@@ -42,6 +42,7 @@ def _get_security_provider() -> SecurityProvider:
 
 logger = logging.getLogger("wims.regional")
 
+
 router = APIRouter(prefix="/api/regional", tags=["regional"])
 
 
@@ -2836,7 +2837,6 @@ class IncidentCreateRequest(BaseModel):
     specific_type: str | None = None
     occupancy_type: str | None = None
     city_id: int | None = None
-    barangay_id: int | None = None
     distance_from_station_km: float | None = None
     estimated_damage_php: float | None = None
     civilian_injured: int = 0
@@ -2888,7 +2888,6 @@ class IncidentUpdateRequest(BaseModel):
     specific_type: str | None = None
     occupancy_type: str | None = None
     city_id: int | None = None
-    barangay_id: int | None = None
     distance_from_station_km: float | None = None
     estimated_damage_php: float | None = None
     civilian_injured: int | None = None
@@ -3093,6 +3092,7 @@ def create_incident(
         notes="Encoder created new draft",
         action_label="CREATED_DRAFT",
     )
+
     db.commit()
     logger.info(
         "Created incident %s in region %s by encoder %s",

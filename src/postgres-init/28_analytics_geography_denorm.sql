@@ -17,7 +17,8 @@ ALTER TABLE wims.analytics_export_log
     ADD COLUMN IF NOT EXISTS task_id TEXT,
     ADD COLUMN IF NOT EXISTS file_path TEXT,
     ADD COLUMN IF NOT EXISTS file_name TEXT,
-    ADD COLUMN IF NOT EXISTS content_type TEXT;
+    ADD COLUMN IF NOT EXISTS content_type TEXT,
+    ADD COLUMN IF NOT EXISTS export_type TEXT NOT NULL DEFAULT 'analytics';
 
 DROP POLICY IF EXISTS export_log_analyst_insert ON wims.analytics_export_log;
 CREATE POLICY export_log_analyst_insert ON wims.analytics_export_log

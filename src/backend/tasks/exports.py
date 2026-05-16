@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from celery_config import celery_app
 from database import get_session, set_rls_context
-from services.analytics_read_model import get_export_rows
+from services.analytics_read_model import get_analyst_export_rows, get_export_rows
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,6 @@ ALLOWED_EXPORT_COLUMNS = {
     "region_id",
     "verification_status",
     "estimated_damage_php",
-    "barangay_name",
     "municipality_name",
     "province_name",
 }
@@ -52,7 +51,6 @@ DEFAULT_EXPORT_COLUMNS = [
     "region_id",
     "province_name",
     "municipality_name",
-    "barangay_name",
     "alarm_level",
     "general_category",
     "sub_category",
@@ -133,6 +131,7 @@ def _insert_export_log(
     *,
     user_id: str,
     export_format: str,
+    export_type: str,
     filters: dict[str, Any],
     columns: list[str],
     task_id: str | None,
@@ -144,14 +143,15 @@ def _insert_export_log(
         text("""
             INSERT INTO wims.analytics_export_log
                 (user_id, format, filters_json, columns_json, row_count,
-                 task_id, file_path, file_name, content_type)
+                 task_id, file_path, file_name, content_type, export_type)
             VALUES
                 (:user_id, :format, CAST(:filters_json AS jsonb), CAST(:columns_json AS jsonb),
-                 :row_count, :task_id, :file_path, :file_name, :content_type)
+                 :row_count, :task_id, :file_path, :file_name, :content_type, :export_type)
         """),
         {
             "user_id": user_id,
             "format": export_format,
+            "export_type": export_type,
             "filters_json": json.dumps(filters or {}),
             "columns_json": json.dumps(columns),
             "row_count": row_count,
@@ -174,6 +174,8 @@ def _export(
     extension: str,
     content_type: str,
     writer: Callable[[str, list[dict[str, Any]], list[str]], None],
+    incident_ids: list[int] | None = None,
+    export_type: str = "analytics",
 ) -> str:
     valid_cols = _valid_columns(columns)
     logger.info(
@@ -187,7 +189,10 @@ def _export(
     db = get_session()
     try:
         set_rls_context(db, uuid.UUID(user_id))
-        rows = get_export_rows(db, filters or {}, valid_cols)
+        if export_type == "analyst":
+            rows = get_analyst_export_rows(db, filters or {}, valid_cols, incident_ids)
+        else:
+            rows = get_export_rows(db, filters or {}, valid_cols)
         os.makedirs(EXPORT_DIR, exist_ok=True)
         path = os.path.join(EXPORT_DIR, f"analytics_export_{uuid.uuid4().hex[:12]}.{extension}")
         writer(path, rows, valid_cols)
@@ -195,6 +200,7 @@ def _export(
             db,
             user_id=user_id,
             export_format=export_format,
+            export_type=export_type,
             filters=filters or {},
             columns=valid_cols,
             task_id=task_id,
@@ -210,7 +216,9 @@ def _export(
 
 
 @celery_app.task(bind=True, name="tasks.exports.export_incidents_csv")
-def export_incidents_csv_task(self, user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
+def export_incidents_csv_task(
+    self, user_id: str, filters: dict[str, Any], columns: list[str]
+) -> str:
     """Export verified, non-archived incidents to a real CSV file."""
     return _export(
         task_id=getattr(self.request, "id", None),
@@ -225,7 +233,9 @@ def export_incidents_csv_task(self, user_id: str, filters: dict[str, Any], colum
 
 
 @celery_app.task(bind=True, name="tasks.exports.export_incidents_pdf")
-def export_incidents_pdf_task(self, user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
+def export_incidents_pdf_task(
+    self, user_id: str, filters: dict[str, Any], columns: list[str]
+) -> str:
     """Export verified, non-archived incidents to a real PDF file."""
     return _export(
         task_id=getattr(self.request, "id", None),
@@ -240,7 +250,9 @@ def export_incidents_pdf_task(self, user_id: str, filters: dict[str, Any], colum
 
 
 @celery_app.task(bind=True, name="tasks.exports.export_incidents_excel")
-def export_incidents_excel_task(self, user_id: str, filters: dict[str, Any], columns: list[str]) -> str:
+def export_incidents_excel_task(
+    self, user_id: str, filters: dict[str, Any], columns: list[str]
+) -> str:
     """Export verified, non-archived incidents to a real XLSX file."""
     return _export(
         task_id=getattr(self.request, "id", None),
@@ -251,4 +263,42 @@ def export_incidents_excel_task(self, user_id: str, filters: dict[str, Any], col
         extension="xlsx",
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         writer=_write_xlsx,
+    )
+
+
+@celery_app.task(bind=True, name="tasks.exports.export_analyst_incidents")
+def export_analyst_incidents_task(
+    self,
+    user_id: str,
+    filters: dict[str, Any],
+    columns: list[str],
+    incident_ids: list[int] | None = None,
+    format: str = "csv",
+) -> str:
+    """Export analyst incident selections or filtered incident sets."""
+    normalized_format = (format or "csv").lower()
+    writers = {
+        "csv": ("csv", "text/csv", _write_csv),
+        "pdf": ("pdf", "application/pdf", _write_pdf),
+        "excel": (
+            "xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _write_xlsx,
+        ),
+    }
+    if normalized_format not in writers:
+        raise ValueError(f"Unsupported export format: {format}")
+
+    extension, content_type, writer = writers[normalized_format]
+    return _export(
+        task_id=getattr(self.request, "id", None),
+        user_id=user_id,
+        filters=filters,
+        columns=columns,
+        export_format=normalized_format,
+        extension=extension,
+        content_type=content_type,
+        writer=writer,
+        incident_ids=sorted(set(incident_ids or [])) or None,
+        export_type="analyst",
     )

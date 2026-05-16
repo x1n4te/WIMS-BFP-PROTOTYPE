@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, type MouseEvent, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import type { Region } from '@/types/api';
@@ -11,22 +12,43 @@ import {
   fetchComparativeData,
   fetchRegions,
   fetchTypeDistribution,
-  fetchTopBarangays,
   fetchResponseTimeByRegion,
   fetchCompareRegions,
   fetchTopN,
+  fetchAnalyticsFilterOptions,
   type HeatmapGeoJSON,
   type TrendsResponse,
   type ComparativeResponse,
   type TypeDistributionItem,
-  type TopBarangayItem,
   type ResponseTimeRegionItem,
   type CompareRegionItem,
   type TopNItem,
+  type AnalystIncidentListParams,
 } from '@/lib/api';
 import { TrendCharts } from '@/components/analytics/TrendCharts';
-import { RefreshCw, Download } from 'lucide-react';
-import { getShortRegionName } from '@/lib/ph-regions';
+import { TypeDistributionChart } from '@/components/analytics/TypeDistributionChart';
+import { ResponseTimeChart } from '@/components/analytics/ResponseTimeChart';
+import { AnalystIncidentList } from '@/components/analytics/AnalystIncidentList';
+import {
+  AlertTriangle,
+  BarChart3,
+  Clock,
+  Download,
+  FileDown,
+  Filter,
+  ListChecks,
+  MapPinned,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  TrendingUp,
+} from 'lucide-react';
+import { ExportPreviewModal, type ExportFormat } from '@/components/analytics/ExportPreviewModal';
+import {
+  createAnalystWorkflowTransferUrl,
+  type AnalystWorkflowSlug,
+} from '@/lib/analyst-workflow-transfer';
+import { getShortRegionName, PH_REGIONS } from '@/lib/ph-regions';
 
 const HeatmapViewer = dynamic(
   () => import('@/components/analytics/HeatmapViewer').then((m) => m.HeatmapViewer),
@@ -56,6 +78,118 @@ const INTERVALS = [
 ];
 
 const ANALYST_ROLES = ['NATIONAL_ANALYST', 'SYSTEM_ADMIN'];
+
+const WORKFLOW_LINKS = [
+  {
+    slug: 'comparative',
+    href: '/dashboard/analyst/comparative',
+    title: 'Comparative',
+    description: 'Period variance, calculations, export, and evidence table',
+    icon: <BarChart3 className="h-5 w-5" />,
+  },
+  {
+    slug: 'heatmap',
+    href: '/dashboard/analyst/heatmap',
+    title: 'Heatmap',
+    description: 'Map-first geographic review with filtered records',
+    icon: <MapPinned className="h-5 w-5" />,
+  },
+  {
+    slug: 'trends',
+    href: '/dashboard/analyst/trends',
+    title: 'Trends',
+    description: 'Interval controls, bucket totals, and incident table',
+    icon: <TrendingUp className="h-5 w-5" />,
+  },
+  {
+    slug: 'response-time',
+    href: '/dashboard/analyst/response-time',
+    title: 'Response Time',
+    description: 'Regional min, max, average detail, and export',
+    icon: <Clock className="h-5 w-5" />,
+  },
+  {
+    slug: 'top-n',
+    href: '/dashboard/analyst/top-n',
+    title: 'Top-N Hotspots',
+    description: 'Metric and dimension controls for hotspot ranking',
+    icon: <ListChecks className="h-5 w-5" />,
+  },
+  {
+    slug: 'incident-explorer',
+    href: '/dashboard/analyst/incident-explorer',
+    title: 'Incident Explorer',
+    description: 'Dedicated verified incident table and detail drawer',
+    icon: <Search className="h-5 w-5" />,
+  },
+];
+
+function FilterField({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function PanelHeader({
+  icon,
+  title,
+  description,
+  action,
+}: {
+  icon: ReactNode;
+  title: string;
+  description?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 border-b border-gray-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-red-50 text-red-700">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-base font-bold text-gray-900">{title}</h2>
+          {description && <p className="mt-0.5 text-sm text-gray-500">{description}</p>}
+        </div>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function StatTile({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-md border border-gray-200 bg-white px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-semibold uppercase text-gray-500">{label}</span>
+        <span className="text-red-700">{icon}</span>
+      </div>
+      <div className="mt-2 text-2xl font-bold text-gray-900">{value}</div>
+      <p className="mt-1 text-xs text-gray-500">{detail}</p>
+    </div>
+  );
+}
 
 /** Default comparative windows: last 30 days split into Range A then Range B (ranges may overlap — server does not enforce ordering). */
 function initialComparativeRanges(): {
@@ -102,6 +236,10 @@ export default function AnalystDashboardPage() {
   const [alarmLevel, setAlarmLevel] = useState('');
   const [interval, setInterval] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [regions, setRegions] = useState<Region[]>([]);
+  const [province, setProvince] = useState('');
+  const [municipality, setMunicipality] = useState('');
+  const [provinceOptions, setProvinceOptions] = useState<string[]>([]);
+  const [municipalityOptions, setMunicipalityOptions] = useState<string[]>([]);
 
   const [cmpRanges, setCmpRanges] = useState(() => initialComparativeRanges());
 
@@ -110,10 +248,10 @@ export default function AnalystDashboardPage() {
   // AQ-05: Damage range filter
   const [damageMin, setDamageMin] = useState('');
   const [damageMax, setDamageMax] = useState('');
+  // Export modal state
+  const [exportModal, setExportModal] = useState<{ format: ExportFormat; open: boolean } | null>(null);
   // AQ-06: Type distribution
   const [typeDistribution, setTypeDistribution] = useState<TypeDistributionItem[] | null>(null);
-  // AQ-07: Top barangays
-  const [topBarangays, setTopBarangays] = useState<TopBarangayItem[] | null>(null);
   // AQ-08: Response time by region
   const [responseTime, setResponseTime] = useState<ResponseTimeRegionItem[] | null>(null);
   // AQ-13: Cross-region comparison
@@ -121,12 +259,15 @@ export default function AnalystDashboardPage() {
   // AQ-14: Top-N
   const [topNData, setTopNData] = useState<TopNItem[] | null>(null);
   const [topNMetric, setTopNMetric] = useState('incidents');
-  const [topNDimension, setTopNDimension] = useState('barangay');
+  const [topNDimension, setTopNDimension] = useState('municipality');
+  const [appliedIncidentFilters, setAppliedIncidentFilters] = useState<AnalystIncidentListParams>({});
 
   type FilterOverrides = {
     startDate?: string;
     endDate?: string;
     regionId?: string;
+    province?: string;
+    municipality?: string;
     incidentType?: string;
     alarmLevel?: string;
     interval?: 'daily' | 'weekly' | 'monthly';
@@ -159,17 +300,25 @@ export default function AnalystDashboardPage() {
     setError(null);
     setAccessDenied(false);
     try {
+      const pv = overrides?.province ?? province;
+      const mc = overrides?.municipality ?? municipality;
       const filters = {
         start_date: sd || undefined,
         end_date: ed || undefined,
         region_id: rid ? parseInt(rid, 10) : undefined,
+        province: pv || undefined,
+        municipality: mc || undefined,
         incident_type: it || undefined,
         alarm_level: al || undefined,
         casualty_severity: cs || undefined,
         damage_min: dm ? parseFloat(dm) : undefined,
         damage_max: dx ? parseFloat(dx) : undefined,
       };
-      const [heatmapRes, trendsRes, comparativeRes, typeDistRes, topBgyRes, respTimeRes, cmpRegionsRes, topNRes] = await Promise.all([
+      const comparisonRegionIds = rid
+        ? (regions.length >= 2 ? regions.map((r) => r.region_id) : PH_REGIONS.map((r) => r.regionId))
+        : [];
+      setAppliedIncidentFilters(filters as AnalystIncidentListParams);
+      const [heatmapRes, trendsRes, comparativeRes, typeDistRes, respTimeRes, cmpRegionsRes, topNRes] = await Promise.all([
         fetchHeatmapData(filters),
         fetchTrendData({ ...filters, interval: iv }),
         fetchComparativeData({
@@ -177,21 +326,23 @@ export default function AnalystDashboardPage() {
           range_a_end: raE,
           range_b_start: rbS,
           range_b_end: rbE,
-          region_id: rid ? parseInt(rid, 10) : undefined,
-          incident_type: it || undefined,
-          alarm_level: al || undefined,
+          ...filters,
         }),
-        fetchTypeDistribution({ start_date: sd || undefined, end_date: ed || undefined, region_id: rid ? parseInt(rid, 10) : undefined }),
-        fetchTopBarangays({ start_date: sd || undefined, end_date: ed || undefined, incident_type: it || undefined }),
-        fetchResponseTimeByRegion({ start_date: sd || undefined, end_date: ed || undefined }),
-        rid ? fetchCompareRegions({ region_ids: rid, start_date: sd || undefined, end_date: ed || undefined }).catch(() => []) : Promise.resolve([]),
-        fetchTopN({ metric: topNMetric, dimension: topNDimension, start_date: sd || undefined, end_date: ed || undefined }),
+        fetchTypeDistribution(filters),
+        fetchResponseTimeByRegion(filters),
+        comparisonRegionIds.length >= 2
+          ? fetchCompareRegions({
+              ...filters,
+              region_id: undefined,
+              region_ids: comparisonRegionIds.join(','),
+            }).catch(() => [])
+          : Promise.resolve([]),
+        fetchTopN({ metric: topNMetric, dimension: topNDimension, ...filters }),
       ]);
       setHeatmap(heatmapRes);
       setTrends(trendsRes);
       setComparative(comparativeRes);
       setTypeDistribution(typeDistRes);
-      setTopBarangays(topBgyRes);
       setResponseTime(respTimeRes);
       setCompareRegions(cmpRegionsRes.length >= 2 ? cmpRegionsRes : null);
       setTopNData(topNRes);
@@ -210,6 +361,8 @@ export default function AnalystDashboardPage() {
     startDate,
     endDate,
     regionId,
+    province,
+    municipality,
     incidentType,
     alarmLevel,
     interval,
@@ -219,6 +372,7 @@ export default function AnalystDashboardPage() {
     damageMax,
     topNMetric,
     topNDimension,
+    regions,
   ]);
 
   useEffect(() => {
@@ -226,12 +380,91 @@ export default function AnalystDashboardPage() {
     fetchRegions().then((r) => setRegions(Array.isArray(r) ? r : []));
   }, [loading]);
 
+  // Cascade: load province options when region changes
+  useEffect(() => {
+    if (!ANALYST_ROLES.includes(role ?? '')) return;
+    fetchAnalyticsFilterOptions('province', {
+      region_id: regionId ? parseInt(regionId, 10) : undefined,
+      start_date: startDate || undefined,
+      end_date: endDate || undefined,
+    }).then(setProvinceOptions).catch(() => setProvinceOptions([]));
+  }, [loading, regionId, startDate, endDate, role]);
+
+  // Cascade: load municipality options when province changes
+  useEffect(() => {
+    if (!ANALYST_ROLES.includes(role ?? '')) return;
+    if (!province) {
+      setMunicipalityOptions([]);
+      return;
+    }
+    fetchAnalyticsFilterOptions('municipality', {
+      region_id: regionId ? parseInt(regionId, 10) : undefined,
+      province,
+      start_date: startDate || undefined,
+      end_date: endDate || undefined,
+    }).then(setMunicipalityOptions).catch(() => setMunicipalityOptions([]));
+  }, [loading, regionId, province, startDate, endDate, role]);
+
+  // Clear municipality when province is cleared
+  useEffect(() => {
+    if (!province && municipality) setMunicipality('');
+  }, [province, municipality]);
+
   useEffect(() => {
     if (ANALYST_ROLES.includes(role ?? '')) {
       loadData();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load only; Apply button triggers refresh
   }, [role]);
+
+  const activeFilterCount = [
+    startDate,
+    endDate,
+    regionId,
+    province,
+    municipality,
+    incidentType,
+    alarmLevel,
+    casualtySeverity,
+    damageMin,
+    damageMax,
+  ].filter(Boolean).length;
+  const activeRegionName = regionId
+    ? regions.find((r) => String(r.region_id) === regionId)?.region_name ?? `Region ${regionId}`
+    : 'All Regions';
+  const visibleIncidentCount = typeDistribution?.reduce((sum, item) => sum + item.count, 0)
+    ?? heatmap?.features.length
+    ?? 0;
+  const averageResponseTime = responseTime && responseTime.length > 0
+    ? responseTime.reduce((sum, item) => sum + Number(item.avg_response_time || 0), 0) / responseTime.length
+    : null;
+  const dashboardTransferFilters = useMemo<AnalystIncidentListParams>(() => ({
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
+    region_id: regionId ? parseInt(regionId, 10) : undefined,
+    province: province || undefined,
+    municipality: municipality || undefined,
+    incident_type: incidentType || undefined,
+    alarm_level: alarmLevel || undefined,
+    casualty_severity: casualtySeverity ? casualtySeverity as 'high' | 'medium' | 'low' : undefined,
+    damage_min: damageMin ? parseFloat(damageMin) : undefined,
+    damage_max: damageMax ? parseFloat(damageMax) : undefined,
+  }), [
+    alarmLevel,
+    casualtySeverity,
+    damageMax,
+    damageMin,
+    endDate,
+    incidentType,
+    municipality,
+    province,
+    regionId,
+    startDate,
+  ]);
+  const openWorkflow = (event: MouseEvent<HTMLAnchorElement>, workflow: AnalystWorkflowSlug) => {
+    event.preventDefault();
+    router.push(createAnalystWorkflowTransferUrl(workflow, { filters: dashboardTransferFilters }));
+  };
 
   if (loading) {
     return (
@@ -260,37 +493,105 @@ export default function AnalystDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-            National Analyst Dashboard
-          </h1>
-          <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
-            Geospatial heatmap and trend analytics for verified incidents.
-          </p>
+      <div className="rounded-md border border-gray-200 bg-white px-5 py-4 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                National Analyst Dashboard
+              </h1>
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                Analytics ready
+              </span>
+            </div>
+            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+              Verified incident intelligence for national trend review, geographic monitoring, and AFOR export.
+            </p>
+          </div>
+          <button
+            onClick={() => void loadData()}
+            disabled={loadingData}
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-70"
+          >
+            <RefreshCw className={`h-4 w-4 ${loadingData ? 'animate-spin' : ''}`} /> Refresh data
+          </button>
         </div>
-        <button
-          onClick={() => void loadData()}
-          disabled={loadingData}
-          className="card flex items-center gap-2 px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-70"
-        >
-          <RefreshCw className={`w-4 h-4 ${loadingData ? 'animate-spin' : ''}`} /> Refresh
-        </button>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile
+            icon={<ListChecks className="h-4 w-4" />}
+            label="Visible Incidents"
+            value={visibleIncidentCount.toLocaleString()}
+            detail="Count under the applied dashboard filters"
+          />
+          <StatTile
+            icon={<MapPinned className="h-4 w-4" />}
+            label="Scope"
+            value={activeRegionName}
+            detail={province || municipality ? [province, municipality].filter(Boolean).join(' / ') : 'National coverage'}
+          />
+          <StatTile
+            icon={<Clock className="h-4 w-4" />}
+            label="Avg Response"
+            value={averageResponseTime == null ? 'N/A' : `${averageResponseTime.toFixed(1)} min`}
+            detail="Mean of regional averages in the current result set"
+          />
+          <StatTile
+            icon={<Filter className="h-4 w-4" />}
+            label="Active Filters"
+            value={String(activeFilterCount)}
+            detail={activeFilterCount === 0 ? 'Showing all verified incidents' : 'Filters are limiting the dashboard'}
+          />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+        <PanelHeader
+          icon={<BarChart3 className="h-5 w-5" />}
+          title="Analyst Workflows"
+          description="Open a dedicated workspace for calculations, export actions, and the matching incident table."
+        />
+        <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+          {WORKFLOW_LINKS.map((workflow) => (
+            <Link
+              key={workflow.href}
+              href={workflow.href}
+              onClick={(event) => openWorkflow(event, workflow.slug as AnalystWorkflowSlug)}
+              className="group rounded-md border border-gray-200 bg-white p-4 transition-colors hover:border-red-200 hover:bg-red-50/40"
+            >
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-red-50 text-red-700 group-hover:bg-white">
+                  {workflow.icon}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-bold text-gray-900">{workflow.title}</span>
+                  <span className="mt-1 block text-sm text-gray-500">{workflow.description}</span>
+                </span>
+              </div>
+            </Link>
+          ))}
+        </div>
       </div>
 
       {/* Filter bar */}
-      <div className="card">
-        <div className="card-header">Filters</div>
-        <div className="card-body space-y-6">
+      <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+        <PanelHeader
+          icon={<Filter className="h-5 w-5" />}
+          title="Analysis Filters"
+          description="Apply one shared filter contract across map, charts, exports, and the incident list."
+          action={
+            <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600">
+              {activeFilterCount} active
+            </span>
+          }
+        />
+        <div className="space-y-6 p-5">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-              Heatmap &amp; trends window
+            <p className="mb-3 text-xs font-semibold uppercase text-gray-500">
+              Incident scope
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-8 gap-4 items-end">
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Start Date
-                </label>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <FilterField label="Start Date">
                 <input
                   type="date"
                   value={startDate}
@@ -299,11 +600,8 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="Start date"
                 />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  End Date
-                </label>
+              </FilterField>
+              <FilterField label="End Date">
                 <input
                   type="date"
                   value={endDate}
@@ -312,11 +610,8 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="End date"
                 />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Region
-                </label>
+              </FilterField>
+              <FilterField label="Region">
                 <select
                   value={regionId}
                   onChange={(e) => setRegionId(e.target.value)}
@@ -331,11 +626,48 @@ export default function AnalystDashboardPage() {
                     </option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Incident Type
-                </label>
+              </FilterField>
+              <FilterField label="Province">
+                <select
+                  value={province}
+                  onChange={(e) => {
+                    setProvince(e.target.value);
+                    setMunicipality('');
+                  }}
+                  className="w-full rounded-md py-2 px-3 text-sm border cursor-pointer"
+                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  aria-label="Province"
+                >
+                  <option value="">All Provinces</option>
+                  {provinceOptions.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </FilterField>
+              <FilterField label="Municipality">
+                <select
+                  value={municipality}
+                  onChange={(e) => setMunicipality(e.target.value)}
+                  disabled={!province}
+                  className="w-full rounded-md py-2 px-3 text-sm border cursor-pointer disabled:opacity-50"
+                  style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  aria-label="Municipality"
+                >
+                  <option value="">All Municipalities</option>
+                  {municipalityOptions.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </FilterField>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-3 text-xs font-semibold uppercase text-gray-500">
+              Classification and impact
+            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
+              <FilterField label="Incident Type">
                 <select
                   value={incidentType}
                   onChange={(e) => setIncidentType(e.target.value)}
@@ -347,11 +679,8 @@ export default function AnalystDashboardPage() {
                     <option key={o.value || 'all'} value={o.value}>{o.label}</option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Alarm level
-                </label>
+              </FilterField>
+              <FilterField label="Alarm level">
                 <select
                   value={alarmLevel}
                   onChange={(e) => setAlarmLevel(e.target.value)}
@@ -363,11 +692,8 @@ export default function AnalystDashboardPage() {
                     <option key={o.value || 'all'} value={o.value}>{o.label}</option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Interval
-                </label>
+              </FilterField>
+              <FilterField label="Trend interval">
                 <select
                   value={interval}
                   onChange={(e) => setInterval(e.target.value as 'daily' | 'weekly' | 'monthly')}
@@ -379,11 +705,8 @@ export default function AnalystDashboardPage() {
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Casualty Severity
-                </label>
+              </FilterField>
+              <FilterField label="Casualty Severity">
                 <select
                   value={casualtySeverity}
                   onChange={(e) => setCasualtySeverity(e.target.value)}
@@ -396,11 +719,8 @@ export default function AnalystDashboardPage() {
                   <option value="medium">Medium (injuries)</option>
                   <option value="low">Low (none)</option>
                 </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Damage Min
-                </label>
+              </FilterField>
+              <FilterField label="Damage Min">
                 <input
                   type="number"
                   value={damageMin}
@@ -411,11 +731,8 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="Damage min"
                 />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Damage Max
-                </label>
+              </FilterField>
+              <FilterField label="Damage Max">
                 <input
                   type="number"
                   value={damageMax}
@@ -426,15 +743,17 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="Damage max"
                 />
-              </div>
-              <div className="flex gap-2 md:col-span-2">
+              </FilterField>
+              <div className="flex items-end gap-2 md:col-span-2 xl:col-span-6">
                 <button
                   onClick={() => void loadData()}
                   disabled={loadingData}
-                  className="flex-1 text-sm font-bold py-2 px-3 rounded-md text-white transition-colors"
+                  aria-label="Apply"
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-bold text-white transition-colors disabled:opacity-70 sm:flex-none"
                   style={{ backgroundColor: 'var(--bfp-maroon)' }}
                 >
-                  Apply
+                  <Search className="h-4 w-4" />
+                  Apply filters
                 </button>
                 <button
                   onClick={() => {
@@ -442,14 +761,21 @@ export default function AnalystDashboardPage() {
                     setStartDate('');
                     setEndDate('');
                     setRegionId('');
+                    setProvince('');
+                    setMunicipality('');
                     setIncidentType('');
                     setAlarmLevel('');
+                    setCasualtySeverity('');
+                    setDamageMin('');
+                    setDamageMax('');
                     setInterval('daily');
                     setCmpRanges(reset);
                     loadData({
                       startDate: '',
                       endDate: '',
                       regionId: '',
+                      province: '',
+                      municipality: '',
                       incidentType: '',
                       alarmLevel: '',
                       interval: 'daily',
@@ -457,11 +783,15 @@ export default function AnalystDashboardPage() {
                       rangeAEnd: reset.rangeAEnd,
                       rangeBStart: reset.rangeBStart,
                       rangeBEnd: reset.rangeBEnd,
+                      casualtySeverity: '',
+                      damageMin: '',
+                      damageMax: '',
                     });
                   }}
-                  className="text-sm py-2 px-3 rounded-md border hover:bg-gray-50"
+                  className="inline-flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-gray-50"
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
                 >
+                  <RotateCcw className="h-4 w-4" />
                   Clear
                 </button>
               </div>
@@ -469,14 +799,11 @@ export default function AnalystDashboardPage() {
           </div>
 
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
+            <p className="mb-3 text-xs font-semibold uppercase text-gray-500">
               Comparative periods (variance)
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Range A start
-                </label>
+              <FilterField label="Range A start">
                 <input
                   type="date"
                   value={cmpRanges.rangeAStart}
@@ -485,11 +812,8 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="Range A start"
                 />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Range A end
-                </label>
+              </FilterField>
+              <FilterField label="Range A end">
                 <input
                   type="date"
                   value={cmpRanges.rangeAEnd}
@@ -498,11 +822,8 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="Range A end"
                 />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Range B start
-                </label>
+              </FilterField>
+              <FilterField label="Range B start">
                 <input
                   type="date"
                   value={cmpRanges.rangeBStart}
@@ -511,11 +832,8 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="Range B start"
                 />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                  Range B end
-                </label>
+              </FilterField>
+              <FilterField label="Range B end">
                 <input
                   type="date"
                   value={cmpRanges.rangeBEnd}
@@ -524,7 +842,7 @@ export default function AnalystDashboardPage() {
                   style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   aria-label="Range B end"
                 />
-              </div>
+              </FilterField>
             </div>
           </div>
         </div>
@@ -544,225 +862,258 @@ export default function AnalystDashboardPage() {
 
       {!loadingData && heatmap !== null && (
         <>
-          <div className="card">
-            <div className="card-header">Heatmap</div>
-            <div className="card-body p-0">
-              <HeatmapViewer geojson={heatmap} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="card">
-              <div className="card-header">Trends</div>
-              <div className="card-body">
-                {trends && <TrendCharts data={trends} />}
-              </div>
-            </div>
-
-            {comparative && (
-              <div className="card">
-                <div className="card-header">Comparative Summary</div>
-                <div className="card-body">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div className="p-3 rounded border" style={{ borderColor: 'var(--border-color)' }}>
-                      <div className="text-xs font-semibold uppercase text-gray-500 mb-1">Range A</div>
-                      <div>{comparative.range_a.start} — {comparative.range_a.end}</div>
-                      <div className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{comparative.range_a.count}</div>
-                    </div>
-                    <div className="p-3 rounded border" style={{ borderColor: 'var(--border-color)' }}>
-                      <div className="text-xs font-semibold uppercase text-gray-500 mb-1">Range B</div>
-                      <div>{comparative.range_b.start} — {comparative.range_b.end}</div>
-                      <div className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{comparative.range_b.count}</div>
-                    </div>
-                    <div className="col-span-2 p-3 rounded bg-gray-50">
-                      <span className="text-gray-600">Variance: </span>
-                      <span className={`font-bold ${comparative.variance_percent >= 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {comparative.variance_percent >= 0 ? '+' : ''}{comparative.variance_percent}%
-                      </span>
-                    </div>
+          {/* Two-column layout: main content left, heatmap portrait on right */}
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+                  <PanelHeader
+                    icon={<TrendingUp className="h-5 w-5" />}
+                    title="Trend Window"
+                    description={`${interval.charAt(0).toUpperCase()}${interval.slice(1)} verified incident volume`}
+                  />
+                  <div className="p-5">
+                    {trends && <TrendCharts data={trends} />}
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
 
-          {/* Export buttons */}
-          <div className="flex gap-3">
-            <button
-              onClick={() => {
-                fetch('/api/analytics/export/pdf', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  credentials: 'include',
-                  body: JSON.stringify({ filters: {}, columns: ['incident_id', 'notification_dt', 'alarm_level', 'general_category'] }),
-                }).then(r => r.json()).then(d => { if (d.task_id) alert('PDF export queued: ' + d.task_id); });
-              }}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md text-white"
-              style={{ backgroundColor: 'var(--bfp-maroon)' }}
-            >
-              <Download className="w-4 h-4" /> Export PDF
-            </button>
-            <button
-              onClick={() => {
-                fetch('/api/analytics/export/excel', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  credentials: 'include',
-                  body: JSON.stringify({ filters: {}, columns: ['incident_id', 'notification_dt', 'alarm_level', 'general_category'] }),
-                }).then(r => r.json()).then(d => { if (d.task_id) alert('Excel export queued: ' + d.task_id); });
-              }}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md text-white"
-              style={{ backgroundColor: 'var(--bfp-maroon)' }}
-            >
-              <Download className="w-4 h-4" /> Export Excel
-            </button>
-          </div>
-
-          {/* Charts grid: pie, top barangays, response time */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* AQ-06: Type distribution pie chart */}
-            <div className="card">
-              <div className="card-header">Incident Type Distribution</div>
-              <div className="card-body">
-                {typeDistribution && typeDistribution.length > 0 ? (
-                  <div data-testid="pie-chart">
-                    {typeDistribution.map((d) => (
-                      <div key={d.type} className="flex justify-between py-1 text-sm border-b" style={{ borderColor: 'var(--border-color)' }} data-testid={`pie-segment-${d.type}`}>
-                        <span>{d.type}</span>
-                        <span className="font-bold">{d.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No distribution data.</p>
-                )}
-              </div>
-            </div>
-
-            {/* AQ-07: Top barangays */}
-            <div className="card">
-              <div className="card-header">Top Barangays</div>
-              <div className="card-body">
-                {topBarangays && topBarangays.length > 0 ? (
-                  <div data-testid="bar-chart">
-                    {topBarangays.map((d) => (
-                      <div key={d.barangay} className="flex justify-between py-1 text-sm border-b" style={{ borderColor: 'var(--border-color)' }}>
-                        <span>{d.barangay}</span>
-                        <span className="font-bold">{d.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No barangay data.</p>
-                )}
-              </div>
-            </div>
-
-            {/* AQ-08: Response time by region */}
-            <div className="card">
-              <div className="card-header">Response Time by Region</div>
-              <div className="card-body">
-                {responseTime && responseTime.length > 0 ? (
-                  <div>
-                    {responseTime.map((d) => (
-                      <div key={d.region_id} className="py-2 text-sm border-b" style={{ borderColor: 'var(--border-color)' }}>
-                        <div className="font-medium">{getShortRegionName(d.region_id)}</div>
-                        <div className="text-gray-500">
-                          Avg: <span className="font-bold text-gray-700">{d.avg_response_time}</span> min
-                          &nbsp;|&nbsp; Min: {d.min_response_time} / Max: {d.max_response_time}
+                {comparative && (
+                  <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+                    <PanelHeader
+                      icon={<AlertTriangle className="h-5 w-5" />}
+                      title="Comparative Summary"
+                      description="Variance between the selected review periods"
+                    />
+                    <div className="p-5">
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="p-3 rounded border" style={{ borderColor: 'var(--border-color)' }}>
+                          <div className="text-xs font-semibold uppercase text-gray-500 mb-1">Range A</div>
+                          <div>{comparative.range_a.start} to {comparative.range_a.end}</div>
+                          <div className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{comparative.range_a.count}</div>
+                        </div>
+                        <div className="p-3 rounded border" style={{ borderColor: 'var(--border-color)' }}>
+                          <div className="text-xs font-semibold uppercase text-gray-500 mb-1">Range B</div>
+                          <div>{comparative.range_b.start} to {comparative.range_b.end}</div>
+                          <div className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{comparative.range_b.count}</div>
+                        </div>
+                        <div className="col-span-2 p-3 rounded bg-gray-50">
+                          <span className="text-gray-600">Variance: </span>
+                          <span className={`font-bold ${comparative.variance_percent >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            {comparative.variance_percent >= 0 ? '+' : ''}{comparative.variance_percent}%
+                          </span>
                         </div>
                       </div>
-                    ))}
+                    </div>
                   </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No response time data.</p>
                 )}
               </div>
-            </div>
-          </div>
 
-          {/* AQ-13: Cross-region comparison */}
-          {compareRegions && (
-            <div className="card">
-              <div className="card-header">Cross-Region Comparison</div>
-              <div className="card-body">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="text-left py-2">Region</th>
-                      <th className="text-right py-2">Total Incidents</th>
-                      <th className="text-right py-2">Avg Response Time</th>
-                      <th className="text-right py-2">Top Type</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {compareRegions.map((r) => (
-                      <tr key={r.region_id} className="border-b" style={{ borderColor: 'var(--border-color)' }}>
-                        <td className="py-2">{getShortRegionName(r.region_id)}</td>
-                        <td className="text-right py-2 font-bold">{r.total_incidents}</td>
-                        <td className="text-right py-2">{r.avg_response_time ?? '—'}</td>
-                        <td className="text-right py-2">{r.top_type ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* AQ-14: Top-N configurable analysis */}
-          <div className="card">
-            <div className="card-header">Top-N Analysis</div>
-            <div className="card-body space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                    Metric
-                  </label>
-                  <select
-                    value={topNMetric}
-                    onChange={(e) => setTopNMetric(e.target.value)}
-                    className="w-full rounded-md py-2 px-3 text-sm border cursor-pointer"
-                    style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                    aria-label="Metric"
-                  >
-                    <option value="incidents">Incidents</option>
-                    <option value="response_time">Response Time</option>
-                    <option value="casualties">Casualties</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
-                    Dimension
-                  </label>
-                  <select
-                    value={topNDimension}
-                    onChange={(e) => setTopNDimension(e.target.value)}
-                    className="w-full rounded-md py-2 px-3 text-sm border cursor-pointer"
-                    style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-                    aria-label="Dimension"
-                  >
-                    <option value="barangay">Barangay</option>
-                    <option value="fire_station">Fire Station</option>
-                    <option value="region">Region</option>
-                  </select>
-                </div>
-              </div>
-              {topNData && topNData.length > 0 ? (
-                <div data-testid="bar-chart">
-                  {topNData.map((d) => (
-                    <div key={d.name} className="flex justify-between py-1 text-sm border-b" style={{ borderColor: 'var(--border-color)' }}>
-                      <span>{d.name}</span>
-                      <span className="font-bold">{typeof d.value === 'number' ? d.value.toFixed(1) : d.value}</span>
+              {/* Export buttons */}
+              <div className="rounded-md border border-gray-200 bg-white px-5 py-4 shadow-sm">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-md bg-red-50 text-red-700">
+                      <FileDown className="h-5 w-5" />
                     </div>
-                  ))}
+                    <div>
+                      <h2 className="text-base font-bold text-gray-900">Export AFOR Analytics</h2>
+                      <p className="mt-0.5 text-sm text-gray-500">
+                        Preview the active filters and selected columns before queueing the file.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      onClick={() => setExportModal({ format: 'csv', open: true })}
+                      aria-label="Export CSV"
+                      className="inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-white"
+                      style={{ backgroundColor: 'var(--bfp-maroon)' }}
+                    >
+                      <Download className="h-4 w-4" />
+                      CSV
+                    </button>
+                    <button
+                      onClick={() => setExportModal({ format: 'pdf', open: true })}
+                      aria-label="Export PDF"
+                      className="inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-white"
+                      style={{ backgroundColor: 'var(--bfp-maroon)' }}
+                    >
+                      <Download className="h-4 w-4" />
+                      PDF
+                    </button>
+                    <button
+                      onClick={() => setExportModal({ format: 'excel', open: true })}
+                      aria-label="Export Excel"
+                      className="inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-white"
+                      style={{ backgroundColor: 'var(--bfp-maroon)' }}
+                    >
+                      <Download className="h-4 w-4" />
+                      Excel
+                    </button>
+                  </div>
                 </div>
-              ) : (
-                <p className="text-sm text-gray-500">No top-N data.</p>
+              </div>
+
+              {/* Charts grid: pie, top barangays, response time */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* AQ-06: Type distribution donut chart */}
+                <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+                  <PanelHeader
+                    icon={<BarChart3 className="h-5 w-5" />}
+                    title="Incident Types"
+                    description="Distribution by general category"
+                  />
+                  <div className="p-5">
+                    <TypeDistributionChart data={typeDistribution ?? []} />
+                  </div>
+                </div>
+
+                {/* AQ-08: Response time by region bar chart */}
+                <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+                  <PanelHeader
+                    icon={<Clock className="h-5 w-5" />}
+                    title="Response Time"
+                    description="Average, minimum, and maximum by region"
+                  />
+                  <div className="p-5">
+                    <ResponseTimeChart data={responseTime ?? []} />
+                  </div>
+                </div>
+              </div>
+
+              {/* AQ-13: Cross-region comparison */}
+              {compareRegions && (
+                <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+                  <PanelHeader
+                    icon={<BarChart3 className="h-5 w-5" />}
+                    title="Cross-Region Comparison"
+                    description="Compare incident volume, response time, and top type by region"
+                  />
+                  <div className="p-5">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b" style={{ borderColor: 'var(--border-color)' }}>
+                          <th className="text-left py-2">Region</th>
+                          <th className="text-right py-2">Total Incidents</th>
+                          <th className="text-right py-2">Avg Response Time</th>
+                          <th className="text-right py-2">Top Type</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {compareRegions.map((r) => (
+                          <tr key={r.region_id} className="border-b" style={{ borderColor: 'var(--border-color)' }}>
+                            <td className="py-2">{getShortRegionName(r.region_id)}</td>
+                            <td className="text-right py-2 font-bold">{r.total_incidents}</td>
+                            <td className="text-right py-2">{r.avg_response_time ?? '—'}</td>
+                            <td className="text-right py-2">{r.top_type ?? '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               )}
+
+              {/* AQ-14: Top-N configurable analysis */}
+              <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+                <PanelHeader
+                  icon={<ListChecks className="h-5 w-5" />}
+                  title="Top-N Analysis"
+                  description="Switch metric and dimension to inspect hotspots without leaving the dashboard"
+                />
+                <div className="space-y-4 p-5">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                      <label className="block text-sm font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>
+                        Metric
+                      </label>
+                      <select
+                        value={topNMetric}
+                        onChange={(e) => setTopNMetric(e.target.value)}
+                        className="w-full rounded-md py-2.5 px-3 text-sm border cursor-pointer"
+                        style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                        aria-label="Metric"
+                      >
+                        <option value="incidents">Incidents</option>
+                        <option value="response_time">Response Time</option>
+                        <option value="casualties">Casualties</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>
+                        Dimension
+                      </label>
+                      <select
+                        value={topNDimension}
+                        onChange={(e) => setTopNDimension(e.target.value)}
+                        className="w-full rounded-md py-2.5 px-3 text-sm border cursor-pointer"
+                        style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                        aria-label="Dimension"
+                      >
+                        <option value="fire_station">Fire Station</option>
+                        <option value="region">Region</option>
+                        <option value="municipality">Municipality</option>
+                      </select>
+                    </div>
+                  </div>
+                  {topNData && topNData.length > 0 ? (
+                    <div data-testid="bar-chart">
+                      {topNData.map((d) => (
+                        <div key={d.name} className="flex justify-between py-1 text-sm border-b" style={{ borderColor: 'var(--border-color)' }}>
+                          <span>{d.name}</span>
+                          <span className="font-bold">{typeof d.value === 'number' ? d.value.toFixed(1) : d.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No top-N data.</p>
+                  )}
+                </div>
+              </div>
+
+              <AnalystIncidentList
+                filters={appliedIncidentFilters}
+                prominent
+                title="Incident Analysis Set"
+                description="Select verified incidents across pages, then send that selected set to a dedicated analyst workflow."
+              />
+            </div>
+
+            {/* Heatmap: portrait side column on desktop */}
+            <div className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm lg:sticky lg:top-4 lg:self-start">
+              <PanelHeader
+                icon={<MapPinned className="h-5 w-5" />}
+                title="Incident Heatmap"
+                description="Geographic clustering of verified incidents"
+              />
+              <div className="p-0">
+                <HeatmapViewer geojson={heatmap} />
+              </div>
             </div>
           </div>
         </>
+      )}
+
+      {exportModal?.open && (
+        <ExportPreviewModal
+          format={exportModal.format}
+          filters={appliedIncidentFilters as Record<string, unknown>}
+          filtersSummary={
+            [
+              startDate && `From: ${startDate}`,
+              endDate && `To: ${endDate}`,
+              regionId && `Region: ${regions.find(r => String(r.region_id) === regionId)?.region_name ?? regionId}`,
+              province && `Province: ${province}`,
+              municipality && `Municipality: ${municipality}`,
+              incidentType && `Type: ${incidentType}`,
+              alarmLevel && `Alarm: ${alarmLevel}`,
+              casualtySeverity && `Casualty: ${casualtySeverity}`,
+              damageMin && `Damage Min: ₱${Number(damageMin).toLocaleString()}`,
+              damageMax && `Damage Max: ₱${Number(damageMax).toLocaleString()}`,
+            ].filter(Boolean).join(' | ') || 'No filters (all data)'
+          }
+          onClose={() => setExportModal(null)}
+        />
       )}
     </div>
   );
