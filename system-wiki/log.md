@@ -302,3 +302,25 @@ Format: `## [YYYY-MM-DD] action | subject`
 - Audience mismatch discovered and resolved: `client_id=wims-web` required so token `aud` matches `KEYCLOAK_AUDIENCE`
 - Verified: endpoint returns 200, token validates via `auth.authenticator.validate_token()`, `GET /api/user/me` returns 200
 - Handoff: `system-wiki/sessions/2026-05-17_1300_dev-bypass-auth-handoff.md`
+
+## 2026-05-17 — Dogfood QA Session (Ares / xynate)
+
+**Branch:** `dev/dev-bypass-auth`
+**Auth method:** `POST /api/dev-login` (Keycloak direct grant, `qa_auto` / `QaAuto2026!Aa`)
+**Role tested:** REGIONAL_ENCODER
+
+### QA Findings (6 issues)
+
+| # | Severity | Issue |
+|---|----------|-------|
+| 1 | High | Change Password form requires TOTP input — users without TOTP device cannot change password |
+| 2 | Medium | Date/time spinbuttons default to `0` instead of today's date |
+| 3 | Medium | "Auto-fill (Test)" button navigates to `/login`, losing session |
+| 4 | Medium | Account Information fields on `/profile` missing labels (empty paragraphs) |
+| 5 | Low | Dashboard stat cards lack `aria-label` — inaccessible to screen readers |
+| 6 | Low | Current password field shows `—` instead of bullet mask `••••••••` |
+
+### Tech debt
+- Cookie injection on `/login` page blocked (SecurityError) — must inject on API endpoint page then navigate
+- Report saved: `dogfood-output/report.md`
+

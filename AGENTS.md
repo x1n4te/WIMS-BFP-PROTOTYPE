@@ -31,8 +31,9 @@ Raw FRS files are copied under `system-wiki/raw/frs/` and must be treated as sou
 
 ## Build, Test, and Development Commands
 
-- `cd src && docker compose up --build`: build and run the local stack.
-- `cd src && docker compose down`: stop the local stack without deleting volumes.
+- `cd src && docker compose down -v && docker compose build --no-cache && docker compose up -d`: **clean-slate init** — destroys containers and volumes, fresh image build, cold start. First boot runs all 34 SQL bootstrap files in `postgres-init/` and imports Keycloak realm.
+- `cd src && docker compose down`: stop the stack without deleting volumes (preserves DB data).
+- `cd src && docker compose up --build -d`: restart with rebuild (preserves data volumes).
 - `cd src/backend && pytest -v`: run backend unit and integration tests from `src/backend/tests`.
 - `cd src/frontend && npm run dev`: start the Next.js dev server.
 - `cd src/frontend && npm run build`: create a production frontend build.
