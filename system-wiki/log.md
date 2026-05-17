@@ -47,6 +47,24 @@ Format: `## [YYYY-MM-DD] action | subject`
 - Updated `index.md` to list reference files under their parent subsystem entries.
 - Total synthesis pages: 16 pages + 3 reference files = 19 total wiki documents.
 
+## [2026-05-17] update | analyst incident detail backend + sensitive endpoint + numeric hardening + index fix
+- `GET /incidents/analyst/{incident_id}` — fully rewired:
+  - Added `form_kind` field via `CASE WHEN w.incident_id IS NOT NULL THEN 'WILDLAND_AFOR' ELSE 'STRUCTURAL_AFOR'` using LEFT JOIN on `incident_wildland_afor`
+  - Added all 19 structural fields from `incident_nonsensitive_details`: `fire_origin`, `extent_of_damage`, `structures_affected`, `households_affected`, `individuals_affected`, `vehicles_affected`, `resources_deployed`, `alarm_timeline`, `problems_encountered`, `stage_of_fire`, `extent_total_floor_area_sqm`, `extent_total_land_area_hectares`, `water_tankers_used`, `breathing_apparatus_used`, `total_gas_consumed_liters`, `families_affected`, `responder_type`, `fire_station_name`, `distance_from_station_km`
+  - When `has_wildland_afor = true`, inlines `wildland` (full row dict), `alarm_statuses`, and `assistance_rows` from joined tables
+  - Sensitive fields (narrative, PII, disposition) intentionally excluded — use `/sensitive` endpoint
+  - **Index fix (another agent):** Live DB query confirmed the SELECT returns 38 columns (indexes 0–37). `form_kind` at row[18], `fire_station_name` at row[36], `distance_from_station_km` at row[37]. Original indices were off by 2 due to stale indexing from removed `barangay_name` JOIN. All row indices updated to actual positions; endpoint returns 200 for incident 12.
+- New `GET /incidents/analyst/{incident_id}/sensitive` — separate endpoint for PII:
+  - Same auth: `NATIONAL_ANALYST` or `SYSTEM_ADMIN`
+  - Returns: `caller_name`, `caller_number`, `owner_name`, `establishment_name`, `occupant_name`, `narrative_report`, `prepared_by_officer`, `noted_by_officer`, `disposition`, `fire_origin`, `extent_of_damage`, `alarm_timeline`
+  - Verifies incident is VERIFIED and not archived before returning any data (404 otherwise)
+- Numeric field hardening: replaced bare `float()` casts on `NUMERIC` columns with `_analyst_json_value()` helper for `estimated_damage_php`, `extent_total_floor_area_sqm`, `extent_total_land_area_hectares`, `total_gas_consumed_liters`, `distance_from_station_km`. Prevents `ValueError` when garbage strings (e.g. `'BFP'` in `total_gas_consumed_liters` for incident 12) land in numeric columns.
+- Removed dead `ref_barangays` LEFT JOIN — `barangay_id` is never written by encoder workflow; JOIN always returned empty. Comment added referencing future purge tracking. `barangay_name` dropped from response; frontend `FieldRow` renders `N/A`.
+- Frontend `api.ts` — `AnalystIncidentDetailResponse` extended with all new fields + `form_kind` + optional wildland sub-objects; `AnalystIncidentSensitiveResponse` interface added; `fetchAnalystIncidentSensitive()` function added.
+- Frontend analyst detail page (`/dashboard/analyst/incidents/[id]`) — fully redesigned by parallel agent: 8 collapsible sections (A–H), blur/reveal sensitive data with per-field eye-icon toggle, locked wildland section for STRUCTURAL_AFOR, lazy-load sensitive endpoint on user click. Reviews passed.
+- Updated `system-wiki/backend/api-route-map.md`: added `/incidents/analyst/{incident_id}/sensitive` route entry.
+- SQL contract tests pass: 4/4 (`test_analyst_incidents_sql_contract.py`).
+
 ## [2026-05-16] retracted | PSGC barangay geometry full-load pipeline
 - A proposed PSGC barangay geometry full-load pipeline was generated but rejected before commit.
 - Rejected artifacts included a PSGC code SQL migration, a Python geometry loader, a prep script, a loader Dockerfile, and a Compose startup dependency.
