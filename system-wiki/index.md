@@ -1,7 +1,8 @@
 # WIMS-BFP System Wiki Index
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 Total synthesis pages: 31
+Total SQL init files: 34 (dropped from 35 — removed `31_barangay_geometry.sql`; highest sequence now 29)
 Purpose: project-local knowledgebase for agents routing themselves to relevant WIMS-BFP context.
 
 ## Start Here

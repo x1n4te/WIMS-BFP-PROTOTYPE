@@ -1,7 +1,7 @@
 ---
 title: Database Schema — SQL Init Files
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-05-17
 type: database
 tags: [wims-bfp, database, postgresql, postgis, sql-migrations, rls, analytics]
 sources: [src/postgres-init/]
@@ -10,7 +10,7 @@ status: draft
 
 # Database Schema — SQL Init Files
 
-Complete documentation of all SQL migration files in `src/postgres-init/`, ordered by execution sequence. These files are run by Docker Compose on first volume creation.
+Complete documentation of all SQL migration files in `src/postgres-init/` (34 files, ordered by execution sequence). These files are run by Docker Compose on first volume creation. `31_barangay_geometry.sql` was removed (2026-05-17) — barangay geometry not needed.
 
 ---
 
@@ -283,7 +283,7 @@ Seeds ref_cities for all remaining PH regions (CAR, Regions I-III, V-XIII, BARMM
 
 ---
 
-## Late Migrations (27–31)
+## Late Migrations (27–30)
 
 ### `27_reference_sequence.sql`
 
@@ -308,12 +308,6 @@ Seeds ref_cities for all remaining PH regions (CAR, Regions I-III, V-XIII, BARMM
 Creates 12 seed VERIFIED incidents across NCR (6), CALABARZON/IV-A (3), and Bicol/V (3). Each incident creates: fire_incidents row, nonsensitive_details, sensitive_details, verification_history entry (action_label: "seed_verified"), analytics_incident_facts row, and 4x MV refresh.
 
 Ref number range: 0001–0012. Incident types cover STRUCTURAL (residential, commercial, high-rise, warehouse, mixed occupancy, school), VEHICULAR, NON_STRUCTURAL (grass, rubbish, wildland edge).
-
-### `31_barangay_geometry.sql`
-
-**Purpose:** Adds geography polygon column to ref_barangays for reverse-geocoding.
-
-ALTER TABLE ref_barangays ADD `geometry GEOGRAPHY(POLYGON, 4326)`. GIST index `idx_ref_barangays_geometry` for fast ST_Contains lookups. PSGC .shp polygon data must be loaded separately — this file only creates the column and index.
 
 ---
 
