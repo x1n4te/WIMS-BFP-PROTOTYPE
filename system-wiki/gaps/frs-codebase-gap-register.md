@@ -25,8 +25,13 @@ This register prevents agents from hallucinating completion. A module is not com
 - Public DMZ abuse controls: verify unauthenticated route has rate limiting/input validation and cannot bypass triage.
 - Notifications: verify SSE/Redis/email behavior against Module 13.
 - Offline-first: verify IndexedDB encryption/sync semantics against Module 2.
-- M9 System Monitoring: verify psutil/Docker API metrics collection, 60s refresh, and full-text log search (NOT yet implemented).
-- TOP-N barangay dimension: PARTIALLY RESOLVED / DEFERRED — `src/postgres-init/31_barangay_geometry.sql` adds `geometry GEOGRAPHY(POLYGON, 4326)` column + GiST index to `ref_barangays`, and `src/backend/api/routes/regional.py` contains `_reverse_geocode_barangay(db, incident_id, lon, lat)` hooks for AFOR/manual incident creation. This remains optional because no reliable local barangay polygon seed exists in the repo. A proposed `load-barangay-geometries` one-shot Docker/GitHub PSGC loader was rejected on 2026-05-16: it made stack startup network-dependent, removed/broke existing Docker services and environment values, and attempted invalid PSGC SQL (`NULL` `city_id` inserts into `ref_barangays`). Analyst Top-N UI should prefer `municipality`, `fire_station`, and `region`; barangay ranking should stay deferred until a vetted local polygon/reference-data import is designed.
+- M9 System Monitoring: 🟡 PARTIAL — PR #103 adds Prometheus /metrics, admin endpoints, and worker heartbeat. M9 dashboard UI and full-text log search still unverified. See [[pr-qa/pr-103-system-monitoring-prometheus]].
+
+ ## FRS Gap Closures (May 2026 batch)
+ - **M6-G (XAI Narrative Generation)**: ✅ CLOSED — PR #104: `POST /api/analytics/incidents/{id}/narrative`, batch endpoint, `ai_narrative` + `ai_narrative_confidence` columns on `fire_incidents`. Qwen2.5-3B via Ollama.
+ - **M6-F (Suricata IDS Integration)**: ✅ CLOSED — PR #105: HIGH severity auto-incident creation, duplicate guard, `security_alert_id` FK, service account pre-provisioned.
+ - **M9 (System Monitoring)**: 🟡 PARTIAL — PR #103: Prometheus `/metrics` endpoint + admin-only system/worker monitoring. M9 dashboard UI and full-text log search still gap.
+ - **M4 (Incident Workflow)**: ✅ CLOSED — PR #102: AFOR import fixes, field persistence, validator audit trail, VALIDATOR role routing, immutable rule fix.
 
 ## Related
 - [[concepts/frs-module-map]]

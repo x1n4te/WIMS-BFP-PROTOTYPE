@@ -271,9 +271,49 @@ Format: `## [YYYY-MM-DD] action | subject`
 - `raw/ui-ux/` directory created as immutable source for future evaluations.
 - SCHEMA.md updated: added `ui-ux` to types and `ui-ux`, `hci` to domains taxonomy.
 - `index.md` updated: total pages 10 -> 12, added UI/UX Evaluations section, updated Raw Source Captures description.
+## [2026-05-14] split | UI/UX gaps separated from FRS codebase gap register
+- Created `gaps/ui-ux-gap-register.md` — standalone gap register for UI/UX issues.
+- Removed UI/UX section from `gaps/frs-codebase-gap-register.md`; added cross-link.
+- `index.md` updated: total pages 12 -> 13, Gaps section now lists both registers separately.
+- Updated header in `ui-ux-gap-register.md` to reflect teammate as well as user evaluations.
+## [2026-05-14] add | Teammate-reported bugs to UI/UX gap register
+- 5 bugs added to `gaps/ui-ux-gap-register.md` (Teammate-Reported Bugs section):
+  - System Audit record_id shows "-" on create user actions (M12).
+  - First login allows missing First Name, Last Name, device name — Keycloak profile validation not enforced.
+  - No username change opportunity on first login — admin expects but no UI exists.
+  - Session lifespan too short / fast logout — Keycloak token config issue.
+  - No account recovery if TOTP authenticator is deleted — hard lockout, no fallback.
+## [2026-05-14] split | Functional bugs moved from UI/UX register to standalone register
+- `gaps/functional-bug-register.md` created — holds 5 teammate-reported functional/auth bugs (M12).
+- Teammate bugs section removed from `gaps/ui-ux-gap-register.md`; cross-links added in both directions.
+- `gaps/frs-codebase-gap-register.md` Related section updated to include `functional-bug-register`.
+- `index.md` Gaps section updated: all 3 gap registers now listed separately.
+- `log.md` entries updated to reflect split.
+## [2026-05-14] add | National analyst dashboard evaluation
+- Raw notes added to `raw/ui-ux/evaluation-national-analyst.md`.
+- Synthesis created at `ui-ux/evaluation-national-analyst.md` — layout issues (L-01–L-04), filter issues (F-01–F-02), plus FRS/codebase gaps not explicitly raised by user (G-01–G-08).
+- Cross-referenced with FRS M5 (Analytics), GitHub issues #84–#89.
+- Key findings from FRS not raised by user: Top municipalities view missing (G-01), Average response time by region missing (G-02), P0 CRITICAL data pipeline bug (#84 — verify_incident() no analytics sync).
+- Execution order per #89: Phase 0 → Phase 1 → Phase 2/3 (parallel) → Phase 5 → Phase 4.
+- Added to `ui-ux-gap-register.md` (National Analyst Dashboard section) and `index.md` (UI/UX Evaluations section).
+- SCHEMA.md authority model: "Empty or incomplete FRS source files" rule preserved (applies if future sources are empty).
+## [2026-05-17] add | PR QA pages for May 2026 batch (PRs #102–#105)
+- Created `pr-qa/` directory with 5 QA pages: batch overview + 4 individual PR docs
+- PR #102 (laqqui): M4 post-fix — AFOR import gaps, field persistence, validator audit 500, VALIDATOR role 404, immutable rule fix, seed incidents, barangay geometry reversal. 7 bug clusters all resolved. ✅ APPROVE
+- PR #103 (orljorstin, #70): Prometheus /metrics endpoint, worker heartbeat (30s), /api/admin/monitoring/workers, /api/admin/monitoring/system, worker_heartbeat.sql. 7/7 tests pass. Merge after #104. ✅ APPROVE
+- PR #104 (orljorstin, #69): XAI incident narrative generation via Qwen2.5-3B, POST /incidents/{id}/narrative, batch endpoint, ai_narrative + confidence columns. 8/8 tests pass. Prompt injection noted as low risk. ✅ APPROVE
+- PR #105 (orljorstin, #68): Suricata HIGH auto-incident creation, duplicate guard, security_alert_id FK, service account svc_suricata (pre-provisioned in 03_users.sql). 10/10 tests. ✅ APPROVE
+- Critical finding: PR #105's service account concern resolved — svc_suricata UUID 00000000-0000-0000-0000-000000000001 already seeded in 03_users.sql with NATIONAL_ANALYST role.
+- FRS gap closures: M6-G (XAI narratives), M6-F (Suricata auto-incident), M9 (Prometheus monitoring partial), M4 (incident workflow fixes).
+- Merge order: #102 → #104 → #103 → #105
+- Index updated: total pages 13 → 18
 
-## [2026-05-14] create | System wiki initialized
-- Created project-local wiki at `/home/xynate/WIMS-BFP-NEW/LOCAL-WIMS-BFP-PROTOTYPE/system-wiki`.
-- Copied 15 user-supplied FRS files from `wiki-dir/` into `raw/frs/`.
-- Created initial synthesis pages for architecture, FRS module map, backend routes, frontend routes, database schema, security baseline, agent routing, and gap register.
-- Created raw codebase snapshot from live repository structure and route/table scans.
+## [2026-05-14] handoff | Session complete, handoff file created
+- AGENTS.md updated: added "System Wiki & Agent Context Routing" section pointing agents to system-wiki/.
+- Session handoff created: `sessions/2026-05-14_1605_x1n4te_system-wiki-initialization-uiux-evaluations.md` — full session summary, recommended skills, known conventions, open questions.
+- Open items for next session: wiki-dir/ cleanup decision, next desk-check page, groupmate wiki access, GitHub Issues conversion of gap register.
+## [2026-05-14] update | National analyst backend slice started
+- Added API map entries for `GET /api/analytics/export/{task_id}` and `GET /api/analytics/filter-options`.
+- Documented `28_analytics_geography_denorm.sql`: denormalized `municipality_name` / `province_name` on `analytics_incident_facts`, plus export task/file metadata on `analytics_export_log`.
+- Updated National Analyst evaluation/gap registers: verification sync remains fixed, export backend is implemented but frontend preview/download UX remains pending, and National Analyst sidebar navigation is fixed.
+>>>>>>> Stashed changes
