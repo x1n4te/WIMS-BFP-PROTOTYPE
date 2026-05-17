@@ -38,7 +38,6 @@ src/suricata/logs/
 # OS
 .DS_Store
 Thumbs.db
-CLAUDE.md
 
 # Cursor / agent tooling (local only)
 .cursor/
@@ -53,4 +52,6 @@ AFORs/afor_filled.xlsx
 
 # nathan local wiki AI tools
 .codex/
-system-wiki/.obsidian/
+system-wiki/
+.obsidian/
+.hermes/
