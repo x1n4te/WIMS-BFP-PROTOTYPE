@@ -24,12 +24,18 @@ export interface MapPickerInnerProps {
 }
 
 const DEFAULT_CENTER: [number, number] = [14.5995, 120.9842]; // Manila area
+
+const PH_BOUNDS = { minLat: 4.5, maxLat: 21.5, minLng: 116.0, maxLng: 127.0 };
+const isInPhilippines = (lat: number, lng: number) =>
+    lat >= PH_BOUNDS.minLat && lat <= PH_BOUNDS.maxLat &&
+    lng >= PH_BOUNDS.minLng && lng <= PH_BOUNDS.maxLng;
+
 // M4 Bug 8-B: city-level zoom for incident input; detail view uses DETAIL_INCIDENT_MAP_ZOOM
 export const DEFAULT_INCIDENT_MAP_ZOOM = 12;
 export const DETAIL_INCIDENT_MAP_ZOOM = 13;
 const DEFAULT_ZOOM = DEFAULT_INCIDENT_MAP_ZOOM;
 // M4 Bug 8-C: landscape rectangle ratio for input maps; detail view passes 320px explicitly
-export const DEFAULT_INCIDENT_MAP_HEIGHT = '400px';
+export const DEFAULT_INCIDENT_MAP_HEIGHT = '280px';
 export const DETAIL_INCIDENT_MAP_HEIGHT = '320px';
 
 type GeoSuggestion = {
@@ -103,6 +109,7 @@ export function MapPickerInner({
     const [searching, setSearching] = useState(false);
     const [searchError, setSearchError] = useState<string | null>(null);
     const [suggestions, setSuggestions] = useState<GeoSuggestion[]>([]);
+    const [coordError, setCoordError] = useState<string | null>(null);
 
     useEffect(() => {
         setPosition(value ?? null);
@@ -113,9 +120,15 @@ export function MapPickerInner({
 
     const handleChange = useCallback(
         (lat: number, lng: number) => {
+            if (!isInPhilippines(lat, lng)) {
+                setCoordError('Coordinates must be within the Philippines. Click a location inside the Philippine archipelago.');
+                return;
+            }
+            setCoordError(null);
             setPosition({ lat, lng });
             setMapCenter([lat, lng]);
             setSuggestions([]);
+            setSearchText('');
             onChange?.(lat, lng);
         },
         [onChange]
@@ -206,8 +219,8 @@ export function MapPickerInner({
     return (
         <div className="space-y-2">
             {!readOnly && (
-                <>
-                    <div className="flex flex-col md:flex-row gap-2">
+                <div>
+                    <div className="flex flex-col md:flex-row gap-2 mb-1">
                         <input
                             type="text"
                             value={searchText}
@@ -256,7 +269,8 @@ export function MapPickerInner({
                         </div>
                     )}
                     {searchError && <p className="text-xs text-red-600">{searchError}</p>}
-                </>
+                    {coordError && <p className="text-xs text-red-600">{coordError}</p>}
+                </div>
             )}
 
             <div style={{ overflow: 'hidden', borderRadius: '0.375rem', position: 'relative' }}>

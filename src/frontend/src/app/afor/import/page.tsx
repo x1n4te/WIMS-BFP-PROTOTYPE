@@ -22,6 +22,8 @@ import {
   ALL_PROBLEM_OPTIONS,
   normalizeProblemLabel,
 } from '@/lib/afor-utils';
+import { useUserProfile } from '@/lib/auth';
+import { PH_REGIONS } from '@/lib/ph-regions';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type PersonnelOnDuty = Record<string, string | { name?: string; contact?: string }>;
@@ -400,6 +402,7 @@ function useGeocoding(address: string, city: string) {
 export default function AforImportPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { assignedRegionId } = useUserProfile();
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
@@ -412,6 +415,7 @@ export default function AforImportPage() {
   const [committedIds, setCommittedIds] = useState<number[]>([]);
   const [isSubmittingAll, setIsSubmittingAll] = useState(false);
   const geocodeTriggered = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // M4-D: per-row duplicate resolution state
   const [pendingDuplicates, setPendingDuplicates] = useState<{
@@ -517,6 +521,14 @@ export default function AforImportPage() {
       // The encoder reviews / corrects the pre-filled data there before saving.
       const firstValid = data.rows.find((r) => r.status === 'VALID');
       if (firstValid) {
+        // Block import if AFOR region doesn't match encoder's assigned region
+        const aforRegionId = (firstValid.data as Record<string, unknown>).region_id as number | undefined;
+        if (assignedRegionId && aforRegionId && aforRegionId !== assignedRegionId) {
+          const assignedName = PH_REGIONS.find((r) => r.regionId === assignedRegionId)?.regionName ?? `Region ${assignedRegionId}`;
+          const aforName = PH_REGIONS.find((r) => r.regionId === aforRegionId)?.regionName ?? `Region ${aforRegionId}`;
+          setError(`This AFOR is for ${aforName}, but you are assigned to ${assignedName}. You can only import AFORs within your assigned region.`);
+          return;
+        }
         sessionStorage.setItem('temp_afor_review', JSON.stringify({
           ...firstValid.data,
           _form_kind: data.form_kind,
@@ -531,7 +543,12 @@ export default function AforImportPage() {
       setCommitLatStr('');
       setCommitLngStr('');
     } catch (err: unknown) {
-      setError((err as { message?: string }).message || 'Failed to upload and parse the file.');
+      const msg = (err as { message?: string }).message || 'Failed to upload and parse the file.';
+      setError(msg);
+      // On any import error (including region mismatch) clear the file so the user
+      // can pick a new one without the HTML input blocking re-selection.
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } finally {
       setIsUploading(false);
     }
@@ -638,6 +655,8 @@ export default function AforImportPage() {
     setCommitLngStr('');
     setCommittedIds([]);
     geocodeTriggered.current = false;
+    // Reset the DOM file input so the same file can be re-selected after an error/cancel
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
@@ -729,7 +748,7 @@ export default function AforImportPage() {
             style={{ borderColor: 'var(--border-color)' }}
             onClick={() => !isOffline && document.getElementById('file-upload')?.click()}
           >
-            <input type="file" id="file-upload" className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileInput} disabled={isOffline || isUploading} />
+            <input ref={fileInputRef} type="file" id="file-upload" className="hidden" accept=".csv, .xlsx, .xls" onChange={handleFileInput} disabled={isOffline || isUploading} />
             <div className="flex justify-center mb-4">
               <div className="p-4 rounded-full bg-blue-50 text-blue-600">
                 <Upload className="w-8 h-8" />

@@ -127,6 +127,7 @@ class UserCreate(BaseModel):
     first_name: str
     last_name: str
     role: str
+    username: Optional[str] = None
     contact_number: Optional[str] = None
     assigned_region_id: Optional[int] = None
 
@@ -143,6 +144,22 @@ class UserCreate(BaseModel):
         if not v.strip():
             raise ValueError("Name must not be blank")
         return v.strip()
+
+    @field_validator("username")
+    @classmethod
+    def username_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        import re
+
+        if not re.match(r"^[a-zA-Z0-9_\-]{3,50}$", v):
+            raise ValueError(
+                "Username must be 3–50 characters and contain only letters, numbers, underscores, or hyphens"
+            )
+        return v.lower()
 
 
 class UserUpdate(BaseModel):
@@ -183,7 +200,8 @@ def create_user(
     3. Inserts a linked row into wims.users.
     4. Returns the generated temporary password in plaintext for the admin to distribute.
     """
-    username = str(body.email).lower()[:50]
+    # Use provided username if given; fall back to email-derived
+    username = body.username if body.username else str(body.email).lower()[:50]
 
     temp_password = generate_temp_password()
 

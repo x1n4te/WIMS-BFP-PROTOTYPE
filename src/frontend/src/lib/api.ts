@@ -261,6 +261,7 @@ export async function createAdminUser(payload: {
   first_name: string;
   last_name: string;
   role: string;
+  username?: string;
   contact_number?: string;
   assigned_region_id?: number;
 }): Promise<{

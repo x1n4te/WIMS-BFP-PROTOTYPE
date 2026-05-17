@@ -21,15 +21,26 @@ interface EncoderAuditResponse {
   offset: number;
 }
 
+const ACTION_OPTIONS = [
+  { value: '', label: 'Any action' },
+  { value: 'CREATED_DRAFT', label: 'Created Draft' },
+  { value: 'EDITED', label: 'Edited' },
+  { value: 'SUBMITTED', label: 'Submitted for Review' },
+  { value: 'WITHDRAWN', label: 'Withdrawn' },
+  { value: 'DELETED_DRAFT', label: 'Deleted Draft' },
+  { value: 'DELETED_PENDING', label: 'Deleted Pending' },
+];
+
 const ACTION_LABEL_MAP: Record<string, string> = {
   CREATED_DRAFT: 'Created Draft',
   EDITED: 'Edited',
   DELETED_DRAFT: 'Deleted Draft',
+  DELETED_PENDING: 'Deleted Pending Submission',
   SUBMITTED: 'Submitted for Review',
   WITHDRAWN: 'Withdrawn',
 };
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 15;
 
 export default function EncoderAuditPage() {
   const [items, setItems] = useState<EncoderAuditEntry[]>([]);
@@ -39,6 +50,8 @@ export default function EncoderAuditPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [actionFilter, setActionFilter] = useState('');
+  const [cityFilter, setCityFilter] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,6 +59,8 @@ export default function EncoderAuditPage() {
     const p = new URLSearchParams();
     if (dateFrom) p.set('date_from', dateFrom);
     if (dateTo) p.set('date_to', dateTo);
+    if (actionFilter) p.set('action', actionFilter);
+    if (cityFilter.trim()) p.set('city_municipality', cityFilter.trim());
     p.set('limit', String(PAGE_SIZE));
     p.set('offset', String(page * PAGE_SIZE));
     try {
@@ -59,7 +74,7 @@ export default function EncoderAuditPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, page]);
+  }, [dateFrom, dateTo, actionFilter, cityFilter, page]);
 
   useEffect(() => {
     load();
@@ -73,9 +88,9 @@ export default function EncoderAuditPage() {
         <h1 className="text-2xl font-bold">My Activity Log</h1>
         <Link
           href="/dashboard/regional"
-          className="text-sm font-medium text-blue-700 hover:text-blue-900"
+          className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium bg-yellow-400 text-gray-900 hover:bg-yellow-500 transition-colors"
         >
-          ← Back to incidents
+          ← Back to Dashboard
         </Link>
       </div>
       <p className="text-sm text-gray-500 mb-6">
@@ -83,7 +98,7 @@ export default function EncoderAuditPage() {
       </p>
 
       {/* Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4 text-sm">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4 text-sm">
         <label className="flex flex-col">
           <span className="text-xs text-gray-600">From</span>
           <input
@@ -100,6 +115,28 @@ export default function EncoderAuditPage() {
             className="border rounded px-2 py-1.5"
             value={dateTo}
             onChange={(e) => { setDateTo(e.target.value); setPage(0); }}
+          />
+        </label>
+        <label className="flex flex-col">
+          <span className="text-xs text-gray-600">Action</span>
+          <select
+            className="border rounded px-2 py-1.5"
+            value={actionFilter}
+            onChange={(e) => { setActionFilter(e.target.value); setPage(0); }}
+          >
+            {ACTION_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col">
+          <span className="text-xs text-gray-600">City / Municipality</span>
+          <input
+            type="text"
+            className="border rounded px-2 py-1.5"
+            placeholder="partial match"
+            value={cityFilter}
+            onChange={(e) => { setCityFilter(e.target.value); setPage(0); }}
           />
         </label>
       </div>
@@ -167,27 +204,25 @@ export default function EncoderAuditPage() {
         </div>
       )}
 
-      {total > PAGE_SIZE && (
-        <div className="flex items-center gap-4 mt-4 text-sm text-gray-600">
-          <button
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            disabled={page === 0}
-            className="px-3 py-1 border rounded disabled:opacity-40"
-          >
-            ← Prev
-          </button>
-          <span>
-            Page {page + 1} of {totalPages} ({total} entries)
-          </span>
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-            disabled={page >= totalPages - 1}
-            className="px-3 py-1 border rounded disabled:opacity-40"
-          >
-            Next →
-          </button>
-        </div>
-      )}
+      <div className="flex items-center gap-4 mt-4 text-sm text-gray-600">
+        <button
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={page === 0}
+          className="px-3 py-1 border rounded disabled:opacity-40"
+        >
+          ← Prev
+        </button>
+        <span>
+          Page {page + 1} of {totalPages} ({total} entries)
+        </span>
+        <button
+          onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+          disabled={page >= totalPages - 1}
+          className="px-3 py-1 border rounded disabled:opacity-40"
+        >
+          Next →
+        </button>
+      </div>
     </div>
   );
 }
