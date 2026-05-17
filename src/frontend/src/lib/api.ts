@@ -443,6 +443,44 @@ export async function fetchReportStatus(reportId: string | number): Promise<{ re
   return json as { report_id: number; latitude: number; longitude: number; description: string; trust_score: number; status: string; created_at: string };
 }
 
+export interface FireStation {
+  station_id: number;
+  station_name: string;
+  address: string | null;
+  latitude: number;
+  longitude: number;
+  distance_m: number | null;
+}
+
+/** Nearest BFP fire stations — Zero-Trust, NO auth. GET /api/ref/fire-stations */
+export async function fetchNearbyStations(lat: number, lon: number): Promise<FireStation[]> {
+  const base = (typeof window !== 'undefined' ? (process.env.NEXT_PUBLIC_API_URL || '/api') : process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api').replace(/\/$/, '');
+  const url = `${base}/ref/fire-stations?lat=${lat}&lon=${lon}`;
+  const res = await fetch(url, { method: 'GET', credentials: 'omit' });
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json() as Promise<FireStation[]>;
+}
+
+/** Register FCM token for push notifications on report status change — Zero-Trust, NO auth. POST /api/civilian/reports/{reportId}/notify */
+export async function registerNotification(
+  reportId: number,
+  fcmToken: string,
+): Promise<{ status: string; report_id: number }> {
+  const base = (typeof window !== 'undefined' ? (process.env.NEXT_PUBLIC_API_URL || '/api') : process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api').replace(/\/$/, '');
+  const url = `${base}/civilian/reports/${reportId}/notify`;
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'omit',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fcm_token: fcmToken }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((json as { message?: string; detail?: string }).message ?? (json as { detail?: string }).detail ?? `Request failed: ${res.status}`);
+  }
+  return json as { status: string; report_id: number };
+}
+
 // ---------------------------------------------------------------------------
 // Regional API (REGIONAL_ENCODER only)
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_wims_user
 from database import get_db_with_rls
 from services.analytics_read_model import sync_incident_to_analytics
+from tasks.notifications import send_status_notification
 from utils.audit import log_system_audit
 
 from pydantic import BaseModel
@@ -154,6 +155,8 @@ def promote_report(
     sync_incident_to_analytics(db, incident_id)
     db.commit()
 
+    send_status_notification.delay(report_id, "VERIFIED")
+
     return {"report_id": report_id, "incident_id": incident_id}
 
 
@@ -218,5 +221,8 @@ def bulk_promote_reports(
     for item in promoted:
         sync_incident_to_analytics(db, item["incident_id"])
     db.commit()
+
+    for item in promoted:
+        send_status_notification.delay(item["report_id"], "VERIFIED")
 
     return {"promoted": promoted, "failed": failed}
