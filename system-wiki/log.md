@@ -3,6 +3,18 @@
 Chronological record of system-wiki changes. Append-only.
 Format: `## [YYYY-MM-DD] action | subject`
 
+## [2026-05-17] remove | Removed `31_barangay_geometry.sql` — barangay geometry not needed
+- Deleted `src/postgres-init/31_barangay_geometry.sql`. The `ref_barangays.geometry` GEOGRAPHY(POLYGON,4326) column was never used by any application code — incidents use `fire_incidents.location` POINT, and barangay resolution is not a current feature.
+- Updated `system-wiki/database/sql-init-files.md`: removed section for the file, updated late migrations header from "27–31" to "27–30".
+- Updated `system-wiki/index.md`: noted total SQL init files: 30 (was 31).
+- Related: previous log entry 2026-05-16 noted this file as a schema hook — decision reversed; geometry not needed per user's direction.
+- [[database/sql-init-files]], [[index]]
+- Created `system-wiki/gaps/security-gap-register.md` documenting DEV-BYPASS-001, a CRITICAL authentication bypass gap in branch `dev/dev-bypass-auth`.
+- Affected surfaces: `src/backend/main.py`, `src/backend/api/routes/auth.py` (new untracked file), `src/keycloak/bfp-realm.json`.
+- Risk: unauthenticated/unauthorized access to incident data, analyst workflows, admin functions, AFOR pipelines, and PII.
+- Recommendations: do NOT merge until resolved; audit all three files for bypass flags/removed deps; restore Keycloak realm to known-good state; gate any dev convenience bypass behind `DEV_BYPASS_AUTH` env var with production-block CI gate.
+- Related: [[security/security-baseline]], [[gaps/frs-codebase-gap-register]], [[gaps/functional-bug-register]].
+
 ## [2026-05-16] create | Final ingestion: remaining routes, backend infra, components, docs/scripts
 - Created 5 new synthesis pages completing the wiki coverage:
   - [[backend/remaining-routes]] — Full API reference for 7 route files: incidents.py (8 routes: upload-bundle, attachments, analyst list/detail/wildland, export), analytics.py (15 routes: heatmap, trends, comparative, export dispatch/download, type-distribution, top-barangays, response-time, compare-regions, top-n, filter-options, execution-plans), public_dmz.py (rate-limited unauthenticated submission), civilian.py (submit + track reports), sessions.py (list + terminate), user.py (profile + password change), ref.py (regions, provinces, cities).
@@ -277,3 +289,16 @@ Format: `## [YYYY-MM-DD] action | subject`
 - Copied 15 user-supplied FRS files from `wiki-dir/` into `raw/frs/`.
 - Created initial synthesis pages for architecture, FRS module map, backend routes, frontend routes, database schema, security baseline, agent routing, and gap register.
 - Created raw codebase snapshot from live repository structure and route/table scans.
+
+## [2026-05-17] implement | Dev bypass auth endpoint (grill-me session)
+- Branch `dev/dev-bypass-auth` created — NEVER merge to main/master
+- `POST /api/dev-login` implemented in `src/backend/api/routes/auth.py` — Keycloak direct grant, returns `{ access_token, refresh_token }`
+- Auth router wired into `src/backend/main.py` at `/api` prefix
+- `scripts/dev-keycloak-bypass.sh` created — reusable enable/disable toggle for `wims-web.directAccessGrantsEnabled`
+- `src/keycloak/bfp-realm.json` updated — `wims-web.directAccessGrantsEnabled: true` (line 873)
+- Keycloak DB fix applied: `UPDATE client SET direct_access_grants_enabled=TRUE WHERE client_id='wims-web'`
+- `system-wiki/gaps/security-gap-register.md` created — DEV-BYPASS-001 CRITICAL entry filed
+- Dogfood QA integration: Phase 0 auth call = `POST /api/dev-login` with `qa_auto` credentials
+- Audience mismatch discovered and resolved: `client_id=wims-web` required so token `aud` matches `KEYCLOAK_AUDIENCE`
+- Verified: endpoint returns 200, token validates via `auth.authenticator.validate_token()`, `GET /api/user/me` returns 200
+- Handoff: `system-wiki/sessions/2026-05-17_1300_dev-bypass-auth-handoff.md`
