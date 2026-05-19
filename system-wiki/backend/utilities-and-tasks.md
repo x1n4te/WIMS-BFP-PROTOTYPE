@@ -1,7 +1,7 @@
 ---
 title: Backend Utilities & Celery Tasks
 created: 2026-05-16
-updated: 2026-05-18
+updated: 2026-05-19
 type: backend
 tags: [wims-bfp, backend, utils, crypto, audit, session, backup, celery, exports]
 sources: [src/backend/utils/, src/backend/tasks/]

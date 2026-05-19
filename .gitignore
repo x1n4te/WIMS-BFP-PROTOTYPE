@@ -29,6 +29,8 @@ out/
 .env.*.local
 *.pem
 *.key
+*service-account*.json
+src/backend/firebase-service-account.json
 
 # Logs and runtime
 *.log
@@ -52,6 +54,6 @@ AFORs/afor_filled.xlsx
 
 # nathan local wiki AI tools
 .codex/
-system-wiki/
+system-wiki/.obsidian/
 .obsidian/
 .hermes/
