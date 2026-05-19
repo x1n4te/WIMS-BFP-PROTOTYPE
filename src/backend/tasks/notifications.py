@@ -127,10 +127,7 @@ def send_status_notification(self, report_id: int, new_status: str) -> dict:
         db2 = get_session()
         try:
             db2.execute(
-                text(
-                    "DELETE FROM wims.report_notification_tokens "
-                    "WHERE token_id = ANY(:ids)"
-                ),
+                text("DELETE FROM wims.report_notification_tokens WHERE token_id = ANY(:ids)"),
                 {"ids": stale_token_ids},
             )
             db2.commit()

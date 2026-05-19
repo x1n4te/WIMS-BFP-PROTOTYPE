@@ -18,7 +18,5 @@ def test_enqueue_status_notification_logs_and_suppresses_publish_errors(monkeypa
 
     triage._enqueue_status_notification(123, "VERIFIED")
 
-    assert logged["message"] == (
-        "Failed to enqueue status notification for report_id=%s status=%s"
-    )
+    assert logged["message"] == ("Failed to enqueue status notification for report_id=%s status=%s")
     assert logged["args"] == (123, "VERIFIED")
