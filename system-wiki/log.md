@@ -326,12 +326,17 @@ Format: `## [YYYY-MM-DD] action | subject`
 - Merge order: #102 → #104 → #103 → #105
 - Index updated: total pages 13 → 18
 
-## [2026-05-14] handoff | Session complete, handoff file created
-- AGENTS.md updated: added "System Wiki & Agent Context Routing" section pointing agents to system-wiki/.
-- Session handoff created: `sessions/2026-05-14_1605_x1n4te_system-wiki-initialization-uiux-evaluations.md` — full session summary, recommended skills, known conventions, open questions.
-- Open items for next session: wiki-dir/ cleanup decision, next desk-check page, groupmate wiki access, GitHub Issues conversion of gap register.
-## [2026-05-14] update | National analyst backend slice started
-- Added API map entries for `GET /api/analytics/export/{task_id}` and `GET /api/analytics/filter-options`.
-- Documented `28_analytics_geography_denorm.sql`: denormalized `municipality_name` / `province_name` on `analytics_incident_facts`, plus export task/file metadata on `analytics_export_log`.
-- Updated National Analyst evaluation/gap registers: verification sync remains fixed, export backend is implemented but frontend preview/download UX remains pending, and National Analyst sidebar navigation is fixed.
->>>>>>> Stashed changes
+## [2026-05-19] update | analyst incident detail page full redesign (working tree)
+- `src/frontend/src/app/dashboard/analyst/incidents/[id]/page.tsx` — complete UI overhaul (+597/-617 lines, 935 total):
+  - **Page header**: ref-number title, status/type/alarm icon badges, location line, styled export buttons
+  - **QuickStats bar**: 4 KPI tiles (Response Time, Est. Damage, Structures Hit, Families Hit) with accent colors + tooltips
+  - **SECTION_ICONS map**: semantic icons per section A–H + Wildland
+  - **CollapsibleSection** rebuilt: icon container, description subtitle, badge, locked state, full ARIA (`aria-expanded`, `aria-controls`, `role="region"`)
+  - **FieldRow** rebuilt: `twocol` mode (2-col grid), `highlight` mode (red text for key metrics), null-safe with "—" fallback
+  - **AlarmVisual**: step-by-step timeline with numbered circles + connecting lines for spatial alarm-level encoding
+  - **WildlandSection**: locked for STRUCTURAL_AFOR, shows alarm_statuses + assistance_rows tables when WILDLAND_AFOR
+  - **SensitiveSection** rebuilt: gradient card gate, per-field blur+reveal eye toggle, "Hide All" button, revealed field counter, lazy-load on user click
+  - **EmptyState** component: consistent icon+message no-data state across all sections
+  - All numeric fields null-safe: `${value} km`, `${value} sqm`, `${value} ha`, `${value} L`, `formatMoney()`, `formatMinutes()`
+- Components all self-contained; no external dependencies beyond existing imports (lucide-react icons, useAuth, api client)
+- Branch: `feat/national-analyst-phase5-detail-screens`, uncommitted
