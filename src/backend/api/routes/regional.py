@@ -5330,12 +5330,7 @@ def get_encoder_audit_log(
         params["city_municipality"] = f"%{city_municipality}%"
     where_sql = " AND ".join(where_clauses)
 
-    need_nd_join = bool(city_municipality)
-    nd_join = (
-        "LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = ivh.target_id"
-        if need_nd_join
-        else ""
-    )
+    nd_join = "LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = ivh.target_id"
 
     rows = db.execute(
         text(
@@ -5343,7 +5338,7 @@ def get_encoder_audit_log(
             SELECT
                 ivh.history_id, ivh.target_id,
                 ivh.action_label, ivh.previous_status, ivh.new_status,
-                ivh.notes, ivh.action_timestamp
+                ivh.action_timestamp, nd.city_municipality
             FROM wims.incident_verification_history ivh
             {nd_join}
             WHERE {where_sql}
@@ -5377,8 +5372,8 @@ def get_encoder_audit_log(
                 "action_label": r[2],
                 "previous_status": r[3],
                 "new_status": r[4],
-                "notes": r[5],
-                "action_timestamp": r[6].isoformat() if r[6] else None,
+                "action_timestamp": r[5].isoformat() if r[5] else None,
+                "city_municipality": r[6],
             }
             for r in rows
         ],

@@ -11,7 +11,7 @@ import {
 } from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
 import { useUserProfile } from '@/lib/auth';
-import { PH_REGIONS, PH_PROVINCES, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier, getShortRegionName } from '@/lib/ph-regions';
+import { PH_REGIONS, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier, getShortRegionName } from '@/lib/ph-regions';
 import { Loader2, Save, Shuffle, Send } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import {
@@ -54,23 +54,6 @@ async function reverseGeocode(lat: number, lng: number): Promise<{ barangay: str
   } catch {
     return null;
   }
-}
-
-function findRegionIdFromGeo(province: string, state: string): number | null {
-  // Try exact match against PH_PROVINCES list
-  if (province) {
-    const found = PH_PROVINCES.find((p) => p.provinceName.toLowerCase() === province.toLowerCase());
-    if (found) return found.regionId;
-  }
-  // NCR: Nominatim returns state="Metro Manila" with no county
-  const s = state.toLowerCase();
-  if (s.includes('metro manila') || s.includes('national capital')) return 1;
-  // Named region fallback: match state against region names or codes
-  const rMatch = PH_REGIONS.find((r) => {
-    const rn = r.regionName.toLowerCase();
-    return s && (rn.includes(s) || s.includes(r.regionCode.toLowerCase()));
-  });
-  return rMatch?.regionId ?? null;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -665,13 +648,12 @@ export function IncidentForm({
         || sen.disposition_noted_by || '',
     }));
 
-    // Auto-geocode the incident address once hydration completes.
+    // Auto-geocode using only the complete address field — no city/province appended.
     // Only fires when no coordinates are pre-supplied (import without a prior map pin).
     const hydratedAddress = ns.incident_address || (sen as Record<string, unknown>).street_address as string || '';
     const hasCoords = typeof initialData.latitude === 'number' && typeof initialData.longitude === 'number';
     if (hydratedAddress && !hasCoords) {
-      const parts = [hydratedAddress, hydratedProvinceOk ? hydratedCity : '', hydratedProvinceOk ? hydratedProvince : '', 'Philippines'].filter(Boolean);
-      setMapSearchQuery(parts.join(', '));
+      setMapSearchQuery(`${hydratedAddress}, Philippines`);
     }
 
     const people = (sen.other_personnel || ns.other_personnel) as Record<string, unknown>[] | undefined;
@@ -730,8 +712,9 @@ export function IncidentForm({
     }
   }, [initialData]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Derive effective region ID from selectedRegionId or by looking up formState.region
+  // Derive effective region ID — encoder's assigned region always wins
   const getEffectiveRegionId = (): number => {
+    if (isEncoder && assignedRegionId) return assignedRegionId;
     if (selectedRegionId && selectedRegionId > 0) return selectedRegionId;
     if (formState.region) {
       const found = PH_REGIONS.find((r) => r.regionName === formState.region);
@@ -1117,8 +1100,27 @@ export function IncidentForm({
       };
       try {
         await updateRegionalIncident(existingIncidentId, updatePayload);
-        showToast('Incident saved successfully.');
-        onSaved?.();
+        if (submitAfterSaveRef.current) {
+          try {
+            await submitIncidentForReview(existingIncidentId);
+            showToast('Submitted for review!');
+            onSaved?.();
+          } catch (submitErr) {
+            if (submitErr instanceof ApiRequestError && submitErr.status === 409) {
+              const d = submitErr.detail as { code?: string; matched_incident_id?: number } | null;
+              if (d?.code === 'DUPLICATE_DETECTED' && d.matched_incident_id) {
+                // Hard-navigate so the detail page remounts and triggers the duplicate modal
+                window.location.href = `/dashboard/regional/incidents/${existingIncidentId}?pending_submit=1`;
+                return;
+              }
+            }
+            showToast(`Saved. Submit failed: ${(submitErr as Error).message}`);
+            onSaved?.();
+          }
+        } else {
+          showToast('Incident saved successfully.');
+          onSaved?.();
+        }
       } catch (err: unknown) {
         showToast(`Save failed: ${(err as Error).message}`);
       } finally {
@@ -1361,7 +1363,15 @@ export function IncidentForm({
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-8 text-gray-900">
+      <form
+        onSubmit={handleSubmit}
+        className="space-y-8 text-gray-900"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+            e.preventDefault();
+          }
+        }}
+      >
 
         {/* ── A. RESPONSE DETAILS ── */}
         <section className="space-y-4 border-b pb-6">
@@ -1435,19 +1445,24 @@ export function IncidentForm({
 
             <div data-field-error={fieldErrors.has('province_district') ? 'true' : undefined}>
               <label className={labelCls}>Province / District{reqMark}</label>
-              <select
-                className={errCls('province_district')}
-                value={formState.province_district}
-                disabled={!selectedRegionId}
-                onChange={(e) => {
-                  setFormState((prev) => ({ ...prev, province_district: e.target.value, city_municipality: '' }));
-                }}
-              >
-                <option value="">{selectedRegionId ? 'Select Province' : 'Select region first'}</option>
-                {getProvincesForRegion(selectedRegionId ?? 0).map((p) => (
-                  <option key={p.provinceName} value={p.provinceName}>{p.provinceName}</option>
-                ))}
-              </select>
+              {(() => {
+                const dropRegionId = getEffectiveRegionId();
+                return (
+                  <select
+                    className={errCls('province_district')}
+                    value={formState.province_district}
+                    disabled={!dropRegionId}
+                    onChange={(e) => {
+                      setFormState((prev) => ({ ...prev, province_district: e.target.value, city_municipality: '' }));
+                    }}
+                  >
+                    <option value="">{dropRegionId ? 'Select Province' : 'Select region first'}</option>
+                    {getProvincesForRegion(dropRegionId).map((p) => (
+                      <option key={p.provinceName} value={p.provinceName}>{p.provinceName}</option>
+                    ))}
+                  </select>
+                );
+              })()}
             </div>
 
             <div data-field-error={fieldErrors.has('city_municipality') ? 'true' : undefined}>
@@ -1492,7 +1507,20 @@ export function IncidentForm({
 
             <div className="md:col-span-2" data-field-error={fieldErrors.has('incident_address') ? 'true' : undefined}>
               <label className={labelCls}>Complete Address of Fire Incident{reqMark}</label>
-              <input name="incident_address" type="text" className={errCls('incident_address')} placeholder="House/Building No., Street, Barangay, City/Municipality, Province" value={formState.incident_address} onChange={handleChange} />
+              <input
+                name="incident_address"
+                type="text"
+                className={errCls('incident_address')}
+                placeholder="House/Building No., Street, Barangay, City/Municipality, Province"
+                value={formState.incident_address}
+                onChange={handleChange}
+                onBlur={() => {
+                  const addr = formState.incident_address.trim();
+                  if (addr && latitude === null && longitude === null) {
+                    setMapSearchQuery(`${addr}, Philippines`);
+                  }
+                }}
+              />
             </div>
 
             {/* ── Map Pin (inline in Response Details) ── */}
@@ -1501,17 +1529,17 @@ export function IncidentForm({
                 Fire Scene Location (Map Pin){reqMark}
               </label>
               {fieldErrors.has('map_location') && <p className="text-xs font-semibold text-red-600">Pin the fire location on the map before saving.</p>}
-              <p className="text-xs text-gray-500">Click or search the map to pin the fire scene. The fields above will auto-fill from the pin — you can still edit them manually.</p>
-              {!isEditMode && formState.incident_address && (
+              <p className="text-xs text-gray-500">Click or search the map to pin the fire scene. The map auto-searches when you fill in the complete address above.</p>
+              {formState.incident_address && (
                 <button
                   type="button"
                   onClick={() => {
-                    const parts = [formState.incident_address, formState.city_municipality, formState.province_district, 'Philippines'].filter(Boolean);
-                    if (parts.length > 1) setMapSearchQuery(parts.join(', '));
+                    const addr = formState.incident_address.trim();
+                    if (addr) setMapSearchQuery(`${addr}, Philippines`);
                   }}
                   className="text-xs text-blue-700 underline hover:text-blue-900"
                 >
-                  Auto-Pin from Address
+                  Re-pin from Address
                 </button>
               )}
               <div className={`rounded ${fieldErrors.has('map_location') ? 'border-2 border-red-500' : 'border border-gray-300'}`}>
@@ -2039,30 +2067,24 @@ export function IncidentForm({
         {referenceNumberPreview && (
           <div className="border border-gray-200 rounded-lg bg-gray-50 px-4 py-3">
             <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Reference Number Preview</p>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-sm text-gray-800 tracking-wide">{referenceNumberPreview}</span>
-              <span className="text-xs text-gray-400 italic">(sequence XXXX assigned on save)</span>
-            </div>
-            <p className="text-xs text-gray-400 mt-1">Format: AFOR-[Region]-[Station]-[Type]-[Month]-[Year]-[Sequence]</p>
+            <span className="font-mono text-sm text-gray-800 tracking-wide">{referenceNumberPreview}</span>
           </div>
         )}
 
-        <div className={`flex gap-3 ${isEditMode ? '' : 'flex-col sm:flex-row'}`}>
+        <div className="flex flex-col sm:flex-row gap-3">
           <button type="submit" disabled={loading} className="flex-1 bg-gray-700 text-white py-3 rounded font-bold hover:bg-gray-600 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg">
             {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Save className="w-5 h-5" />}
             {loading ? (isEditMode ? 'Saving Changes…' : 'Saving Draft…') : (isEditMode ? 'Save Changes' : 'Save as Draft')}
           </button>
-          {!isEditMode && (
-            <button
-              type="button"
-              disabled={loading}
-              onClick={(e) => void handleSubmitForReview(e)}
-              className="flex-1 bg-red-800 text-white py-3 rounded font-bold hover:bg-red-700 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg"
-            >
-              {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Send className="w-5 h-5" />}
-              {loading ? 'Submitting…' : 'Submit for Review'}
-            </button>
-          )}
+          <button
+            type="button"
+            disabled={loading}
+            onClick={(e) => void handleSubmitForReview(e)}
+            className="flex-1 bg-red-800 text-white py-3 rounded font-bold hover:bg-red-700 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg"
+          >
+            {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Send className="w-5 h-5" />}
+            {loading ? 'Submitting…' : 'Submit for Review'}
+          </button>
         </div>
 
       </form>

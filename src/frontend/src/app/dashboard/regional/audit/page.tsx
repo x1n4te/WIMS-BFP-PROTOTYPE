@@ -10,8 +10,8 @@ interface EncoderAuditEntry {
   action_label: string | null;
   previous_status: string | null;
   new_status: string | null;
-  notes: string | null;
   action_timestamp: string | null;
+  city_municipality: string | null;
 }
 
 interface EncoderAuditResponse {
@@ -170,7 +170,7 @@ export default function EncoderAuditPage() {
                 <th className="text-left px-3 py-2 font-medium">Date &amp; Time</th>
                 <th className="text-left px-3 py-2 font-medium">Incident</th>
                 <th className="text-left px-3 py-2 font-medium">Action</th>
-                <th className="text-left px-3 py-2 font-medium">Notes</th>
+                <th className="text-left px-3 py-2 font-medium">City / Municipality</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -196,7 +196,7 @@ export default function EncoderAuditPage() {
                   <td className="px-3 py-2 font-medium">
                     {ACTION_LABEL_MAP[it.action_label ?? ''] ?? it.action_label ?? '—'}
                   </td>
-                  <td className="px-3 py-2 text-gray-500">{it.notes ?? '—'}</td>
+                  <td className="px-3 py-2 text-gray-500">{it.city_municipality ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
