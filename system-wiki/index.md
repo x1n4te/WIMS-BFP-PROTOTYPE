@@ -56,6 +56,13 @@ Purpose: project-local knowledgebase for agents routing themselves to relevant W
 - [[ui-ux/evaluation-system-admin-hub]] — linear layout, missing M9 metrics, no pagination/filters, region selector, announcement feature.
 - [[ui-ux/evaluation-national-analyst]] — heatmap aspect ratio, missing incident container, filter coverage, export preview, missing analytics views (top municipalities, response time); cross-referenced with FRS M5 and GitHub issues #84–#89.
 
+## PR QA
+- [[pr-qa/pr-batch-2026-05-overview]] — May 2026 batch overview (PRs #102–#105)
+- [[pr-qa/pr-102-m4-postfix-afour-persistence-audit-ux]] — M4 post-fix: AFOR, persistence, audit, UX polish
+- [[pr-qa/pr-103-system-monitoring-prometheus]] — #70 Prometheus /metrics + worker heartbeat
+- [[pr-qa/pr-104-xai-incident-narratives]] — #69 XAI incident narrative generation
+- [[pr-qa/pr-105-suricata-auto-incident]] — #68 Suricata HIGH auto-incident creation
+
 ## Raw Source Captures
 - `raw/frs/` — user-supplied FRS module files (11 now populated; 4 were empty and restored).
 - `raw/ui-ux/` — user desk-check evaluations of login page and system admin hub.

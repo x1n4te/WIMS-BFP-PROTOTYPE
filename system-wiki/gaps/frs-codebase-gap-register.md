@@ -23,9 +23,15 @@ This register prevents agents from hallucinating completion. A module is not com
 - Public DMZ: verify unauthenticated route has rate limiting/input validation.
 - Notifications: PR #106 FCM opt-in + status dispatch done; verify SSE/Redis/email end-to-end behavior against M13. Rotate any committed service-account key before prod.
 - Offline-first: verify IndexedDB encryption/sync semantics against M2.
-- M9 System Monitoring: NOT yet implemented — needs psutil/Docker API metrics, 60s refresh, full-text log search.
+- M9 System Monitoring: NOT yet implemented as a complete module — PR #103 adds backend monitoring pieces, but dashboard UI, 60s refresh, and full-text log search remain gaps.
 - TOP-N barangay: OPTIONAL — `31_barangay_geometry.sql` adds geometry column + GiST; `_reverse_geocode_barangay` hooks exist; deferred until vetted polygon seed exists. Use municipality/fire-station/region for hotspot ranking.
 - Selected-set analytics: Phase 2 backend module — aggregate charts remain filter-scoped; selected IDs drive table/export behavior only.
+
+## FRS Gap Closures (May 2026 batch)
+- **M6-G (XAI Narrative Generation)**: CLOSED — PR #104: narrative endpoint, batch generation, `ai_narrative` columns, Qwen2.5-3B via Ollama.
+- **M6-F (Suricata IDS Integration)**: CLOSED — PR #105: HIGH severity auto-incident creation, duplicate guard, `security_alert_id` FK, service account pre-provisioned.
+- **M9 (System Monitoring)**: PARTIAL — PR #103 adds Prometheus `/metrics`, admin endpoints, and worker heartbeat. Dashboard UI and full-text log search remain gaps.
+- **M4 (Incident Workflow)**: CLOSED — PR #102: AFOR import fixes, field persistence, validator audit trail, VALIDATOR role routing, immutable rule fix.
 
 ## Related
 - [[concepts/frs-module-map]]

@@ -17,8 +17,8 @@ from auth import get_current_wims_user, get_analyst_or_admin
 from database import get_db_with_rls
 from schemas.incident import IncidentCreate, IncidentResponse
 from services.analytics_read_model import sync_incident_to_analytics
+from api.routes.regional import _normalize_general_category, _insert_incident_verification_history
 from tasks.exports import export_analyst_incidents_task
-from api.routes.regional import _normalize_general_category
 
 router = APIRouter(prefix="/api", tags=["incidents"])
 logger = logging.getLogger("wims.incidents")
@@ -194,7 +194,9 @@ def upload_incident_bundle(
                     recommendations, fire_station_name, stage_of_fire,
                     extent_total_floor_area_sqm, extent_total_land_area_hectares,
                     distance_from_station_km, station_code,
-                    city_municipality, province_district
+                    city_municipality, province_district,
+                    extent_description, extent_objects_count,
+                    general_description_of_involved
                 ) VALUES (
                     :incident_id, :city_id,
                     CAST(:notification_dt AS timestamptz), :alarm_level, :general_category, :sub_category,
@@ -206,7 +208,9 @@ def upload_incident_bundle(
                     :recommendations, :fire_station_name, :stage_of_fire,
                     :floor_area, :land_area,
                     :distance_from_station_km, :station_code,
-                    :city_municipality, :province_district
+                    :city_municipality, :province_district,
+                    :extent_description, :extent_objects_count,
+                    :general_description_of_involved
                 )
                 """
             ),
@@ -243,6 +247,10 @@ def upload_incident_bundle(
                 "station_code": station_code_val,
                 "city_municipality": ns.get("city_municipality") or "",
                 "province_district": ns.get("province_district") or "",
+                "extent_description": ns.get("extent_description") or None,
+                "extent_objects_count": _safe_int(ns.get("extent_objects_count")),
+                "general_description_of_involved": ns.get("general_description_of_involved")
+                or None,
             },
         )
 
@@ -289,6 +297,16 @@ def upload_incident_bundle(
                 "is_icp_present": bool(sens.get("is_icp_present", False)),
                 "icp_location": sens.get("icp_location", ""),
             },
+        )
+
+        _insert_incident_verification_history(
+            db,
+            incident_id=incident_id,
+            actor_user_id=str(user_id),
+            previous_status="DRAFT",
+            new_status="DRAFT",
+            notes="Encoder created new draft",
+            action_label="CREATED_DRAFT",
         )
 
     try:

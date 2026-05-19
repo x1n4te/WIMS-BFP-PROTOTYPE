@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -14,6 +15,14 @@ logger = logging.getLogger(__name__)
 # In-memory position tracking for tail behavior (path -> byte offset).
 # Optional: migrate to Redis for multi-worker persistence.
 _eve_file_positions: dict[str, int] = {}
+
+# Service account for security incident auto-creation
+_SVC_SURICATA_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+# Default location: BFP HQ Manila
+_BFP_HQ_LONGITUDE = 121.0232
+_BFP_HQ_LATITUDE = 14.5906
+# Default region: NCR
+_DEFAULT_REGION_ID = 1
 
 
 def parse_eve_alert_line(line: str) -> dict | None:
@@ -58,23 +67,105 @@ def eve_to_threat_log_row(ev: dict, *, raw_payload: str = "") -> dict:
     }
 
 
-def _insert_row(db: Session, row: dict) -> None:
-    """Insert a threat log row via raw SQL (schema uses timestamp, destination_ip)."""
-    db.execute(
+def _insert_row(db: Session, row: dict) -> int | None:
+    """Insert a threat log row via raw SQL. Returns the inserted log_id."""
+    result = db.execute(
         text("""
             INSERT INTO wims.security_threat_logs
                 (source_ip, destination_ip, suricata_sid, severity_level, raw_payload)
             VALUES
                 (:source_ip, :destination_ip, :suricata_sid, :severity_level, :raw_payload)
+            RETURNING log_id
         """),
         row,
     )
+    return result.scalar() or None
+
+
+def _security_incident_exists(db, log_id: int) -> bool:
+    """Check if a fire incident already exists for this security alert."""
+    row = db.execute(
+        text("""
+            SELECT 1 FROM wims.fire_incidents
+            WHERE security_alert_id = :log_id
+            LIMIT 1
+        """),
+        {"log_id": log_id},
+    ).fetchone()
+    return row is not None
+
+
+def _create_security_incident(
+    db,
+    log_id: int,
+    source_ip: str,
+    suricata_sid: int,
+    raw_payload: str,
+) -> int:
+    """
+    Auto-create a DRAFT fire incident from a HIGH-severity Suricata alert.
+    Uses svc_suricata service account and BFP HQ as default location.
+    Returns the new incident_id.
+    """
+    result = db.execute(
+        text("""
+            INSERT INTO wims.fire_incidents
+                (encoder_id, region_id, location, verification_status,
+                 security_alert_id)
+            VALUES
+                (:encoder_id, :region_id,
+                 ST_SetSRID(ST_MakePoint(:lon, :lat), 4326),
+                 'DRAFT',
+                 :log_id)
+            RETURNING incident_id
+        """),
+        {
+            "encoder_id": _SVC_SURICATA_UUID,
+            "region_id": _DEFAULT_REGION_ID,
+            "lon": _BFP_HQ_LONGITUDE,
+            "lat": _BFP_HQ_LATITUDE,
+            "log_id": log_id,
+        },
+    )
+    incident_id = result.fetchone()[0]
+
+    db.execute(
+        text("""
+            INSERT INTO wims.incident_nonsensitive_details
+                (incident_id, general_category, alarm_level, fire_station_name)
+            VALUES
+                (:iid, 'SECURITY', 'ALERT',
+                 :station_name)
+        """),
+        {
+            "iid": incident_id,
+            "station_name": f"Auto-detected: SID={suricata_sid} SRC={source_ip}",
+        },
+    )
+
+    db.execute(
+        text("""
+            INSERT INTO wims.incident_verification_history
+                (target_type, target_id, action_by_user_id,
+                 previous_status, new_status, comments)
+            VALUES
+                ('OFFICIAL', :iid, :uid, 'DRAFT', 'DRAFT',
+                 'Auto-created from Suricata HIGH severity alert')
+        """),
+        {
+            "iid": incident_id,
+            "uid": _SVC_SURICATA_UUID,
+        },
+    )
+
+    return incident_id
 
 
 def ingest_eve_file(path: str, *, db_session: Session | None = None) -> int:
     """
     Read EVE file (tail from last position), parse alert lines, insert into security_threat_logs.
-    Returns number of rows inserted.
+    For HIGH severity alerts, auto-create a DRAFT fire incident.
+    Returns number of rows inserted into security_threat_logs.
     """
     if not os.path.isfile(path):
         logger.warning("EVE file not found: %s", path)
@@ -88,7 +179,6 @@ def ingest_eve_file(path: str, *, db_session: Session | None = None) -> int:
         position = _eve_file_positions.get(path, 0)
         file_size = os.path.getsize(path)
         if file_size < position:
-            # File rotated or truncated
             position = 0
 
         inserted = 0
@@ -100,8 +190,30 @@ def ingest_eve_file(path: str, *, db_session: Session | None = None) -> int:
                 if ev is None:
                     continue
                 row = eve_to_threat_log_row(ev, raw_payload=line)
-                _insert_row(db, row)
-                inserted += 1
+                log_id = _insert_row(db, row)
+                if log_id is not None:
+                    inserted += 1
+                    if row.get("severity_level") == "HIGH":
+                        if not _security_incident_exists(db, log_id):
+                            try:
+                                incident_id = _create_security_incident(
+                                    db,
+                                    log_id=log_id,
+                                    source_ip=row.get("source_ip", "unknown"),
+                                    suricata_sid=row.get("suricata_sid", 0),
+                                    raw_payload=row.get("raw_payload", ""),
+                                )
+                                logger.info(
+                                    "Auto-created security incident %s from log_id %s",
+                                    incident_id,
+                                    log_id,
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    "Failed to auto-create incident from log_id %s: %s",
+                                    log_id,
+                                    e,
+                                )
             _eve_file_positions[path] = f.tell()
 
         if own_session:
