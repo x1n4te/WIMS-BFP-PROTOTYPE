@@ -25,6 +25,25 @@ const MapPicker = dynamic(
   { ssr: false, loading: () => <div className="h-64 bg-gray-100 animate-pulse rounded border" /> },
 );
 
+async function reverseGeocode(lat: number, lng: number): Promise<{ barangay: string; city: string; province: string } | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`,
+      { headers: { 'Accept-Language': 'en' } },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const addr = data.address || {};
+    return {
+      barangay: addr.suburb || addr.village || addr.neighbourhood || addr.hamlet || '',
+      city: addr.city || addr.town || addr.municipality || addr.city_district || '',
+      province: addr.county || addr.state_district || '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const STAGE_OF_FIRE_OPTIONS = [
@@ -136,6 +155,7 @@ export function IncidentForm({
     region: '',
     province_district: '',
     city_municipality: '',
+    barangay: '',
     incident_address: '',
     nearest_landmark: '',
     caller_name: '',
@@ -435,6 +455,7 @@ export function IncidentForm({
       region: ns.region || '',
       province_district: ns.province_district || (initialData as unknown as Record<string, unknown>)._province_text as string || '',
       city_municipality: initialData._city_text || ns.city_municipality || '',
+      barangay: ns.barangay || '',
       incident_address: ns.incident_address || (sen as Record<string, unknown>).street_address as string || '',
       nearest_landmark: ns.nearest_landmark || (sen as Record<string, unknown>).landmark as string || '',
       caller_name: sen.caller_name || '',
@@ -819,8 +840,8 @@ export function IncidentForm({
         alarm_level: formState.alarm_level,
         time_returned_to_base: formState.time_returned_to_base || 'N/A',
         total_gas_consumed_liters: parseFloat(formState.total_gas_consumed_liters) || 0,
+        barangay: formState.barangay || '',
         // B
-        barangay: formState.incident_address.split(',')[2] || 'Unknown',
         general_category: formState.classification_of_involved,
         incident_type: formState.type_of_involved_general_category,
         classification_of_involved: formState.classification_of_involved,
@@ -957,6 +978,7 @@ export function IncidentForm({
         fire_station_name: incident.incident_nonsensitive_details.fire_station_name,
         city_municipality: formState.city_municipality,
         province_district: formState.province_district,
+        barangay: formState.barangay || '',
         region_label: formState.region,
         fire_origin: incident.incident_nonsensitive_details.fire_origin,
         extent_of_damage: incident.incident_nonsensitive_details.extent_of_damage,
@@ -1359,6 +1381,18 @@ export function IncidentForm({
                   />
                 );
               })()}
+            </div>
+
+            <div>
+              <label className={labelCls}>Barangay</label>
+              <input
+                name="barangay"
+                type="text"
+                className={inputCls}
+                placeholder="e.g. Barangay San Jose"
+                value={formState.barangay}
+                onChange={handleChange}
+              />
             </div>
 
             <div className="md:col-span-2" data-field-error={fieldErrors.has('incident_address') ? 'true' : undefined}>
@@ -1774,7 +1808,19 @@ export function IncidentForm({
             <MapPicker
               center={latitude && longitude ? [latitude, longitude] : [14.5995, 120.9842]}
               value={latitude && longitude ? { lat: latitude, lng: longitude } : null}
-              onChange={(lat, lng) => { setLatitude(lat); setLongitude(lng); }}
+              onChange={async (lat, lng) => {
+                setLatitude(lat);
+                setLongitude(lng);
+                const geo = await reverseGeocode(lat, lng);
+                if (geo) {
+                  setFormState((prev) => ({
+                    ...prev,
+                    ...(geo.barangay ? { barangay: geo.barangay } : {}),
+                    ...(geo.city ? { city_municipality: geo.city } : {}),
+                    ...(geo.province ? { province_district: geo.province } : {}),
+                  }));
+                }
+              }}
             />
           </div>
           {latitude !== null && longitude !== null ? (

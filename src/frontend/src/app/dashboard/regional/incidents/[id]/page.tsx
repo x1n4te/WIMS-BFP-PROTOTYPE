@@ -564,6 +564,7 @@ export default function RegionalIncidentDetailPage() {
     recommendations: ns?.recommendations ?? null,
     province_district: ns?.province_district ?? null,
     city_municipality: ns?.city_municipality ?? null,
+    barangay: ns?.barangay ?? null,
     station_code: ns?.station_code ?? null,
     street_address: sens?.street_address ?? ns?.incident_address ?? null,
     landmark: sens?.landmark ?? ns?.nearest_landmark ?? null,
@@ -1066,7 +1067,7 @@ export default function RegionalIncidentDetailPage() {
             <FieldRow label={FIELD_LABELS.distance_from_station_km} value={ns?.distance_from_station_km ?? ns?.distance_to_fire_scene_km} />
             <FieldRow label={FIELD_LABELS.total_response_time_minutes} value={ns?.total_response_time_minutes} />
             <FieldRow label={FIELD_LABELS.total_gas_consumed_liters} value={ns?.total_gas_consumed_liters} />
-            <FieldRow label="Location" value={[ns?.city_municipality, ns?.province_district, ns?.region].filter(Boolean).join(', ') || null} />
+            <FieldRow label="Location" value={[ns?.barangay, ns?.city_municipality, ns?.province_district, ns?.region].filter(Boolean).join(', ') || null} />
             <FieldRow label={FIELD_LABELS.street_address} value={sens?.street_address ?? ns?.incident_address} />
             <FieldRow label={FIELD_LABELS.landmark} value={sens?.landmark ?? ns?.nearest_landmark} />
             <FieldRow label={FIELD_LABELS.caller_name} value={sens?.caller_name} />

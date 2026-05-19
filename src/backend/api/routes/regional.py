@@ -788,6 +788,16 @@ def _time_str(val: Any) -> str | None:
     return s or None
 
 
+def _extract_barangay_from_address(address: str) -> str:
+    """Extract barangay from AFOR D27 address format:
+    'House/Building No., Street Name, Barangay, City/Municipality, Province'
+    Returns part at index 2 from comma-split, or empty string if not parseable."""
+    if not address or address.startswith("("):
+        return ""
+    parts = [p.strip() for p in address.split(",")]
+    return parts[2] if len(parts) >= 3 else ""
+
+
 class BfpXlsxParser:
     """Parser for the official BFP manual entry form (AFOR)."""
 
@@ -1025,6 +1035,7 @@ class BfpXlsxParser:
             "province": self.get("D25"),
             "city": self.get("D26"),
             "address": self.get("D27"),
+            "barangay": _extract_barangay_from_address(self.get("D27") or ""),
             "landmark": self.get("D28"),
             "caller_info": self.get("D29"),
             "receiver": self.get("D30"),
@@ -1484,6 +1495,7 @@ def parse_afor_report_data(data: dict, region_id: int) -> AforParsedRow:
         "_city_text": data.get("city") or "",
         "_province_text": data.get("province") or "",
         "_region_text": data.get("region") or "",
+        "_barangay_text": data.get("barangay") or "",
     }
 
     if not notif_dt:
@@ -2185,7 +2197,7 @@ async def commit_afor_import(
                     resources_deployed, alarm_timeline, problems_encountered, recommendations,
                     fire_station_name, total_response_time_minutes, total_gas_consumed_liters,
                     stage_of_fire, extent_total_floor_area_sqm, extent_total_land_area_hectares,
-                    vehicles_affected, province_district, city_municipality,
+                    vehicles_affected, province_district, city_municipality, barangay,
                     extent_description, extent_objects_count,
                     general_description_of_involved
                 ) VALUES (
@@ -2198,7 +2210,7 @@ async def commit_afor_import(
                     CAST(:problems_encountered AS jsonb), :recommendations,
                     :fire_station_name, :total_response_time_minutes, :total_gas_consumed_liters,
                     :stage_of_fire, :floor_area, :land_area, :vehicles_affected,
-                    :province_district, :city_municipality,
+                    :province_district, :city_municipality, :barangay,
                     :extent_description, :extent_objects_count,
                     :general_description_of_involved
                 )
@@ -2237,6 +2249,7 @@ async def commit_afor_import(
                 "vehicles_affected": ns.get("vehicles_affected", 0),
                 "province_district": row_data.get("_province_text", ""),
                 "city_municipality": row_data.get("_city_text", ""),
+                "barangay": row_data.get("_barangay_text", ""),
                 "extent_description": ns.get("extent_description") or None,
                 "extent_objects_count": ns.get("extent_objects_count"),
                 "general_description_of_involved": (ns.get("_response") or {}).get(
@@ -3173,6 +3186,7 @@ class IncidentCreateRequest(BaseModel):
     # Location text (free-text, replaces city_id/province join for display)
     province_district: str | None = None
     city_municipality: str | None = None
+    barangay: str | None = None
     # Reference number fields
     station_code: str | None = "TBA"
     incident_type_code: str | None = None
@@ -3228,6 +3242,7 @@ class IncidentUpdateRequest(BaseModel):
     # Location text (free-text, replaces city_id/province join for display)
     province_district: str | None = None
     city_municipality: str | None = None
+    barangay: str | None = None
     # Reference number fields
     station_code: str | None = None
     incident_type_code: str | None = None
@@ -3314,6 +3329,7 @@ def create_incident(
         "barangay_id",
         "province_district",
         "city_municipality",
+        "barangay",
         "distance_from_station_km",
         "estimated_damage_php",
         "civilian_injured",
@@ -3473,6 +3489,7 @@ def _apply_incident_field_updates(
         "barangay_id",
         "province_district",
         "city_municipality",
+        "barangay",
         "distance_from_station_km",
         "estimated_damage_php",
         "civilian_injured",
