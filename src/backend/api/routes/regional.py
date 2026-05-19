@@ -789,11 +789,16 @@ def _time_str(val: Any) -> str | None:
 
 
 def _extract_barangay_from_address(address: str) -> str:
-    """Extract barangay from AFOR D27 address format:
-    'House/Building No., Street Name, Barangay, City/Municipality, Province'
-    Returns part at index 2 from comma-split, or empty string if not parseable."""
+    """Extract barangay from AFOR D27 address.
+    Tries keyword detection first (handles free-form input),
+    then falls back to the AFOR template position (index 2 of comma-split)."""
     if not address or address.startswith("("):
         return ""
+    # Keyword-based: match "Brgy.", "Bgy.", "Barangay " followed by the name until the next comma
+    m = re.search(r"((?:Brgy|Bgy)\.?\s*[^,]+|Barangay\s+[^,]+)", address, re.IGNORECASE)
+    if m:
+        return m.group(1).strip().rstrip(".")
+    # Positional fallback: AFOR template = "HouseNo, Street, Barangay, City, Province"
     parts = [p.strip() for p in address.split(",")]
     return parts[2] if len(parts) >= 3 else ""
 

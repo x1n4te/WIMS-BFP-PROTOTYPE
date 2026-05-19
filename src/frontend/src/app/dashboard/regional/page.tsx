@@ -292,6 +292,19 @@ export default function RegionalDashboardPage() {
             >
               Clear filters
             </button>
+            <button
+              type="button"
+              className={`rounded px-3 py-1.5 text-sm font-semibold text-white transition-colors ${
+                statusFilter === 'DRAFT' ? 'bg-red-800' : 'bg-red-600 hover:bg-red-700'
+              }`}
+              onClick={() => {
+                setStatusFilter(statusFilter === 'DRAFT' ? '' : 'DRAFT');
+                setPageIndex(0);
+              }}
+              disabled={incidentsLoading}
+            >
+              Drafts
+            </button>
           </div>
 
           <p className="text-sm text-gray-600" aria-live="polite">
@@ -311,7 +324,7 @@ export default function RegionalDashboardPage() {
           <table className="w-full text-left text-sm">
             <thead className="bg-gray-50 text-xs uppercase text-gray-700">
               <tr>
-                <th className="px-6 py-3">Date</th>
+                <th className="px-6 py-3 whitespace-nowrap">Date</th>
                 <th className="px-6 py-3">Classification</th>
                 <th className="px-6 py-3">Station</th>
                 <th className="px-6 py-3">Location</th>
@@ -336,7 +349,7 @@ export default function RegionalDashboardPage() {
               ) : (
                 incidents.map((inc) => (
                   <tr key={inc.incident_id} className="border-b bg-white hover:bg-gray-50">
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 whitespace-nowrap">
                       {(() => {
                         const raw = inc.notification_dt || inc.created_at;
                         if (!raw) return '—';

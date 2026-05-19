@@ -5,13 +5,14 @@ import { useRouter } from 'next/navigation';
 import { edgeFunctions, Incident } from '@/lib/edgeFunctions';
 import {
   updateRegionalIncident, forceReplaceIncident, createRegionalIncident,
+  submitIncidentForReview,
   type RefDuplicateIncident,
   ApiRequestError,
 } from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
 import { useUserProfile } from '@/lib/auth';
-import { PH_REGIONS, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier } from '@/lib/ph-regions';
-import { Loader2, Save, Shuffle } from 'lucide-react';
+import { PH_REGIONS, PH_PROVINCES, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier } from '@/lib/ph-regions';
+import { Loader2, Save, Shuffle, Send } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import {
   ALL_PROBLEM_OPTIONS, normalizeProblemLabel,
@@ -25,23 +26,51 @@ const MapPicker = dynamic(
   { ssr: false, loading: () => <div className="h-64 bg-gray-100 animate-pulse rounded border" /> },
 );
 
-async function reverseGeocode(lat: number, lng: number): Promise<{ barangay: string; city: string; province: string } | null> {
+async function reverseGeocode(lat: number, lng: number): Promise<{ barangay: string; city: string; province: string; state: string } | null> {
   try {
+    // zoom=18 → house-level detail; addressdetails=1 → full address breakdown
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`,
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1&zoom=18`,
       { headers: { 'Accept-Language': 'en' } },
     );
     if (!res.ok) return null;
     const data = await res.json();
     const addr = data.address || {};
-    return {
-      barangay: addr.suburb || addr.village || addr.neighbourhood || addr.hamlet || '',
-      city: addr.city || addr.town || addr.municipality || addr.city_district || '',
-      province: addr.county || addr.state_district || '',
-    };
+
+    // Philippine address hierarchy in Nominatim:
+    //   barangay  → quarter > suburb > village > neighbourhood > hamlet
+    //   city/muni → city_district (most precise in NCR) > town > municipality > city
+    //               (addr.city is often the region-level name in Metro Manila, so deprioritise it)
+    //   province  → county (province outside NCR) or state (region name, last resort)
+    const barangay =
+      addr.quarter || addr.suburb || addr.village || addr.neighbourhood || addr.hamlet || '';
+    const city =
+      addr.city_district || addr.town || addr.municipality ||
+      (addr.city && addr.city !== addr.state ? addr.city : '') || '';
+    const province = addr.county || '';
+    const state = addr.state || '';
+
+    return { barangay, city, province, state };
   } catch {
     return null;
   }
+}
+
+function findRegionIdFromGeo(province: string, state: string): number | null {
+  // Try exact match against PH_PROVINCES list
+  if (province) {
+    const found = PH_PROVINCES.find((p) => p.provinceName.toLowerCase() === province.toLowerCase());
+    if (found) return found.regionId;
+  }
+  // NCR: Nominatim returns state="Metro Manila" with no county
+  const s = state.toLowerCase();
+  if (s.includes('metro manila') || s.includes('national capital')) return 1;
+  // Named region fallback: match state against region names or codes
+  const rMatch = PH_REGIONS.find((r) => {
+    const rn = r.regionName.toLowerCase();
+    return s && (rn.includes(s) || s.includes(r.regionCode.toLowerCase()));
+  });
+  return rMatch?.regionId ?? null;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -135,6 +164,7 @@ export function IncidentForm({
   const [fieldErrors, setFieldErrors] = useState<Set<string>>(new Set(initialErrors ?? []));
   const locationHydratedRef = useRef(false);
   const formHydratedRef = useRef(false);
+  const submitAfterSaveRef = useRef(false);
 
   const showToast = (message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -255,10 +285,10 @@ export function IncidentForm({
     problems_encountered: [] as string[],
     problems_others: '',
 
-    // K. Recommendations
+    // J. Recommendations
     recommendations: '',
 
-    // L. Disposition
+    // K. Disposition
     disposition: '',
     disposition_prepared_by: '',
     disposition_noted_by: '',
@@ -782,9 +812,38 @@ export function IncidentForm({
     e.preventDefault();
     setToast(null);
     setFieldErrors(new Set());
-
+    submitAfterSaveRef.current = false;
     const effectiveRegionId = resolveRegionId() ?? 0;
+    await doCreateIncident(effectiveRegionId);
+  };
 
+  const handleSubmitForReview = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    setToast(null);
+    setFieldErrors(new Set());
+
+    // Additional validation required before submitting for review
+    const submitErrors = new Set<string>();
+    const preparedBy = formState.disposition_prepared_by?.trim();
+    const notedBy = formState.disposition_noted_by?.trim();
+    if (!preparedBy || preparedBy.toLowerCase() === 'n/a') submitErrors.add('disposition_prepared_by');
+    if (!notedBy || notedBy.toLowerCase() === 'n/a') submitErrors.add('disposition_noted_by');
+    if (!formState.alarm_level) submitErrors.add('alarm_level');
+    if (!formState.classification_of_involved) submitErrors.add('classification_of_involved');
+    if (!formState.notification_dt_date) submitErrors.add('notification_dt_date');
+
+    if (submitErrors.size > 0) {
+      setFieldErrors(submitErrors);
+      showToast('Please complete all required fields before submitting for review.');
+      setTimeout(() => {
+        const el = document.querySelector('[data-field-error="true"]');
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+      return;
+    }
+
+    submitAfterSaveRef.current = true;
+    const effectiveRegionId = resolveRegionId() ?? 0;
     await doCreateIncident(effectiveRegionId);
   };
 
@@ -1018,16 +1077,6 @@ export function IncidentForm({
         station_code: formState.station_code || 'TBA',
         incident_type_code: incidentTypeCode || undefined,
       };
-      const isNaOrBlank = (v: string | undefined) => !v?.trim() || v.trim().toUpperCase() === 'N/A';
-      const naErrors = new Set<string>();
-      if (isNaOrBlank(formState.disposition_prepared_by)) naErrors.add('disposition_prepared_by');
-      if (isNaOrBlank(formState.disposition_noted_by)) naErrors.add('disposition_noted_by');
-      if (naErrors.size > 0) {
-        setFieldErrors(naErrors);
-        showToast('Prepared by and Noted by cannot be empty or "N/A".');
-        setLoading(false);
-        return;
-      }
       try {
         await updateRegionalIncident(existingIncidentId, updatePayload);
         showToast('Incident saved successfully.');
@@ -1041,17 +1090,6 @@ export function IncidentForm({
     }
 
     // ── Create mode ──────────────────────────────────────────────────────────
-    const isNaOrBlank = (v: string | undefined) => !v?.trim() || v.trim().toUpperCase() === 'N/A';
-    const naErrors = new Set<string>();
-    if (isNaOrBlank(formState.disposition_prepared_by)) naErrors.add('disposition_prepared_by');
-    if (isNaOrBlank(formState.disposition_noted_by)) naErrors.add('disposition_noted_by');
-    if (naErrors.size > 0) {
-      setFieldErrors(naErrors);
-      showToast('Prepared by and Noted by cannot be empty or "N/A".');
-      setLoading(false);
-      return;
-    }
-
     const payload = { region_id: effectiveRegionId, incidents: [incident] };
 
     try {
@@ -1059,6 +1097,16 @@ export function IncidentForm({
         const res = await edgeFunctions.uploadBundle(payload);
         const incidentId = res.incident_ids[0];
         if (!incidentId) throw new Error('Upload succeeded but no incident ID was returned.');
+        if (submitAfterSaveRef.current) {
+          try {
+            await submitIncidentForReview(incidentId);
+          } catch (submitErr) {
+            // Incident saved but submit failed — navigate to detail so user can retry submit
+            showToast(`Saved as draft. Submit failed: ${(submitErr as Error).message}`);
+            router.push(`/dashboard/regional/incidents/${incidentId}`);
+            return;
+          }
+        }
         router.push(`/dashboard/regional/incidents/${incidentId}`);
       } else {
         await queueIncident(payload);
@@ -1398,6 +1446,37 @@ export function IncidentForm({
             <div className="md:col-span-2" data-field-error={fieldErrors.has('incident_address') ? 'true' : undefined}>
               <label className={labelCls}>Complete Address of Fire Incident{reqMark}</label>
               <input name="incident_address" type="text" className={errCls('incident_address')} placeholder="House/Building No., Street, Barangay, City/Municipality, Province" value={formState.incident_address} onChange={handleChange} />
+            </div>
+
+            {/* ── Map Pin (inline in Response Details) ── */}
+            <div className="md:col-span-2 space-y-2" data-field-error={fieldErrors.has('map_location') ? 'true' : undefined}>
+              <label className={`${labelCls} flex items-center gap-1`}>
+                Fire Scene Location (Map Pin){reqMark}
+              </label>
+              {fieldErrors.has('map_location') && <p className="text-xs font-semibold text-red-600">Pin the fire location on the map before saving.</p>}
+              <p className="text-xs text-gray-500">Click or search the map to pin the fire scene. The fields above will auto-fill from the pin — you can still edit them manually.</p>
+              <div className={`rounded ${fieldErrors.has('map_location') ? 'border-2 border-red-500' : 'border border-gray-300'}`}>
+                <MapPicker
+                  center={latitude && longitude ? [latitude, longitude] : [14.5995, 120.9842]}
+                  value={latitude && longitude ? { lat: latitude, lng: longitude } : null}
+                  onChange={async (lat, lng) => {
+                    setLatitude(lat);
+                    setLongitude(lng);
+                    const geo = await reverseGeocode(lat, lng);
+                    if (geo?.barangay) {
+                      setFormState((prev) => ({ ...prev, barangay: geo.barangay }));
+                    }
+                  }}
+                />
+              </div>
+              {latitude !== null && longitude !== null ? (
+                <p className="text-xs text-green-700 font-medium">
+                  📍 Location pinned: {latitude.toFixed(6)}, {longitude.toFixed(6)}
+                  <button type="button" onClick={() => { setLatitude(null); setLongitude(null); }} className="ml-3 text-red-600 hover:underline">Clear</button>
+                </p>
+              ) : (
+                <p className="text-xs text-amber-700 font-medium">No location pinned — click the map to mark the fire scene.</p>
+              )}
             </div>
 
             <div>
@@ -1799,43 +1878,9 @@ export function IncidentForm({
           </div>
         </section>
 
-        {/* ── H. FIRE SCENE LOCATION ── */}
-        <section className="space-y-4 border-b pb-6" data-field-error={fieldErrors.has('map_location') ? 'true' : undefined}>
-          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">H. Fire Scene Location{reqMark}</h3>
-          {fieldErrors.has('map_location') && <p className="text-xs font-semibold text-red-600">Pin the fire location on the map before saving.</p>}
-          <p className="text-xs text-gray-500">Click on the map to pin the fire incident location. The coordinates will be saved with the report.</p>
-          <div className={`rounded ${fieldErrors.has('map_location') ? 'border-2 border-red-500' : 'border border-gray-300'}`}>
-            <MapPicker
-              center={latitude && longitude ? [latitude, longitude] : [14.5995, 120.9842]}
-              value={latitude && longitude ? { lat: latitude, lng: longitude } : null}
-              onChange={async (lat, lng) => {
-                setLatitude(lat);
-                setLongitude(lng);
-                const geo = await reverseGeocode(lat, lng);
-                if (geo) {
-                  setFormState((prev) => ({
-                    ...prev,
-                    ...(geo.barangay ? { barangay: geo.barangay } : {}),
-                    ...(geo.city ? { city_municipality: geo.city } : {}),
-                    ...(geo.province ? { province_district: geo.province } : {}),
-                  }));
-                }
-              }}
-            />
-          </div>
-          {latitude !== null && longitude !== null ? (
-            <p className="text-xs text-green-700 font-medium">
-              📍 Location selected: {latitude.toFixed(6)}, {longitude.toFixed(6)}
-              <button type="button" onClick={() => { setLatitude(null); setLongitude(null); }} className="ml-3 text-red-600 hover:underline">Clear</button>
-            </p>
-          ) : (
-            <p className="text-xs text-amber-700 font-medium">No location selected — click the map to pin the fire scene.</p>
-          )}
-        </section>
-
-        {/* ── I. NARRATIVE ── */}
+        {/* ── H. NARRATIVE ── */}
         <section className="space-y-4 border-b pb-6">
-          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">I. Narrative Content (In Chronological Order)</h3>
+          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">H. Narrative Content (In Chronological Order)</h3>
           <textarea
             name="narrative_report"
             rows={6}
@@ -1846,9 +1891,9 @@ export function IncidentForm({
           />
         </section>
 
-        {/* ── J. PROBLEMS ENCOUNTERED ── */}
+        {/* ── I. PROBLEMS ENCOUNTERED ── */}
         <section className="space-y-4 border-b pb-6">
-          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">J. Problems Encountered</h3>
+          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">I. Problems Encountered</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
             {ALL_PROBLEM_OPTIONS.map((prob, idx) => {
               // Normalize the label to ensure consistent comparison
@@ -1909,15 +1954,15 @@ export function IncidentForm({
           </div>
         </section>
 
-        {/* ── K. RECOMMENDATIONS ── */}
+        {/* ── J. RECOMMENDATIONS ── */}
         <section className="space-y-4 border-b pb-6">
-          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">K. Recommendations</h3>
+          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">J. Recommendations</h3>
           <textarea name="recommendations" rows={4} className={inputCls} placeholder="Provide clear and actionable recommendations..." value={formState.recommendations} onChange={handleChange} />
         </section>
 
-        {/* ── L. DISPOSITION ── */}
+        {/* ── K. DISPOSITION ── */}
         <section className="space-y-4">
-          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">L. Disposition</h3>
+          <h3 className="font-bold text-lg text-red-900 border-l-4 border-red-800 pl-2">K. Disposition</h3>
           <textarea name="disposition" rows={4} className={inputCls} placeholder="As of this date, no complaint has been filed..." value={formState.disposition} onChange={handleChange} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div data-field-error={fieldErrors.has('disposition_prepared_by') ? 'true' : undefined}>
@@ -1942,10 +1987,23 @@ export function IncidentForm({
           </div>
         )}
 
-        <button type="submit" disabled={loading} className="w-full bg-red-800 text-white py-3 rounded font-bold hover:bg-red-700 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg">
-          {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Save className="w-5 h-5" />}
-          {loading ? (isEditMode ? 'Saving Changes…' : 'Saving Draft…') : (isEditMode ? 'Save Changes' : 'Save as Draft')}
-        </button>
+        <div className={`flex gap-3 ${isEditMode ? '' : 'flex-col sm:flex-row'}`}>
+          <button type="submit" disabled={loading} className="flex-1 bg-gray-700 text-white py-3 rounded font-bold hover:bg-gray-600 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg">
+            {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Save className="w-5 h-5" />}
+            {loading ? (isEditMode ? 'Saving Changes…' : 'Saving Draft…') : (isEditMode ? 'Save Changes' : 'Save as Draft')}
+          </button>
+          {!isEditMode && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={(e) => void handleSubmitForReview(e)}
+              className="flex-1 bg-red-800 text-white py-3 rounded font-bold hover:bg-red-700 disabled:opacity-50 flex justify-center items-center gap-2 shadow-lg"
+            >
+              {loading ? <Loader2 className="animate-spin w-5 h-5" /> : <Send className="w-5 h-5" />}
+              {loading ? 'Submitting…' : 'Submit for Review'}
+            </button>
+          )}
+        </div>
 
       </form>
 
