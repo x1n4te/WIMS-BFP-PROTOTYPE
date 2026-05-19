@@ -286,6 +286,7 @@ export default function RegionalIncidentDetailPage() {
   const [validatorError, setValidatorError] = useState<string | null>(null);
   const [validatorDupMatchedId, setValidatorDupMatchedId] = useState<number | null>(null);
   const dupAutoShownRef = useRef(false);
+  const pendingSubmitDone = useRef(false);
 
   useEffect(() => {
     if (!authLoading && !canAccessRegional) {
@@ -317,6 +318,20 @@ export default function RegionalIncidentDetailPage() {
     if (authLoading || !canAccessRegional) return;
     load();
   }, [authLoading, canAccessRegional, load]);
+
+  // When the create form navigates here with ?pending_submit=1, auto-trigger the
+  // submit flow once the incident detail has loaded (only for DRAFT incidents).
+  // This gives the encoder the same duplicate-detection modal as the detail page
+  // without duplicating the modal code in IncidentForm.
+  useEffect(() => {
+    if (!detail || pendingSubmitDone.current) return;
+    if (detail.verification_status !== 'DRAFT') return;
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('pending_submit') !== '1') return;
+    pendingSubmitDone.current = true;
+    router.replace(`/dashboard/regional/incidents/${incidentId}`);
+    handleSubmitClick();
+  }, [detail]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll every 30 s while the incident is PENDING — alert the encoder if the validator acts.
   useEffect(() => {
@@ -877,15 +892,17 @@ export default function RegionalIncidentDetailPage() {
                   </button>
                 )}
 
-                {/* Edit button — DRAFT/REJECTED: opens edit directly; PENDING: shows withdraw-first popup */}
-                <button
-                  onClick={handleEditClick}
-                  disabled={actionLoading}
-                  className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-50"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  Edit
-                </button>
+                {/* Edit button — only for DRAFT/PENDING/REJECTED; hidden for VERIFIED */}
+                {canSubmitOrDelete && (
+                  <button
+                    onClick={handleEditClick}
+                    disabled={actionLoading}
+                    className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-50"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit
+                  </button>
+                )}
 
                 {/* Submit / Resubmit — only for DRAFT or REJECTED */}
                 {(detail.verification_status === 'DRAFT' || detail.verification_status === 'REJECTED') && (

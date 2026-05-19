@@ -96,6 +96,10 @@ export async function apiFetch<T>(
     // mid-flow. The caller is then responsible for surfacing the error.
     if (!skipAuthRedirect && typeof window !== 'undefined') {
       window.location.href = '/login';
+    } else if (typeof window !== 'undefined') {
+      // Signal auth.tsx to re-check the OIDC session (mirrors what F5 does),
+      // so the page recovers without a manual refresh.
+      window.dispatchEvent(new Event('wims:auth-failed'));
     }
     throw new ApiRequestError('Session expired. Please log in again.', 401);
   }

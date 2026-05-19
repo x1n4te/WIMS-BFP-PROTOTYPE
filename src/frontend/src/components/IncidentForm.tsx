@@ -11,7 +11,7 @@ import {
 } from '@/lib/api';
 import { queueIncident, getPendingIncidents, markSynced } from '@/lib/offlineStore';
 import { useUserProfile } from '@/lib/auth';
-import { PH_REGIONS, PH_PROVINCES, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier } from '@/lib/ph-regions';
+import { PH_REGIONS, PH_PROVINCES, getProvincesForRegion, getCitiesForProvince, getAforRegionIdentifier, getShortRegionName } from '@/lib/ph-regions';
 import { Loader2, Save, Shuffle, Send } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import {
@@ -175,6 +175,7 @@ export function IncidentForm({
   // H. Fire location from MapPicker
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
+  const [mapSearchQuery, setMapSearchQuery] = useState<string | undefined>(undefined);
 
   const [formState, setFormState] = useState({
     // A. Response Details
@@ -476,6 +477,16 @@ export function IncidentForm({
       return String(v);
     };
 
+    // Resolve province/city from initial data
+    const hydratedProvince = ns.province_district || (initialData as unknown as Record<string, unknown>)._province_text as string || '';
+    const hydratedCity = initialData._city_text || ns.city_municipality || '';
+    // Guard: if encoder's assigned region is known, discard province/city from a
+    // different region (prevents the hydration effect from overwriting the lock effect).
+    const encoderValidProvinces = (isEncoder && assignedRegionId)
+      ? getProvincesForRegion(assignedRegionId).map((p) => p.provinceName)
+      : null;
+    const hydratedProvinceOk = !encoderValidProvinces || encoderValidProvinces.includes(hydratedProvince);
+
     setFormState((prev) => ({
       ...prev,
       responder_type: ns.responder_type || '',
@@ -483,8 +494,8 @@ export function IncidentForm({
       notification_dt_date: toDateTimeLocalValue(ns.notification_dt).split('T')[0] || '',
       notification_dt_time: toDateTimeLocalValue(ns.notification_dt).split('T')[1] || '',
       region: ns.region || '',
-      province_district: ns.province_district || (initialData as unknown as Record<string, unknown>)._province_text as string || '',
-      city_municipality: initialData._city_text || ns.city_municipality || '',
+      province_district: hydratedProvinceOk ? hydratedProvince : '',
+      city_municipality: hydratedProvinceOk ? hydratedCity : '',
       barangay: ns.barangay || '',
       incident_address: ns.incident_address || (sen as Record<string, unknown>).street_address as string || '',
       nearest_landmark: ns.nearest_landmark || (sen as Record<string, unknown>).landmark as string || '',
@@ -654,6 +665,15 @@ export function IncidentForm({
         || sen.disposition_noted_by || '',
     }));
 
+    // Auto-geocode the incident address once hydration completes.
+    // Only fires when no coordinates are pre-supplied (import without a prior map pin).
+    const hydratedAddress = ns.incident_address || (sen as Record<string, unknown>).street_address as string || '';
+    const hasCoords = typeof initialData.latitude === 'number' && typeof initialData.longitude === 'number';
+    if (hydratedAddress && !hasCoords) {
+      const parts = [hydratedAddress, hydratedProvinceOk ? hydratedCity : '', hydratedProvinceOk ? hydratedProvince : '', 'Philippines'].filter(Boolean);
+      setMapSearchQuery(parts.join(', '));
+    }
+
     const people = (sen.other_personnel || ns.other_personnel) as Record<string, unknown>[] | undefined;
     if (people && Array.isArray(people)) {
       setOtherPersonnel(
@@ -663,7 +683,7 @@ export function IncidentForm({
         }))
       );
     }
-  }, [alarmEntryToDateTimeLocal, initialData]);
+  }, [alarmEntryToDateTimeLocal, initialData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // M4 Bug 8-D: Sync the free-text "Others" field to the "Others" checkbox.
   // Non-empty text → ensure "Others" is in problems_encountered.
@@ -822,15 +842,33 @@ export function IncidentForm({
     setToast(null);
     setFieldErrors(new Set());
 
-    // Additional validation required before submitting for review
+    // Region constraint: encoder can only submit for their assigned region
+    if (isEncoder && assignedRegionId) {
+      const effectiveId = resolveRegionId();
+      if (effectiveId && effectiveId !== assignedRegionId) {
+        const name = getShortRegionName(assignedRegionId);
+        showToast(`You can only submit incidents for your assigned region (${name}).`);
+        return;
+      }
+    }
+
+    // Full required-field validation — mirrors detail page handleSubmitClick
+    const isEmpty = (v: unknown) => !v || String(v).trim() === '' || String(v).trim().toUpperCase() === 'N/A';
     const submitErrors = new Set<string>();
-    const preparedBy = formState.disposition_prepared_by?.trim();
-    const notedBy = formState.disposition_noted_by?.trim();
-    if (!preparedBy || preparedBy.toLowerCase() === 'n/a') submitErrors.add('disposition_prepared_by');
-    if (!notedBy || notedBy.toLowerCase() === 'n/a') submitErrors.add('disposition_noted_by');
+    if (!formState.responder_type) submitErrors.add('responder_type');
+    if (!formState.fire_station_name) submitErrors.add('fire_station_name');
+    if (!formState.notification_dt_date) submitErrors.add('notification_dt_date');
+    if (!formState.province_district?.trim()) submitErrors.add('province_district');
+    if (!formState.city_municipality?.trim()) submitErrors.add('city_municipality');
     if (!formState.alarm_level) submitErrors.add('alarm_level');
     if (!formState.classification_of_involved) submitErrors.add('classification_of_involved');
-    if (!formState.notification_dt_date) submitErrors.add('notification_dt_date');
+    if (formState.classification_of_involved && !formState.type_of_involved_general_category) submitErrors.add('type_of_involved_general_category');
+    if (!formState.extent_of_damage) submitErrors.add('extent_of_damage');
+    if (latitude === null || longitude === null) submitErrors.add('map_location');
+    const preparedBy = formState.disposition_prepared_by?.trim();
+    const notedBy = formState.disposition_noted_by?.trim();
+    if (isEmpty(preparedBy)) submitErrors.add('disposition_prepared_by');
+    if (isEmpty(notedBy)) submitErrors.add('disposition_noted_by');
 
     if (submitErrors.size > 0) {
       setFieldErrors(submitErrors);
@@ -1101,7 +1139,16 @@ export function IncidentForm({
           try {
             await submitIncidentForReview(incidentId);
           } catch (submitErr) {
-            // Incident saved but submit failed — navigate to detail so user can retry submit
+            if (submitErr instanceof ApiRequestError && submitErr.status === 409) {
+              const d = submitErr.detail as { code?: string; matched_incident_id?: number } | null;
+              if (d?.code === 'DUPLICATE_DETECTED' && d.matched_incident_id) {
+                // Saved as draft; navigate to detail with flag to auto-trigger the
+                // full duplicate modal (side-by-side comparison + force/cancel options).
+                router.push(`/dashboard/regional/incidents/${incidentId}?pending_submit=1`);
+                return;
+              }
+            }
+            // Any other submit failure — go to detail so user can retry
             showToast(`Saved as draft. Submit failed: ${(submitErr as Error).message}`);
             router.push(`/dashboard/regional/incidents/${incidentId}`);
             return;
@@ -1455,8 +1502,21 @@ export function IncidentForm({
               </label>
               {fieldErrors.has('map_location') && <p className="text-xs font-semibold text-red-600">Pin the fire location on the map before saving.</p>}
               <p className="text-xs text-gray-500">Click or search the map to pin the fire scene. The fields above will auto-fill from the pin — you can still edit them manually.</p>
+              {!isEditMode && formState.incident_address && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parts = [formState.incident_address, formState.city_municipality, formState.province_district, 'Philippines'].filter(Boolean);
+                    if (parts.length > 1) setMapSearchQuery(parts.join(', '));
+                  }}
+                  className="text-xs text-blue-700 underline hover:text-blue-900"
+                >
+                  Auto-Pin from Address
+                </button>
+              )}
               <div className={`rounded ${fieldErrors.has('map_location') ? 'border-2 border-red-500' : 'border border-gray-300'}`}>
                 <MapPicker
+                  searchQuery={mapSearchQuery}
                   center={latitude && longitude ? [latitude, longitude] : [14.5995, 120.9842]}
                   value={latitude && longitude ? { lat: latitude, lng: longitude } : null}
                   onChange={async (lat, lng) => {
