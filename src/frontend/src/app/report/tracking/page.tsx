@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { fetchReportStatus, registerNotification } from '@/lib/api';
 import { getMessagingToken } from '@/lib/firebase';
 import Image from 'next/image';
@@ -18,11 +18,10 @@ export default function ReportTrackerPage() {
     const [error, setError] = useState<string | null>(null);
     const [notifyStatus, setNotifyStatus] = useState<NotifyStatus>('idle');
 
-    const handleSearch = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const searchReport = useCallback(async (id: string) => {
         setError(null);
         setNotifyStatus('idle');
-        if (!reportId.trim()) {
+        if (!id.trim()) {
             setError('Please enter a Report ID.');
             return;
         }
@@ -30,7 +29,7 @@ export default function ReportTrackerPage() {
         setLoading(true);
         setStatusData(null);
         try {
-            const data = await fetchReportStatus(reportId.trim());
+            const data = await fetchReportStatus(id.trim());
             setStatusData(data);
             if (localStorage.getItem(notifyKey(data.report_id)) === 'true') {
                 setNotifyStatus('enabled');
@@ -40,6 +39,19 @@ export default function ReportTrackerPage() {
         } finally {
             setLoading(false);
         }
+    }, []);
+
+    useEffect(() => {
+        const id = new URLSearchParams(window.location.search).get('id');
+        if (!id?.trim()) return;
+
+        setReportId(id.trim());
+        void searchReport(id);
+    }, [searchReport]);
+
+    const handleSearch = async (e: React.FormEvent) => {
+        e.preventDefault();
+        await searchReport(reportId);
     };
 
     const handleEnableNotifications = async () => {

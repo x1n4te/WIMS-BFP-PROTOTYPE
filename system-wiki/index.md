@@ -1,7 +1,8 @@
 # WIMS-BFP System Wiki Index
 
-Last updated: 2026-05-16
+Last updated: 2026-05-19
 Total synthesis pages: 31
+Last changes: gap-register consolidated (M9 deferred, barangay optional), functional-bug-register F-01 to F-07 consolidated, F-06 fixed, analyst workflow Phase 1 status confirmed.
 Purpose: project-local knowledgebase for agents routing themselves to relevant WIMS-BFP context.
 
 ## Start Here

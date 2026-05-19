@@ -1,5 +1,6 @@
 """Triage Queue and Promotion Workflow — ENCODER/VALIDATOR only."""
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -20,6 +21,18 @@ class BulkPromoteRequest(BaseModel):
 
 
 router = APIRouter(prefix="/api/triage", tags=["triage"])
+logger = logging.getLogger(__name__)
+
+
+def _enqueue_status_notification(report_id: int, status: str) -> None:
+    try:
+        send_status_notification.delay(report_id, status)
+    except Exception:
+        logger.exception(
+            "Failed to enqueue status notification for report_id=%s status=%s",
+            report_id,
+            status,
+        )
 
 
 def _require_encoder_or_validator(
@@ -155,7 +168,7 @@ def promote_report(
     sync_incident_to_analytics(db, incident_id)
     db.commit()
 
-    send_status_notification.delay(report_id, "VERIFIED")
+    _enqueue_status_notification(report_id, "VERIFIED")
 
     return {"report_id": report_id, "incident_id": incident_id}
 
@@ -223,6 +236,6 @@ def bulk_promote_reports(
     db.commit()
 
     for item in promoted:
-        send_status_notification.delay(item["report_id"], "VERIFIED")
+        _enqueue_status_notification(item["report_id"], "VERIFIED")
 
     return {"promoted": promoted, "failed": failed}
