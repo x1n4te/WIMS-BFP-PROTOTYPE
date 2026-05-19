@@ -1,7 +1,7 @@
 ---
 title: Backend Utilities & Celery Tasks
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-05-19
 type: backend
 tags: [wims-bfp, backend, utils, crypto, audit, session, backup, celery, exports]
 sources: [src/backend/utils/, src/backend/tasks/]
@@ -113,7 +113,7 @@ Celery tasks for CSV, XLSX, and PDF exports. All use the analytics read model (`
 
 **Behavior:** Validates/whitelists columns → opens DB session with RLS → fetches rows (get_export_rows or get_analyst_export_rows) → creates EXPORT_DIR → generates unique filename → calls writer → logs to analytics_export_log → returns file path.
 
-**Celery Tasks (4 total):**
+**Celery Tasks:**
 
 | Task | Name | Writer | Format | Content Type | Purpose |
 |---|---|---|---|---|---|
@@ -125,3 +125,11 @@ Celery tasks for CSV, XLSX, and PDF exports. All use the analytics read model (`
 All tasks use `@celery_app.task(bind=True)` — `self.request.id` provides the Celery task UUID.
 
 **File handling:** Filename pattern: `analytics_export_{uuid4_hex_12ch}.{extension}`. No cleanup mechanism — files accumulate in EXPORT_DIR. File path is persisted in `analytics_export_log` for retrieval.
+
+### `notifications.py` — Citizen Report Push Notifications
+
+`send_status_notification(report_id, new_status)` sends Firebase Cloud Messaging notifications to tokens registered in `wims.report_notification_tokens`.
+
+**Runtime configuration:** Firebase Admin credentials must be injected at runtime via `FIREBASE_SERVICE_ACCOUNT_JSON` or `FIREBASE_CREDENTIALS_PATH`. Service-account JSON files are not tracked in Git.
+
+**Dispatch behavior:** `src/backend/api/routes/triage.py` enqueues notification tasks only after promotion and analytics sync commits. Enqueue failures are logged and suppressed so a Redis/Celery broker outage does not turn a persisted promotion into a 500 response.
