@@ -3,6 +3,17 @@
 Chronological record of system-wiki changes. Append-only.
 Format: `## [YYYY-MM-DD] action | subject`
 
+## [2026-05-19] update | Consolidate gap-register and functional-bug-register
+- gap-register: condensed verbose multi-line entries into tight bullet points; M9 marked NOT-yet-implemented; barangay TOP-N marked OPTIONAL; Phase 2 analyst export confirmed pending; all other items confirmed/shortened.
+- functional-bug-register: F-01 to F-07 consolidated; verbose Keycloak token timeout names removed; F-06 (analyst 500) marked Fixed; removed stale "smoke-checked" qualifiers.
+- index.md: updated last-changes line to reflect consolidation.
+
+## [2026-05-19] fix | PR #106 notification security and tracking follow-through
+- Removed committed Firebase service-account JSON from the PR working tree and changed Docker Compose to accept Firebase credentials only through runtime environment/secret injection.
+- Isolated `send_status_notification.delay(...)` failures behind logged best-effort enqueue so persisted triage promotions do not return 500 when Redis/Celery publish is unavailable.
+- Updated `/report/tracking` to consume `?id=<reportId>` on first load and automatically fetch report status for notification click-throughs.
+- Added focused backend/frontend regression tests for enqueue isolation and tracking query-param lookup.
+
 ## [2026-05-16] create | Final ingestion: remaining routes, backend infra, components, docs/scripts
 - Created 5 new synthesis pages completing the wiki coverage:
   - [[backend/remaining-routes]] — Full API reference for 7 route files: incidents.py (8 routes: upload-bundle, attachments, analyst list/detail/wildland, export), analytics.py (15 routes: heatmap, trends, comparative, export dispatch/download, type-distribution, top-barangays, response-time, compare-regions, top-n, filter-options, execution-plans), public_dmz.py (rate-limited unauthenticated submission), civilian.py (submit + track reports), sessions.py (list + terminate), user.py (profile + password change), ref.py (regions, provinces, cities).
@@ -46,6 +57,24 @@ Format: `## [YYYY-MM-DD] action | subject`
 - Updated all three subsystem pages to include "## API Reference" sections linking to the reference files.
 - Updated `index.md` to list reference files under their parent subsystem entries.
 - Total synthesis pages: 16 pages + 3 reference files = 19 total wiki documents.
+
+## [2026-05-17] update | analyst incident detail backend + sensitive endpoint + numeric hardening + index fix
+- `GET /incidents/analyst/{incident_id}` — fully rewired:
+  - Added `form_kind` field via `CASE WHEN w.incident_id IS NOT NULL THEN 'WILDLAND_AFOR' ELSE 'STRUCTURAL_AFOR'` using LEFT JOIN on `incident_wildland_afor`
+  - Added all 19 structural fields from `incident_nonsensitive_details`: `fire_origin`, `extent_of_damage`, `structures_affected`, `households_affected`, `individuals_affected`, `vehicles_affected`, `resources_deployed`, `alarm_timeline`, `problems_encountered`, `stage_of_fire`, `extent_total_floor_area_sqm`, `extent_total_land_area_hectares`, `water_tankers_used`, `breathing_apparatus_used`, `total_gas_consumed_liters`, `families_affected`, `responder_type`, `fire_station_name`, `distance_from_station_km`
+  - When `has_wildland_afor = true`, inlines `wildland` (full row dict), `alarm_statuses`, and `assistance_rows` from joined tables
+  - Sensitive fields (narrative, PII, disposition) intentionally excluded — use `/sensitive` endpoint
+  - **Index fix (another agent):** Live DB query confirmed the SELECT returns 38 columns (indexes 0–37). `form_kind` at row[18], `fire_station_name` at row[36], `distance_from_station_km` at row[37]. Original indices were off by 2 due to stale indexing from removed `barangay_name` JOIN. All row indices updated to actual positions; endpoint returns 200 for incident 12.
+- New `GET /incidents/analyst/{incident_id}/sensitive` — separate endpoint for PII:
+  - Same auth: `NATIONAL_ANALYST` or `SYSTEM_ADMIN`
+  - Returns: `caller_name`, `caller_number`, `owner_name`, `establishment_name`, `occupant_name`, `narrative_report`, `prepared_by_officer`, `noted_by_officer`, `disposition`, `fire_origin`, `extent_of_damage`, `alarm_timeline`
+  - Verifies incident is VERIFIED and not archived before returning any data (404 otherwise)
+- Numeric field hardening: replaced bare `float()` casts on `NUMERIC` columns with `_analyst_json_value()` helper for `estimated_damage_php`, `extent_total_floor_area_sqm`, `extent_total_land_area_hectares`, `total_gas_consumed_liters`, `distance_from_station_km`. Prevents `ValueError` when garbage strings (e.g. `'BFP'` in `total_gas_consumed_liters` for incident 12) land in numeric columns.
+- Removed dead `ref_barangays` LEFT JOIN — `barangay_id` is never written by encoder workflow; JOIN always returned empty. Comment added referencing future purge tracking. `barangay_name` dropped from response; frontend `FieldRow` renders `N/A`.
+- Frontend `api.ts` — `AnalystIncidentDetailResponse` extended with all new fields + `form_kind` + optional wildland sub-objects; `AnalystIncidentSensitiveResponse` interface added; `fetchAnalystIncidentSensitive()` function added.
+- Frontend analyst detail page (`/dashboard/analyst/incidents/[id]`) — fully redesigned by parallel agent: 8 collapsible sections (A–H), blur/reveal sensitive data with per-field eye-icon toggle, locked wildland section for STRUCTURAL_AFOR, lazy-load sensitive endpoint on user click. Reviews passed.
+- Updated `system-wiki/backend/api-route-map.md`: added `/incidents/analyst/{incident_id}/sensitive` route entry.
+- SQL contract tests pass: 4/4 (`test_analyst_incidents_sql_contract.py`).
 
 ## [2026-05-16] retracted | PSGC barangay geometry full-load pipeline
 - A proposed PSGC barangay geometry full-load pipeline was generated but rejected before commit.
@@ -308,12 +337,17 @@ Format: `## [YYYY-MM-DD] action | subject`
 - Merge order: #102 → #104 → #103 → #105
 - Index updated: total pages 13 → 18
 
-## [2026-05-14] handoff | Session complete, handoff file created
-- AGENTS.md updated: added "System Wiki & Agent Context Routing" section pointing agents to system-wiki/.
-- Session handoff created: `sessions/2026-05-14_1605_x1n4te_system-wiki-initialization-uiux-evaluations.md` — full session summary, recommended skills, known conventions, open questions.
-- Open items for next session: wiki-dir/ cleanup decision, next desk-check page, groupmate wiki access, GitHub Issues conversion of gap register.
-## [2026-05-14] update | National analyst backend slice started
-- Added API map entries for `GET /api/analytics/export/{task_id}` and `GET /api/analytics/filter-options`.
-- Documented `28_analytics_geography_denorm.sql`: denormalized `municipality_name` / `province_name` on `analytics_incident_facts`, plus export task/file metadata on `analytics_export_log`.
-- Updated National Analyst evaluation/gap registers: verification sync remains fixed, export backend is implemented but frontend preview/download UX remains pending, and National Analyst sidebar navigation is fixed.
->>>>>>> Stashed changes
+## [2026-05-19] update | analyst incident detail page full redesign (working tree)
+- `src/frontend/src/app/dashboard/analyst/incidents/[id]/page.tsx` — complete UI overhaul (+597/-617 lines, 935 total):
+  - **Page header**: ref-number title, status/type/alarm icon badges, location line, styled export buttons
+  - **QuickStats bar**: 4 KPI tiles (Response Time, Est. Damage, Structures Hit, Families Hit) with accent colors + tooltips
+  - **SECTION_ICONS map**: semantic icons per section A–H + Wildland
+  - **CollapsibleSection** rebuilt: icon container, description subtitle, badge, locked state, full ARIA (`aria-expanded`, `aria-controls`, `role="region"`)
+  - **FieldRow** rebuilt: `twocol` mode (2-col grid), `highlight` mode (red text for key metrics), null-safe with "—" fallback
+  - **AlarmVisual**: step-by-step timeline with numbered circles + connecting lines for spatial alarm-level encoding
+  - **WildlandSection**: locked for STRUCTURAL_AFOR, shows alarm_statuses + assistance_rows tables when WILDLAND_AFOR
+  - **SensitiveSection** rebuilt: gradient card gate, per-field blur+reveal eye toggle, "Hide All" button, revealed field counter, lazy-load on user click
+  - **EmptyState** component: consistent icon+message no-data state across all sections
+  - All numeric fields null-safe: `${value} km`, `${value} sqm`, `${value} ha`, `${value} L`, `formatMoney()`, `formatMinutes()`
+- Components all self-contained; no external dependencies beyond existing imports (lucide-react icons, useAuth, api client)
+- Branch: `feat/national-analyst-phase5-detail-screens`, uncommitted

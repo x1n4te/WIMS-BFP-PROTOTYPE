@@ -449,6 +449,44 @@ export async function fetchReportStatus(reportId: string | number): Promise<{ re
   return json as { report_id: number; latitude: number; longitude: number; description: string; trust_score: number; status: string; created_at: string };
 }
 
+export interface FireStation {
+  station_id: number;
+  station_name: string;
+  address: string | null;
+  latitude: number;
+  longitude: number;
+  distance_m: number | null;
+}
+
+/** Nearest BFP fire stations — Zero-Trust, NO auth. GET /api/ref/fire-stations */
+export async function fetchNearbyStations(lat: number, lon: number): Promise<FireStation[]> {
+  const base = (typeof window !== 'undefined' ? (process.env.NEXT_PUBLIC_API_URL || '/api') : process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api').replace(/\/$/, '');
+  const url = `${base}/ref/fire-stations?lat=${lat}&lon=${lon}`;
+  const res = await fetch(url, { method: 'GET', credentials: 'omit' });
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json() as Promise<FireStation[]>;
+}
+
+/** Register FCM token for push notifications on report status change — Zero-Trust, NO auth. POST /api/civilian/reports/{reportId}/notify */
+export async function registerNotification(
+  reportId: number,
+  fcmToken: string,
+): Promise<{ status: string; report_id: number }> {
+  const base = (typeof window !== 'undefined' ? (process.env.NEXT_PUBLIC_API_URL || '/api') : process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api').replace(/\/$/, '');
+  const url = `${base}/civilian/reports/${reportId}/notify`;
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'omit',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fcm_token: fcmToken }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((json as { message?: string; detail?: string }).message ?? (json as { detail?: string }).detail ?? `Request failed: ${res.status}`);
+  }
+  return json as { status: string; report_id: number };
+}
+
 // ---------------------------------------------------------------------------
 // Regional API (REGIONAL_ENCODER only)
 // ---------------------------------------------------------------------------
@@ -1053,6 +1091,64 @@ export interface AnalystIncidentDetailResponse extends AnalystIncidentListItem {
   data_hash: string | null;
   sync_status: string | null;
   has_wildland_afor: boolean;
+  form_kind: 'STRUCTURAL_AFOR' | 'WILDLAND_AFOR';
+  // Full nonsensitive detail
+  fire_origin: string | null;
+  extent_of_damage: string | null;
+  structures_affected: number | null;
+  households_affected: number | null;
+  individuals_affected: number | null;
+  vehicles_affected: number | null;
+  resources_deployed: Record<string, unknown> | null;
+  alarm_timeline: Array<{
+    alarm_level: string;
+    time: string;
+    commander: string;
+  }> | null;
+  problems_encountered: string[] | null;
+  stage_of_fire: string | null;
+  extent_total_floor_area_sqm: number | null;
+  extent_total_land_area_hectares: number | null;
+  water_tankers_used: number | null;
+  breathing_apparatus_used: number | null;
+  total_gas_consumed_liters: number | null;
+  families_affected: number | null;
+  responder_type: string | null;
+  fire_station_name: string | null;
+  distance_from_station_km: number | null;
+  // Inline wildland — present when has_wildland_afor = true
+  wildland?: Record<string, unknown>;
+  alarm_statuses?: Array<{
+    sort_order: number;
+    alarm_status: string;
+    time_declared: string | null;
+    ground_commander: string | null;
+  }>;
+  assistance_rows?: Array<{
+    sort_order: number;
+    organization_or_unit: string;
+    detail: string | null;
+  }>;
+}
+
+export interface AnalystIncidentSensitiveResponse {
+  incident_id: number;
+  fire_origin: string | null;
+  extent_of_damage: string | null;
+  narrative_report: string | null;
+  prepared_by_officer: string | null;
+  noted_by_officer: string | null;
+  disposition: string | null;
+  caller_name: string | null;
+  caller_number: string | null;
+  owner_name: string | null;
+  establishment_name: string | null;
+  occupant_name: string | null;
+  alarm_timeline: Array<{
+    alarm_level: string;
+    time: string;
+    commander: string;
+  }> | null;
 }
 
 export interface AnalystIncidentWildlandDetailResponse {
@@ -1134,6 +1230,12 @@ export async function fetchAnalystIncidentDetail(
   incidentId: number
 ): Promise<AnalystIncidentDetailResponse> {
   return apiFetch<AnalystIncidentDetailResponse>(`/incidents/analyst/${incidentId}`);
+}
+
+export async function fetchAnalystIncidentSensitive(
+  incidentId: number
+): Promise<AnalystIncidentSensitiveResponse> {
+  return apiFetch<AnalystIncidentSensitiveResponse>(`/incidents/analyst/${incidentId}/sensitive`);
 }
 
 export async function fetchAnalystIncidentWildlandDetail(

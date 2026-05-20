@@ -13,8 +13,8 @@ status: verified
 ## Overview
 PR #104 adds AI-generated plain-language summaries for verified fire incidents using the existing Qwen2.5-3B Ollama pipeline. National Analysts can call `POST /api/analytics/incidents/{id}/narrative` to generate a 2–3 sentence summary stored in `fire_incidents.ai_narrative`. A batch endpoint dispatches a Celery task to backfill narratives for all existing verified incidents.
 
-**Author**: orljorstin  
-**Issue**: #69  
+**Author**: orljorstin
+**Issue**: #69
 **Base**: master (bea7325)
 **Commits**: 3 (`92101bc` feat, `731102d` ruff fix, `ab531c3` import restoration)
 

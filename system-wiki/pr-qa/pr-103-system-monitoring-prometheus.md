@@ -13,8 +13,8 @@ status: verified
 ## Overview
 PR #103 adds a Prometheus metrics endpoint (`GET /metrics`) for external scraping, two admin endpoints for real-time worker and system resource monitoring, and a Celery beat task for 30-second worker heartbeat tracking in the database.
 
-**Author**: orljorstin  
-**Issue**: #70  
+**Author**: orljorstin
+**Issue**: #70
 **Base**: master (bea7325)
 **Commits**: 1 (`feat(#70): system monitoring — Prometheus /metrics + worker heartbeat`)
 
