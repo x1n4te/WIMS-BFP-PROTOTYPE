@@ -302,14 +302,15 @@ export function IncidentForm({
   );
 
   const referenceNumberPreview = useMemo(() => {
-    const regionCode = selectedRegionId ? getAforRegionIdentifier(selectedRegionId) : '';
+    const effectiveId = (isEncoder && assignedRegionId) ? assignedRegionId : selectedRegionId;
+    const regionCode = effectiveId ? getAforRegionIdentifier(effectiveId) : '';
     return generateReferenceNumberPreview({
       regionCode,
       stationCode: formState.station_code || 'TBA',
       typeCode: incidentTypeCode,
       notificationDate: formState.notification_dt_date,
     });
-  }, [selectedRegionId, formState.station_code, incidentTypeCode, formState.notification_dt_date]);
+  }, [isEncoder, assignedRegionId, selectedRegionId, formState.station_code, incidentTypeCode, formState.notification_dt_date]);
 
   // ── Utility helpers ────────────────────────────────────────────────────────
 

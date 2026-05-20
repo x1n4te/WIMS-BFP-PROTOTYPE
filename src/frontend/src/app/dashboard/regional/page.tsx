@@ -294,8 +294,10 @@ export default function RegionalDashboardPage() {
             </button>
             <button
               type="button"
-              className={`rounded px-3 py-1.5 text-sm font-semibold text-white transition-colors ${
-                statusFilter === 'DRAFT' ? 'bg-red-800' : 'bg-red-600 hover:bg-red-700'
+              className={`rounded border px-3 py-1.5 text-sm font-semibold transition-colors ${
+                statusFilter === 'DRAFT'
+                  ? 'border-red-600 bg-red-600 text-white'
+                  : 'border-red-600 bg-transparent text-red-600 hover:bg-red-50'
               }`}
               onClick={() => {
                 setStatusFilter(statusFilter === 'DRAFT' ? '' : 'DRAFT');
@@ -348,7 +350,10 @@ export default function RegionalDashboardPage() {
                 </tr>
               ) : (
                 incidents.map((inc) => (
-                  <tr key={inc.incident_id} className="border-b bg-white hover:bg-gray-50">
+                  <tr
+                    key={inc.incident_id}
+                    className={`border-b hover:bg-gray-100 ${inc.verification_status === 'DRAFT' ? 'bg-gray-50' : 'bg-white'}`}
+                  >
                     <td className="px-6 py-4 whitespace-nowrap">
                       {(() => {
                         const raw = inc.notification_dt || inc.created_at;
@@ -390,7 +395,9 @@ export default function RegionalDashboardPage() {
                             ? 'bg-green-100 text-green-800'
                             : inc.verification_status === 'REJECTED'
                               ? 'bg-red-100 text-red-800'
-                              : 'bg-yellow-100 text-yellow-800'
+                              : inc.verification_status === 'DRAFT'
+                                ? 'bg-gray-200 text-gray-600'
+                                : 'bg-yellow-100 text-yellow-800'
                         }`}
                       >
                         {inc.verification_status}

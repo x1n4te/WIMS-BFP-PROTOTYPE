@@ -2962,7 +2962,8 @@ def get_validator_stats(
         db.execute(
             text("""
             SELECT COUNT(*) FROM wims.fire_incidents
-            WHERE verification_status = 'PENDING_VALIDATION' AND is_archived = FALSE
+            WHERE verification_status = ANY(ARRAY['PENDING', 'PENDING_VALIDATION'])
+              AND is_archived = FALSE
         """),
         ).scalar()
         or 0
@@ -5383,6 +5384,110 @@ def get_encoder_audit_log(
     }
 
 
+_ACTION_LABEL_MAP: dict[str, str] = {
+    "CREATED_DRAFT": "Created Draft",
+    "EDITED": "Edited",
+    "DELETED_DRAFT": "Deleted Draft",
+    "DELETED_PENDING": "Deleted Pending Submission",
+    "SUBMITTED": "Submitted for Review",
+    "WITHDRAWN": "Withdrawn",
+    "APPROVED": "Approved",
+    "REJECTED": "Rejected",
+    "BULK_APPROVED": "Bulk Approved",
+    "REPLACED_EXISTING": "Replaced Existing",
+    "ACCEPTED_AS_NEW": "Accepted as New",
+    "ARCHIVED": "Archived",
+}
+_PHT = timezone(timedelta(hours=8))
+
+
+def _fmt_pht(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_PHT).strftime("%Y-%m-%d %H:%M:%S PHT")
+
+
+@router.get("/audit-log/export")
+def export_encoder_audit_log(
+    user: Annotated[dict, Depends(get_regional_encoder)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    action: Optional[str] = None,
+    city_municipality: Optional[str] = None,
+):
+    """Return the current encoder's activity log as a formatted CSV download."""
+    encoder_id = str(user["user_id"])
+    where_clauses = [
+        "ivh.target_type = 'OFFICIAL'",
+        "ivh.action_by_user_id = CAST(:encoder_id AS uuid)",
+    ]
+    params: dict[str, Any] = {"encoder_id": encoder_id}
+    if date_from:
+        where_clauses.append("ivh.action_timestamp >= CAST(:date_from AS timestamptz)")
+        params["date_from"] = date_from
+    if date_to:
+        where_clauses.append("ivh.action_timestamp <= CAST(:date_to AS timestamptz)")
+        params["date_to"] = date_to
+    if action:
+        where_clauses.append("ivh.action_label = :action")
+        params["action"] = action
+    if city_municipality:
+        where_clauses.append("nd.city_municipality ILIKE :city_municipality")
+        params["city_municipality"] = f"%{city_municipality}%"
+    where_sql = " AND ".join(where_clauses)
+    nd_join = "LEFT JOIN wims.incident_nonsensitive_details nd ON nd.incident_id = ivh.target_id"
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+                ivh.history_id, ivh.target_id,
+                ivh.action_label, ivh.previous_status, ivh.new_status,
+                ivh.action_timestamp, nd.city_municipality
+            FROM wims.incident_verification_history ivh
+            {nd_join}
+            WHERE {where_sql}
+            ORDER BY ivh.action_timestamp DESC
+            """
+        ),
+        params,
+    ).fetchall()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "History ID",
+        "Incident ID",
+        "Action",
+        "Previous Status",
+        "New Status",
+        "City / Municipality",
+        "Timestamp (PHT)",
+    ])
+    for r in rows:
+        writer.writerow([
+            r[0],
+            r[1],
+            _ACTION_LABEL_MAP.get(r[2] or "", r[2] or ""),
+            r[3] or "",
+            r[4] or "",
+            r[6] or "",
+            _fmt_pht(r[5]),
+        ])
+
+    export_date = datetime.now(tz=_PHT).strftime("%Y%m%d")
+    return Response(
+        content=buf.getvalue().encode("utf-8"),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=encoder-activity-log-{export_date}.csv",
+        },
+    )
+
+
 def _build_audit_log_query(
     *,
     date_from: str | None,
@@ -5396,7 +5501,7 @@ def _build_audit_log_query(
 
     Returns (where_sql, params). The caller plugs where_sql into a SELECT.
     """
-    where_clauses = ["ivh.target_type = 'OFFICIAL'"]
+    where_clauses = ["ivh.target_type = 'OFFICIAL'", "ivh.action_label != 'CREATED_DRAFT'"]
     params: dict[str, Any] = {}
     if date_from:
         where_clauses.append("ivh.action_timestamp >= CAST(:date_from AS timestamptz)")
@@ -5548,43 +5653,39 @@ def export_validator_audit_logs(
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(
-        [
-            "history_id",
-            "incident_id",
-            "region_id",
-            "region_display",
-            "action_by_user_id",
-            "actor_username",
-            "previous_status",
-            "new_status",
-            "action_label",
-            "notes",
-            "action_timestamp",
-        ]
-    )
+    writer.writerow([
+        "History ID",
+        "Incident ID",
+        "Region ID",
+        "Region",
+        "Actor (User ID)",
+        "Actor (Username)",
+        "Previous Status",
+        "New Status",
+        "Action",
+        "Notes",
+        "Timestamp (PHT)",
+    ])
     for r in rows:
-        writer.writerow(
-            [
-                r[0],
-                r[1],
-                r[2],
-                r[9] or "",
-                str(r[3]) if r[3] else "",
-                r[8] or "",
-                r[4],
-                r[5],
-                r[10] or "",
-                (r[6] or "").replace("\n", " "),
-                r[7].isoformat() if r[7] else "",
-            ]
-        )
+        writer.writerow([
+            r[0],
+            r[1],
+            r[2] or "",
+            r[9] or "",
+            str(r[3]) if r[3] else "",
+            r[8] or "",
+            r[4] or "",
+            r[5] or "",
+            _ACTION_LABEL_MAP.get(r[10] or "", r[10] or ""),
+            (r[6] or "").replace("\n", " "),
+            _fmt_pht(r[7]),
+        ])
 
-    export_date = datetime.utcnow().strftime("%Y%m%d")
+    export_date = datetime.now(tz=_PHT).strftime("%Y%m%d")
     return Response(
         content=buf.getvalue().encode("utf-8"),
         media_type="text/csv",
         headers={
-            "Content-Disposition": f"attachment; filename=audit-log-{export_date}.csv",
+            "Content-Disposition": f"attachment; filename=wims-audit-trail-{export_date}.csv",
         },
     )

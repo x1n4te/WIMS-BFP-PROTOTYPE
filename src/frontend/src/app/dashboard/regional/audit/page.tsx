@@ -53,14 +53,19 @@ export default function EncoderAuditPage() {
   const [actionFilter, setActionFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const buildParams = useCallback(() => {
     const p = new URLSearchParams();
     if (dateFrom) p.set('date_from', dateFrom);
     if (dateTo) p.set('date_to', dateTo);
     if (actionFilter) p.set('action', actionFilter);
     if (cityFilter.trim()) p.set('city_municipality', cityFilter.trim());
+    return p;
+  }, [dateFrom, dateTo, actionFilter, cityFilter]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const p = buildParams();
     p.set('limit', String(PAGE_SIZE));
     p.set('offset', String(page * PAGE_SIZE));
     try {
@@ -74,7 +79,12 @@ export default function EncoderAuditPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, actionFilter, cityFilter, page]);
+  }, [buildParams, page]);
+
+  const handleExport = () => {
+    const p = buildParams();
+    window.open(`/api/regional/audit-log/export?${p.toString()}`, '_blank');
+  };
 
   useEffect(() => {
     load();
@@ -141,12 +151,20 @@ export default function EncoderAuditPage() {
         </label>
       </div>
 
-      <button
-        onClick={() => { setPage(0); load(); }}
-        className="bg-gray-100 hover:bg-gray-200 border rounded px-4 py-2 text-sm mb-4"
-      >
-        ↺ Refresh
-      </button>
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => { setPage(0); load(); }}
+          className="bg-gray-100 hover:bg-gray-200 border rounded px-4 py-2 text-sm"
+        >
+          ↺ Refresh
+        </button>
+        <button
+          onClick={handleExport}
+          className="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 text-sm"
+        >
+          Export CSV
+        </button>
+      </div>
 
       {loading && (
         <div className="text-gray-400 text-sm py-12 text-center">Loading…</div>

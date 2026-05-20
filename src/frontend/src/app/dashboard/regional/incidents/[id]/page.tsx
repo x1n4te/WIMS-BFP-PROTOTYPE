@@ -338,7 +338,10 @@ export default function RegionalIncidentDetailPage() {
     const trackedUpdatedAt = detail.updated_at;
     const interval = setInterval(async () => {
       try {
-        const fresh = await fetchRegionalIncident(incidentId);
+        const fresh = await apiFetch<RegionalIncidentDetailResponse>(
+          `/regional/incidents/${incidentId}`,
+          { skipAuthRedirect: true },
+        );
         if (fresh.verification_status !== 'PENDING' || fresh.updated_at !== trackedUpdatedAt) {
           setStaleAlert(true);
           clearInterval(interval);
@@ -436,7 +439,7 @@ export default function RegionalIncidentDetailPage() {
     if (isEmpty(ns.city_municipality)) missing.push('City / Municipality');
     if (!ns.alarm_level) missing.push('Highest Alarm Level');
     if (!ns.general_category) missing.push('Classification of Involved');
-    if (ns.general_category && !detail.incident_type_code) missing.push('Type of Involved');
+    if (ns.general_category && !(ns.type_of_involved_general_category || (ns as Record<string, unknown>).sub_category)) missing.push('Type of Involved');
     if (!ns.extent_of_damage) missing.push('Extent of Damage');
     if (!detail.latitude || !detail.longitude) missing.push('Location Coordinates (set via map pin)');
     if (isEmpty(sen.prepared_by_officer) && isEmpty(sen.disposition_prepared_by)) missing.push('Prepared by (Officer)');
