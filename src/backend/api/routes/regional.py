@@ -5458,25 +5458,29 @@ def export_encoder_audit_log(
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([
-        "History ID",
-        "Incident ID",
-        "Action",
-        "Previous Status",
-        "New Status",
-        "City / Municipality",
-        "Timestamp (PHT)",
-    ])
+    writer.writerow(
+        [
+            "History ID",
+            "Incident ID",
+            "Action",
+            "Previous Status",
+            "New Status",
+            "City / Municipality",
+            "Timestamp (PHT)",
+        ]
+    )
     for r in rows:
-        writer.writerow([
-            r[0],
-            r[1],
-            _ACTION_LABEL_MAP.get(r[2] or "", r[2] or ""),
-            r[3] or "",
-            r[4] or "",
-            r[6] or "",
-            _fmt_pht(r[5]),
-        ])
+        writer.writerow(
+            [
+                r[0],
+                r[1],
+                _ACTION_LABEL_MAP.get(r[2] or "", r[2] or ""),
+                r[3] or "",
+                r[4] or "",
+                r[6] or "",
+                _fmt_pht(r[5]),
+            ]
+        )
 
     export_date = datetime.now(tz=_PHT).strftime("%Y%m%d")
     return Response(
@@ -5653,33 +5657,37 @@ def export_validator_audit_logs(
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([
-        "History ID",
-        "Incident ID",
-        "Region ID",
-        "Region",
-        "Actor (User ID)",
-        "Actor (Username)",
-        "Previous Status",
-        "New Status",
-        "Action",
-        "Notes",
-        "Timestamp (PHT)",
-    ])
+    writer.writerow(
+        [
+            "History ID",
+            "Incident ID",
+            "Region ID",
+            "Region",
+            "Actor (User ID)",
+            "Actor (Username)",
+            "Previous Status",
+            "New Status",
+            "Action",
+            "Notes",
+            "Timestamp (PHT)",
+        ]
+    )
     for r in rows:
-        writer.writerow([
-            r[0],
-            r[1],
-            r[2] or "",
-            r[9] or "",
-            str(r[3]) if r[3] else "",
-            r[8] or "",
-            r[4] or "",
-            r[5] or "",
-            _ACTION_LABEL_MAP.get(r[10] or "", r[10] or ""),
-            (r[6] or "").replace("\n", " "),
-            _fmt_pht(r[7]),
-        ])
+        writer.writerow(
+            [
+                r[0],
+                r[1],
+                r[2] or "",
+                r[9] or "",
+                str(r[3]) if r[3] else "",
+                r[8] or "",
+                r[4] or "",
+                r[5] or "",
+                _ACTION_LABEL_MAP.get(r[10] or "", r[10] or ""),
+                (r[6] or "").replace("\n", " "),
+                _fmt_pht(r[7]),
+            ]
+        )
 
     export_date = datetime.now(tz=_PHT).strftime("%Y%m%d")
     return Response(
