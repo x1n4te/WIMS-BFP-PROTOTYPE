@@ -67,6 +67,62 @@ docker compose up --build -d
 
 To stop the stack: `docker compose down` (add `-v` only if you intend to drop named volumes such as Postgres data).
 
+## Run with OSRM routing (local, Docker Desktop)
+
+An opt-in overlay, [`src/docker-compose.local-osrm.yml`](src/docker-compose.local-osrm.yml), runs the OSRM road-routing integration end to end on the reduced local stack: a civilian report is submitted, the Celery worker runs `tasks.routing.compute_routing`, OSRM returns a route, and the route is stored on the report. Everything runs from PowerShell with Docker Desktop; no host bash scripts are involved. Production, CI and the default local stack are not affected.
+
+Stop the full stack first (`docker compose -p src down`; do not add `-v`). The reduced stack uses the same container names and ports.
+
+**Start** (from the repository root):
+
+```powershell
+docker compose --project-name wims-local --env-file .env.example `
+  --project-directory src `
+  -f src/docker-compose.yml -f src/docker-compose.local-demo.yml `
+  -f src/docker-compose.local-osrm.yml `
+  up --build -d --wait postgres redis keycloak keycloak-bootstrap backend frontend nginx-gateway osrm-fetch osrm-prepare osrm celery-worker
+```
+
+Name the services explicitly, as above. A bare `up` would also start base-file services that do not fit the local network.
+
+**First run:** the image builds take a few minutes. The OSRM part took about 40 seconds in testing: `osrm-fetch` downloads the ~59 MB Metro Manila extract pinned in `src/osrm/metro-manila.env` and verifies its SHA-256 (exit code 1 on mismatch), and `osrm-prepare` runs `osrm-extract`, `osrm-partition` and `osrm-customize` into the `osrm_data` volume. **Later starts** skip both steps (about 2 seconds).
+
+**Offline:** put the matching `metro_manila.osm.pbf` in `src/osrm/input/` (git-ignored). `osrm-fetch` then copies it instead of downloading, and still verifies the pinned SHA-256.
+
+**Verify OSRM** (it is published on loopback only for local checks and load testing; production does not publish it):
+
+```powershell
+docker compose --project-name wims-local ps -a
+curl.exe "http://127.0.0.1:5000/route/v1/driving/120.9810,14.5896;121.0497,14.6507?overview=false"
+```
+
+`osrm-fetch` and `osrm-prepare` should show `Exited (0)`, `osrm` should be healthy and `celery-worker` running. The route response should contain `"code":"Ok"`.
+
+**Submit an anonymous report in Metro Manila.** The Turnstile test keys in `.env.example` always pass:
+
+```powershell
+$body = @{ latitude = 14.6507; longitude = 121.0497; category = 'STRUCTURAL'; reporting_context = 'WITNESS'; reporter_name = 'Local Test'; reporter_phone = '09170000000'; turnstile_token = 'XXXX.DUMMY.TOKEN.XXXX' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1/api/civilian/reports -ContentType 'application/json' -Body $body -Headers @{ Origin = 'http://localhost' }
+```
+
+The reporter name and phone are required. Locations outside Metro Manila get no OSRM route and use the straight-line estimate instead.
+
+**Check the stored route:**
+
+```powershell
+docker exec wims-postgres psql -U postgres -d wims -c "SELECT report_id, contributor_user_id, routing_data_source, routing_distance_m, routing_updated_at, ST_NPoints(routing_geometry) AS pts FROM wims.citizen_reports ORDER BY report_id DESC LIMIT 3;"
+```
+
+A routed report has `routing_data_source = 'osrm'` and `pts > 1`. The worker log shows the task: `docker logs wims-celery-worker`.
+
+**Rate limit.** Anonymous reports are limited to 3 per hour per IP, and every local request comes from the same address. **Local only:** to submit more test reports, backdate the existing test rows by two hours. This changes data in your local database; never run it anywhere else.
+
+```powershell
+docker exec wims-postgres psql -U postgres -d wims -c "UPDATE wims.citizen_reports SET created_at = created_at - interval '2 hours' WHERE created_at > now() - interval '1 hour';"
+```
+
+**Stop:** `docker compose --project-name wims-local down` (add `-v` only to delete the local database and the OSRM dataset).
+
 ## Environment Variables
 
 All service configuration is managed through `src/docker-compose.yml` environment blocks. Key variables:
