@@ -15,10 +15,14 @@ import logging
 from sqlalchemy import text
 
 from celery_config import celery_app
-from database import _AdminSessionLocal
+from database import _AdminSessionLocal, SYSTEM_TASK_USER_ID, set_rls_context
 from services.routing import compute_routing, MAX_CANDIDATES
 
 logger = logging.getLogger("wims.tasks.routing")
+
+
+class RoutingUpdateError(RuntimeError):
+    """The routing UPDATE matched no row, so nothing was persisted."""
 
 
 @celery_app.task(
@@ -35,6 +39,13 @@ def compute_routing_task(report_id: int) -> dict:
     """
     db = _AdminSessionLocal()
     try:
+        # RLS context for the SYSTEM_ADMIN service account. This worker connects
+        # as the non-superuser wims_app_user, and wims.citizen_reports has FORCE
+        # ROW LEVEL SECURITY: without a context the role resolves to ANONYMOUS,
+        # which cannot read rows that have a contributor_user_id and cannot UPDATE
+        # any row (the UPDATE then silently matches zero rows).
+        set_rls_context(db, SYSTEM_TASK_USER_ID)
+
         # Fetch report location
         row = db.execute(
             text("""
@@ -190,7 +201,15 @@ def compute_routing_task(report_id: int) -> dict:
             WHERE report_id = :rid
         """
 
-        db.execute(text(sql), params)
+        update_result = db.execute(text(sql), params)
+        # Under RLS a blocked UPDATE does not raise; it just matches zero rows.
+        if update_result.rowcount == 0:
+            logger.error(
+                "Routing UPDATE matched no row for report_id=%s; routing was NOT persisted "
+                "(row missing or blocked by row-level security)",
+                report_id,
+            )
+            raise RoutingUpdateError(f"routing UPDATE matched no row for report_id={report_id}")
         db.commit()
 
         logger.info(
@@ -213,6 +232,6 @@ def compute_routing_task(report_id: int) -> dict:
     except Exception as exc:
         logger.error("Routing task failed for report_id=%s: %s", report_id, exc)
         db.rollback()
-        raise  # triggers celery retry
+        raise  # task ends as FAILURE (no autoretry_for is configured)
     finally:
         db.close()

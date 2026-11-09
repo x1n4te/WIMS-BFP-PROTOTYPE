@@ -366,10 +366,14 @@ class TestRoutingGeometryPersistence:
 
         # Execute 3: UPDATE
         update_result = MagicMock()
+        update_result.rowcount = 1
 
         db.execute.side_effect = [loc_result, stations_result, update_result]
 
-        with unit_patch("tasks.routing._AdminSessionLocal", return_value=db):
+        with (
+            unit_patch("tasks.routing._AdminSessionLocal", return_value=db),
+            unit_patch("tasks.routing.set_rls_context"),
+        ):
             from tasks.routing import compute_routing_task
 
             result = compute_routing_task(report_id=1)
@@ -427,10 +431,14 @@ class TestRoutingGeometryPersistence:
         stations_result.fetchall.return_value = [station_row]
 
         update_result = MagicMock()
+        update_result.rowcount = 1
 
         db.execute.side_effect = [loc_result, stations_result, update_result]
 
-        with unit_patch("tasks.routing._AdminSessionLocal", return_value=db):
+        with (
+            unit_patch("tasks.routing._AdminSessionLocal", return_value=db),
+            unit_patch("tasks.routing.set_rls_context"),
+        ):
             from tasks.routing import compute_routing_task
 
             result = compute_routing_task(report_id=2)
@@ -451,3 +459,102 @@ class TestRoutingGeometryPersistence:
         assert "geometry_json" in sql_text
 
         db.commit.assert_called_once()
+
+
+class TestRoutingTaskRlsContext:
+    """The routing task must run as the SYSTEM_ADMIN service account under RLS.
+
+    The worker connects as wims_app_user and wims.citizen_reports has FORCE ROW
+    LEVEL SECURITY; without wims.current_user_id the role is ANONYMOUS, which
+    cannot UPDATE and silently matches zero rows.
+    """
+
+    @staticmethod
+    def _build_db(update_rowcount):
+        from unittest.mock import MagicMock
+
+        loc_row = MagicMock()
+        loc_row.lat = 14.6
+        loc_row.lon = 121.0
+        loc_result = MagicMock()
+        loc_result.fetchone.return_value = loc_row
+
+        station_row = MagicMock()
+        station_row.station_id = 1
+        station_row.lat = 14.61
+        station_row.lon = 121.01
+        station_row.distance_m = 100.0
+        stations_result = MagicMock()
+        stations_result.fetchall.return_value = [station_row]
+
+        update_result = MagicMock()
+        update_result.rowcount = update_rowcount
+
+        db = MagicMock()
+        db.execute.side_effect = [loc_result, stations_result, update_result]
+        return db
+
+    @staticmethod
+    def _fake_routing(monkeypatch):
+        from services.routing import RoutingResult
+
+        async def mock_compute_routing(**kwargs):
+            return RoutingResult(
+                distance_m=1200.0,
+                duration_s=180.0,
+                data_source="osrm",
+                execution_path="celery",
+                candidate_count=1,
+                geometry=None,
+            )
+
+        monkeypatch.setattr("tasks.routing.compute_routing", mock_compute_routing)
+
+    def test_task_sets_rls_context_before_any_query(self, monkeypatch):
+        from unittest.mock import MagicMock, call, patch as unit_patch
+
+        from database import SYSTEM_TASK_USER_ID
+
+        self._fake_routing(monkeypatch)
+        db = self._build_db(update_rowcount=1)
+        calls = MagicMock()
+        calls.attach_mock(db.execute, "execute")
+
+        with (
+            unit_patch("tasks.routing._AdminSessionLocal", return_value=db),
+            unit_patch("tasks.routing.set_rls_context") as set_ctx,
+        ):
+            calls.attach_mock(set_ctx, "set_rls_context")
+            from tasks.routing import compute_routing_task
+
+            result = compute_routing_task(report_id=7)
+
+        assert result["status"] == "success"
+        set_ctx.assert_called_once_with(db, SYSTEM_TASK_USER_ID)
+        # The context is set before the first SELECT (and so before the UPDATE).
+        assert calls.mock_calls[0] == call.set_rls_context(db, SYSTEM_TASK_USER_ID)
+        assert calls.mock_calls[1][0] == "execute"
+
+    def test_zero_row_update_is_reported_as_failure(self, monkeypatch, caplog):
+        import logging
+        from unittest.mock import patch as unit_patch
+
+        import pytest
+
+        self._fake_routing(monkeypatch)
+        db = self._build_db(update_rowcount=0)
+
+        with (
+            unit_patch("tasks.routing._AdminSessionLocal", return_value=db),
+            unit_patch("tasks.routing.set_rls_context"),
+            caplog.at_level(logging.ERROR, logger="wims.tasks.routing"),
+        ):
+            from tasks.routing import RoutingUpdateError, compute_routing_task
+
+            with pytest.raises(RoutingUpdateError):
+                compute_routing_task(report_id=9)
+
+        db.commit.assert_not_called()
+        db.rollback.assert_called_once()
+        assert any("NOT persisted" in r.getMessage() for r in caplog.records)
+        assert not any("Routing computed" in r.getMessage() for r in caplog.records)
