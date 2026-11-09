@@ -87,3 +87,6 @@ system-wiki/.obsidian/
 # Browser QA artifacts (screenshots, traces, logs; auto-pruned by the
 # wims-browser extension, but never committed)
 .pi/browser/
+
+# Local OSRM offline drop-in (src/docker-compose.local-osrm.yml); never commit the .pbf
+src/osrm/input/
