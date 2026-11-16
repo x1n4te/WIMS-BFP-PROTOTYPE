@@ -208,9 +208,11 @@ for entry in "${USERS[@]}"; do
       -s enabled=true -s email="$email" -s emailVerified=true -s firstName="$first_name" -s lastName="$last_name" -s 'requiredActions=[]'
   fi
 
-  # Set password
+  # Set password. The realm enforces passwordHistory(3): re-running the seed
+  # with the same password is rejected for an existing user, which is harmless.
   docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh set-password -r "$KC_REALM" \
-    --username "$username" --new-password "$user_password"
+    --username "$username" --new-password "$user_password" \
+    || echo "  (password unchanged: rejected by realm password policy, likely history)"
 
   # Assign role
   docker_exec "$KEYCLOAK_CONTAINER" /opt/keycloak/bin/kcadm.sh add-roles -r "$KC_REALM" \

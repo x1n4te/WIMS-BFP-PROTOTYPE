@@ -125,7 +125,8 @@ foreach ($u in $users) {
         docker exec $keycloakContainer /opt/keycloak/bin/kcadm.sh update "users/$uuid" -r $kcRealm -s "enabled=true" -s "email=$email" -s "emailVerified=true" -s "firstName=$firstName" -s "lastName=$lastName" -s "requiredActions=[]" | Out-Null
     }
 
-    docker exec $keycloakContainer /opt/keycloak/bin/kcadm.sh set-password -r $kcRealm --username $username --new-password $userPassword | Out-Null
+    # passwordHistory(3) rejects re-seeding an existing user with the same password; harmless.
+    docker exec $keycloakContainer /opt/keycloak/bin/kcadm.sh set-password -r $kcRealm --username $username --new-password $userPassword 2>$null | Out-Null
 
     try {
         docker exec $keycloakContainer /opt/keycloak/bin/kcadm.sh add-roles -r $kcRealm --uusername $username --rolename $role 2>$null | Out-Null

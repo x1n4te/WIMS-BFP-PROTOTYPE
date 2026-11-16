@@ -452,7 +452,7 @@ class TestForgotPasswordConfiguration:
         )
 
     def test_realm_registers_wims_audit_event_listener(self):
-        """Both bfp-realm.json files must register 'wims-audit-event-listener' (WS-B / RP-08).
+        """The imported bfp-realm.json must register 'wims-audit-event-listener' (WS-B / RP-08).
 
         Source-inspection test — does not require Keycloak to be running.
         """

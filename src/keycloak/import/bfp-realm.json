@@ -24,7 +24,7 @@
   "accessCodeLifespanUserAction": 300,
   "accessCodeLifespanLogin": 1800,
   "actionTokenGeneratedByAdminLifespan": 43200,
-  "actionTokenGeneratedByUserLifespan": 300,
+  "actionTokenGeneratedByUserLifespan": 900,
   "oauth2DeviceCodeLifespan": 600,
   "oauth2DevicePollingInterval": 5,
   "enabled": true,
@@ -111,13 +111,6 @@
       {
         "name": "NATIONAL_ANALYST",
         "description": "NATIONAL_ANALYST role for WIMS-BFP",
-        "composite": false,
-        "clientRole": false,
-        "containerId": "0d7644e4-1107-4da2-83f4-ca7ac87ce39b"
-      },
-      {
-        "name": "SKIP_MFA",
-        "description": "Exempts user from TOTP/OTP multi-factor authentication requirements",
         "composite": false,
         "clientRole": false,
         "containerId": "0d7644e4-1107-4da2-83f4-ca7ac87ce39b"
@@ -1987,6 +1980,32 @@
       ]
     },
     {
+      "id": "336f6c0a-ea4e-49c0-a118-cd51023bffd4",
+      "alias": "Direct Grant - Conditional OTP",
+      "description": "Flow to determine if the OTP is required for the direct grant (password verification)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": true,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-configured",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "direct-grant-validate-otp",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
       "id": "dcd7c765-be83-4be4-a9be-857e6985f729",
       "alias": "direct grant",
       "description": "OpenID Connect Resource Owner Grant",
@@ -2009,11 +2028,12 @@
           "autheticatorFlow": false
         },
         {
-          "authenticator": "direct-grant-validate-otp",
-          "requirement": "REQUIRED",
-          "priority": 2,
-          "userSetupAllowed": false,
-          "autheticatorFlow": false
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "autheticatorFlow": true,
+          "flowAlias": "Direct Grant - Conditional OTP",
+          "userSetupAllowed": false
         }
       ]
     },
@@ -2063,6 +2083,60 @@
       ]
     },
     {
+      "id": "df63718d-c49e-43ef-805e-5afe55c4225f",
+      "alias": "Browser - Admin OTP",
+      "description": "OTP required for SYSTEM_ADMIN",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticatorConfig": "otp-role-system-administrator",
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "id": "1dbd20b2-fd52-4f32-96fc-cf7fb3cb9b65",
+      "alias": "Browser - Validator OTP",
+      "description": "OTP required for NATIONAL_VALIDATOR",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticatorConfig": "otp-role-national-validator",
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
       "id": "3b44b0b4-81fd-483a-87f7-b591004cb06e",
       "alias": "forms",
       "description": "Username, password, otp and other auth forms.",
@@ -2072,17 +2146,27 @@
       "authenticationExecutions": [
         {
           "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
           "requirement": "REQUIRED",
-          "priority": 0,
-          "userSetupAllowed": false,
-          "autheticatorFlow": false
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
         },
         {
-          "authenticator": "wims-demo-otp-form",
-          "requirement": "REQUIRED",
-          "priority": 1,
-          "userSetupAllowed": false,
-          "autheticatorFlow": false
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "flowAlias": "Browser - Admin OTP",
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "autheticatorFlow": true,
+          "flowAlias": "Browser - Validator OTP",
+          "userSetupAllowed": false
         }
       ]
     },
@@ -2238,36 +2322,6 @@
         "condUserRole": "NATIONAL_VALIDATOR",
         "negate": "false"
       }
-    },
-    {
-      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "alias": "otp-role-regional-encoder",
-      "config": {
-        "condUserRole": "REGIONAL_ENCODER",
-        "negate": "false"
-      }
-    },
-    {
-      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-      "alias": "otp-role-national-analyst",
-      "config": {
-        "condUserRole": "NATIONAL_ANALYST",
-        "negate": "false"
-      }
-    },
-    {
-      "id": "21adfd6d-8f24-4820-b11d-34828c17fac2",
-      "alias": "otp-trusted-device",
-      "config": {
-        "otpRememberDeviceFor": "7d"
-      }
-    },
-    {
-      "alias": "otp-skip-mfa",
-      "config": {
-        "condUserRole": "SKIP_MFA",
-        "negate": "false"
-      }
     }
   ],
   "requiredActions": [
@@ -2276,7 +2330,7 @@
       "name": "Configure OTP",
       "providerId": "CONFIGURE_TOTP",
       "enabled": true,
-      "defaultAction": true,
+      "defaultAction": false,
       "priority": 10,
       "config": {}
     },
@@ -2388,774 +2442,8 @@
   "clientPolicies": {
     "policies": []
   },
-  "users": [
-    {
-      "id": "11111111-1111-4111-8111-111111111111",
-      "username": "encoder_ncr",
-      "email": "encoder_ncr@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "ncr"
-    },
-    {
-      "id": "ee000002-0000-4002-8002-000000000002",
-      "username": "encoder_car",
-      "email": "encoder_car@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "car"
-    },
-    {
-      "id": "ee000003-0000-4003-8003-000000000003",
-      "username": "encoder_r01",
-      "email": "encoder_r01@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r01"
-    },
-    {
-      "id": "ee000004-0000-4004-8004-000000000004",
-      "username": "encoder_r02",
-      "email": "encoder_r02@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r02"
-    },
-    {
-      "id": "ee000005-0000-4005-8005-000000000005",
-      "username": "encoder_r03",
-      "email": "encoder_r03@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r03"
-    },
-    {
-      "id": "ee000006-0000-4006-8006-000000000006",
-      "username": "encoder_r04a",
-      "email": "encoder_r04a@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r04a"
-    },
-    {
-      "id": "ee000007-0000-4007-8007-000000000007",
-      "username": "encoder_r04b",
-      "email": "encoder_r04b@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r04b"
-    },
-    {
-      "id": "ee000008-0000-4008-8008-000000000008",
-      "username": "encoder_r05",
-      "email": "encoder_r05@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r05"
-    },
-    {
-      "id": "ee000009-0000-4009-8009-000000000009",
-      "username": "encoder_r06",
-      "email": "encoder_r06@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r06"
-    },
-    {
-      "id": "ee000010-0000-4010-8010-000000000010",
-      "username": "encoder_r07",
-      "email": "encoder_r07@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r07"
-    },
-    {
-      "id": "ee000011-0000-4011-8011-000000000011",
-      "username": "encoder_r08",
-      "email": "encoder_r08@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r08"
-    },
-    {
-      "id": "ee000012-0000-4012-8012-000000000012",
-      "username": "encoder_r09",
-      "email": "encoder_r09@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r09"
-    },
-    {
-      "id": "ee000013-0000-4013-8013-000000000013",
-      "username": "encoder_r10",
-      "email": "encoder_r10@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r10"
-    },
-    {
-      "id": "ee000014-0000-4014-8014-000000000014",
-      "username": "encoder_r11",
-      "email": "encoder_r11@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r11"
-    },
-    {
-      "id": "ee000015-0000-4015-8015-000000000015",
-      "username": "encoder_r12",
-      "email": "encoder_r12@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r12"
-    },
-    {
-      "id": "ee000016-0000-4016-8016-000000000016",
-      "username": "encoder_r13",
-      "email": "encoder_r13@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "r13"
-    },
-    {
-      "id": "ee000017-0000-4017-8017-000000000017",
-      "username": "encoder_barmm",
-      "email": "encoder_barmm@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "barmm"
-    },
-    {
-      "id": "ee000018-0000-4018-8018-000000000018",
-      "username": "encoder_nir",
-      "email": "encoder_nir@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "encoder",
-      "lastName": "nir"
-    },
-    {
-      "id": "22222222-2222-4222-8222-222222222222",
-      "username": "validator_test",
-      "email": "validator@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_VALIDATOR",
-        "SKIP_MFA"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "validator",
-      "lastName": "test"
-    },
-    {
-      "id": "33333333-3333-4333-8333-333333333333",
-      "username": "analyst_test",
-      "email": "analyst@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_ANALYST"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "analyst",
-      "lastName": "test"
-    },
-    {
-      "id": "44444444-4444-4444-8444-444444444444",
-      "username": "analyst1_test",
-      "email": "analyst1_test@gmail.com",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_ANALYST"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "analyst1",
-      "lastName": "test"
-    },
-    {
-      "id": "55555555-5555-4555-8555-555555555555",
-      "username": "admin_test",
-      "email": "admin@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "SYSTEM_ADMIN"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Password123!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "admin",
-      "lastName": "test"
-    },
-    {
-      "id": "aa000001-0000-4001-8001-aab000000001",
-      "username": "n-val",
-      "email": "n-val@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_VALIDATOR",
-        "SKIP_MFA"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "n",
-      "lastName": "val"
-    },
-    {
-      "id": "aa000002-0000-4002-8002-aab000000002",
-      "username": "n-enc",
-      "email": "n-enc@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "n",
-      "lastName": "enc"
-    },
-    {
-      "id": "aa000003-0000-4003-8003-aab000000003",
-      "username": "n-ana",
-      "email": "n-ana@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_ANALYST"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "n",
-      "lastName": "ana"
-    },
-    {
-      "id": "aa000004-0000-4004-8004-aab000000004",
-      "username": "n-sys",
-      "email": "n-sys@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "SYSTEM_ADMIN"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "n",
-      "lastName": "sys"
-    },
-    {
-      "id": "bb000001-0000-4001-8001-bbb000000001",
-      "username": "g-val",
-      "email": "g-val@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_VALIDATOR",
-        "SKIP_MFA"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "g",
-      "lastName": "val"
-    },
-    {
-      "id": "bb000002-0000-4002-8002-bbb000000002",
-      "username": "g-enc",
-      "email": "g-enc@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "g",
-      "lastName": "enc"
-    },
-    {
-      "id": "bb000003-0000-4003-8003-bbb000000003",
-      "username": "g-ana",
-      "email": "g-ana@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_ANALYST"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "g",
-      "lastName": "ana"
-    },
-    {
-      "id": "bb000004-0000-4004-8004-bbb000000004",
-      "username": "g-sys",
-      "email": "g-sys@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "SYSTEM_ADMIN"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "g",
-      "lastName": "sys"
-    },
-    {
-      "id": "cc000001-0000-4001-8001-ccb000000001",
-      "username": "e-val",
-      "email": "e-val@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_VALIDATOR",
-        "SKIP_MFA"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "e",
-      "lastName": "val"
-    },
-    {
-      "id": "cc000002-0000-4002-8002-ccb000000002",
-      "username": "e-enc",
-      "email": "e-enc@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "e",
-      "lastName": "enc"
-    },
-    {
-      "id": "cc000003-0000-4003-8003-ccb000000003",
-      "username": "e-ana",
-      "email": "e-ana@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_ANALYST"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "e",
-      "lastName": "ana"
-    },
-    {
-      "id": "cc000004-0000-4004-8004-ccb000000004",
-      "username": "e-sys",
-      "email": "e-sys@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "SYSTEM_ADMIN"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "e",
-      "lastName": "sys"
-    },
-    {
-      "id": "dd000001-0000-4001-8001-ddb000000001",
-      "username": "r-val",
-      "email": "r-val@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_VALIDATOR",
-        "SKIP_MFA"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "r",
-      "lastName": "val"
-    },
-    {
-      "id": "dd000002-0000-4002-8002-ddb000000002",
-      "username": "r-enc",
-      "email": "r-enc@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "REGIONAL_ENCODER"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "r",
-      "lastName": "enc"
-    },
-    {
-      "id": "dd000003-0000-4003-8003-ddb000000003",
-      "username": "r-ana",
-      "email": "r-ana@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "NATIONAL_ANALYST"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "r",
-      "lastName": "ana"
-    },
-    {
-      "id": "dd000004-0000-4004-8004-ddb000000004",
-      "username": "r-sys",
-      "email": "r-sys@bfp.gov.ph",
-      "enabled": true,
-      "realmRoles": [
-        "SYSTEM_ADMIN"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "WimsBFP2026!",
-          "temporary": false
-        }
-      ],
-      "emailVerified": true,
-      "requiredActions": [],
-      "firstName": "r",
-      "lastName": "sys"
-    }
-  ],
+  "users": [],
   "loginTheme": "wims-bfp",
-  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and passwordHistory(3)",
   "browserFlow": "browser"
 }

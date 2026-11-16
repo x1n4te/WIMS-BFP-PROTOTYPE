@@ -90,7 +90,7 @@ Two parallel intake paths feed official AFOR incidents:
 
 ### Keycloak Configuration
 
-Keycloak uses `--import-realm` with `IGNORE_EXISTING` strategy. Once the realm exists, the JSON is NOT re-imported. Users are created in Keycloak but NOT synced to PostgreSQL — run `scripts/seed-dev-users.sh` after first boot.
+Keycloak uses `--import-realm` with `IGNORE_EXISTING` strategy. Once the realm exists, the JSON is NOT re-imported. The only realm file is `src/keycloak/import/bfp-realm.json` (the former root `src/keycloak/bfp-realm.json` was removed). The realm ships with **no users**: create the first SYSTEM_ADMIN with `scripts/bootstrap-admin.sh` (env `BOOTSTRAP_ADMIN_USERNAME`/`_EMAIL`/`_PASSWORD`; forces password change + OTP enrolment on first login), then create everyone else through the admin UI. For local development only, `scripts/seed-dev-users.sh` creates the dev accounts. OTP is required for `SYSTEM_ADMIN` and `NATIONAL_VALIDATOR` only (built-in OTP form, conditional on realm role).
 
 Two issuer URLs exist: backend fetches JWKS from `keycloak:8080` (Docker internal) but validates tokens against `localhost` (browser-visible, set via `KC_HOSTNAME=localhost`).
 

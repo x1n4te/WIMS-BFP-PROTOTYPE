@@ -67,25 +67,12 @@ def test_postgres_bootstrap_assigns_canonical_encoder_regions() -> None:
         assert f"('{username}', {region_id})" in regions_sql
 
 
-def test_keycloak_realm_exports_have_login_ready_dev_encoders() -> None:
-    for path in [
-        REPO_ROOT / "src" / "keycloak" / "bfp-realm.json",
-        REPO_ROOT / "src" / "keycloak" / "import" / "bfp-realm.json",
-    ]:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        users = {user["username"]: user for user in data["users"]}
-
-        for username, (_, keycloak_id) in EXPECTED_ENCODERS.items():
-            user = users[username]
-            assert user["id"] == keycloak_id
-            assert user["enabled"] is True
-            assert user["emailVerified"] is True
-            assert user["firstName"]
-            assert user["lastName"]
-            assert user["requiredActions"] == []
-            assert user["realmRoles"] == ["REGIONAL_ENCODER"]
-            assert user["credentials"][0]["value"] == "Password123!"
-            assert user["credentials"][0]["temporary"] is False
+def test_turnover_realm_has_no_seed_users_and_dev_script_owns_them() -> None:
+    """The turnover realm ships without users; dev encoders come from seed-dev-users.sh."""
+    data = json.loads(
+        (REPO_ROOT / "src" / "keycloak" / "import" / "bfp-realm.json").read_text(encoding="utf-8")
+    )
+    assert data["users"] == []
 
 
 def test_system_task_user_id_consistent_across_artifacts() -> None:

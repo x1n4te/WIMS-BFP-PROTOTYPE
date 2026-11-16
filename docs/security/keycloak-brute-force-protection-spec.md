@@ -27,7 +27,7 @@ Three independent layers, implemented together:
 |---|---|---|
 | **A. Suricata rules** | `src/suricata/rules/custom.rules` | Detection (alert) |
 | **B. Nginx rate limiting** | `src/nginx/nginx.conf` | Prevention (throttle) |
-| **C. Keycloak realm hardening** | `src/keycloak/bfp-realm.json`, `src/keycloak/import/bfp-realm.json` | Prevention (reactive) |
+| **C. Keycloak realm hardening** | `src/keycloak/import/bfp-realm.json` | Prevention (reactive) |
 
 ---
 
@@ -121,7 +121,7 @@ Same `limit_req` / `limit_conn` directives added before `proxy_pass`.
 
 ### 5.1 Current State
 
-Already enabled in `bfp-realm.json` (both `src/keycloak/bfp-realm.json` and `src/keycloak/import/bfp-realm.json`):
+Already enabled in `src/keycloak/import/bfp-realm.json` (the only realm file; the former root `bfp-realm.json` was removed):
 
 ```json
 "bruteForceProtected": true,
