@@ -6,11 +6,11 @@ import logging
 import os
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from auth import get_regional_encoder
+from auth import get_encoder_or_admin
 from auth import get_db_with_rls
 from services.afor_import import (
     AforCommitRequest,
@@ -22,7 +22,9 @@ from services.afor_import import (
 from services.afor_import.commit import (
     AforCommitDependencies,
     commit_afor_import_command,
+    resolve_import_region,
 )
+from services.afor_import.models import AforRegionDetectResponse
 from services.regional_incidents.helpers import (
     insert_incident_verification_history as _insert_incident_verification_history,
     region_text_matches as _region_text_matches,
@@ -46,20 +48,8 @@ def _get_security_provider():
     return get_crypto_provider()
 
 
-@router.post("/afor/import", response_model=AforParseResponse)
-async def import_afor_file(
-    file: UploadFile = File(...),
-    user: dict = Depends(get_regional_encoder),
-    db: Session = Depends(get_db_with_rls),
-    request: Request = None,
-):
-    """
-    Upload and parse an AFOR file (.xlsx or .csv).
-    Returns parsed rows with validation status for preview before commit.
-    """
-    region_id = user["assigned_region_id"]
-
-    # ── Deep checks (#391): filename, extension, size cap, magic bytes, bomb defense
+async def _read_validated_upload(file: UploadFile) -> tuple[bytes, str]:
+    """Deep upload checks (#391): filename, extension, size cap, magic bytes, bomb defense."""
     safe_name = sanitize_filename(file.filename)
     ext = validate_extension(safe_name, ["xlsx", "csv"])
 
@@ -76,19 +66,79 @@ async def import_afor_file(
     # Decompression bomb defense (XLSX only — CSVs are plain text).
     if ext == "xlsx":
         check_xlsx_decompression_bomb(content)
+    return content, ext
 
+
+def _parse_rows(content: bytes, ext: str, region_id: int):
     try:
         if ext == "csv":
             decoded = content.decode("utf-8-sig")  # Handle BOM
-            rows, form_kind = parse_csv_content(decoded, region_id)
-        else:
-            rows, form_kind = parse_xlsx_content(content, region_id)
+            return parse_csv_content(decoded, region_id)
+        return parse_xlsx_content(content, region_id)
     except ValueError as e:
         logger.warning("AFOR type detection failed: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception:
         logger.exception("Failed to parse AFOR file")
         raise HTTPException(status_code=400, detail="Failed to parse file")
+
+
+def _file_region_text(rows, form_kind: str) -> str:
+    if form_kind != "STRUCTURAL_AFOR":
+        return ""
+    first_valid = next((r for r in rows if r.status == "VALID"), None)
+    return ((first_valid.data.get("_region_text") or "") if first_valid else "").strip()
+
+
+@router.post("/afor/detect-region", response_model=AforRegionDetectResponse)
+async def detect_afor_region(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_encoder_or_admin),
+    db: Session = Depends(get_db_with_rls),
+):
+    """SYSTEM_ADMIN helper: read the region text printed on an AFOR file and suggest a region.
+
+    Used only to pre-select the region dropdown; nothing is persisted. The admin
+    always makes the final choice.
+    """
+    if user.get("role") != "SYSTEM_ADMIN":
+        raise HTTPException(status_code=403, detail="SYSTEM_ADMIN privileges required")
+    content, ext = await _read_validated_upload(file)
+    rows, form_kind = _parse_rows(content, ext, 0)
+    region_text = _file_region_text(rows, form_kind)
+    suggested: int | None = None
+    if region_text:
+        for rid, rname in db.execute(
+            text("SELECT region_id, region_name FROM wims.ref_regions ORDER BY region_id")
+        ).fetchall():
+            if _region_text_matches(rname, region_text):
+                suggested = rid
+                break
+    return AforRegionDetectResponse(file_region_text=region_text or None, suggested_region_id=suggested)
+
+
+@router.post("/afor/import", response_model=AforParseResponse)
+async def import_afor_file(
+    file: UploadFile = File(...),
+    region_id: int | None = Form(None),
+    user: dict = Depends(get_encoder_or_admin),
+    db: Session = Depends(get_db_with_rls),
+    request: Request = None,
+):
+    """
+    Upload and parse an AFOR file (.xlsx or .csv).
+    Returns parsed rows with validation status for preview before commit.
+
+    REGIONAL_ENCODER: bound to their assigned region (``region_id`` is ignored and a
+    file/region mismatch is rejected). SYSTEM_ADMIN: ``region_id`` is required; a
+    mismatch with the file's region text is reported in the response (warn, allow)
+    and recorded in the audit log.
+    """
+    is_admin = user.get("role") == "SYSTEM_ADMIN"
+    region_id = resolve_import_region(db, user, region_id)
+
+    content, ext = await _read_validated_upload(file)
+    rows, form_kind = _parse_rows(content, ext, region_id)
 
     if form_kind == "WILDLAND_AFOR":
         raise HTTPException(
@@ -103,27 +153,27 @@ async def import_afor_file(
     if len(rows) == 0:
         raise HTTPException(status_code=400, detail="No data rows found in file")
 
-    # Region mismatch check: if the XLSX specifies a region, it must match the encoder's assigned region.
-    if form_kind == "STRUCTURAL_AFOR":
-        first_valid = next((r for r in rows if r.status == "VALID"), None)
-        xlsx_region_text = (
-            (first_valid.data.get("_region_text") or "") if first_valid else ""
-        ).strip()
-        if xlsx_region_text:
-            encoder_region_row = db.execute(
-                text("SELECT region_name FROM wims.ref_regions WHERE region_id = :rid"),
-                {"rid": region_id},
-            ).fetchone()
-            if encoder_region_row:
-                if not _region_text_matches(encoder_region_row[0], xlsx_region_text):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Region mismatch: this AFOR is for '{xlsx_region_text}', "
-                            f"but you are assigned to '{encoder_region_row[0]}'. "
-                            "You can only import AFORs within your assigned region."
-                        ),
-                    )
+    # Region check against the region text printed on the file.
+    xlsx_region_text = _file_region_text(rows, form_kind)
+    region_mismatch = False
+    if xlsx_region_text:
+        selected_row = db.execute(
+            text("SELECT region_name FROM wims.ref_regions WHERE region_id = :rid"),
+            {"rid": region_id},
+        ).fetchone()
+        if selected_row and not _region_text_matches(selected_row[0], xlsx_region_text):
+            if is_admin:
+                # Admin: warn in the response, allow, and audit (see below).
+                region_mismatch = True
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Region mismatch: this AFOR is for '{xlsx_region_text}', "
+                        f"but you are assigned to '{selected_row[0]}'. "
+                        "You can only import AFORs within your assigned region."
+                    ),
+                )
 
     valid_count = sum(1 for r in rows if r.status == "VALID")
 
@@ -144,6 +194,16 @@ async def import_afor_file(
                 "form_kind": form_kind,
                 "total_rows": len(rows),
                 "valid_rows": valid_count,
+                **(
+                    {
+                        "actor_role": "SYSTEM_ADMIN",
+                        "chosen_region_id": region_id,
+                        "file_region_text": xlsx_region_text or None,
+                        "region_mismatch": region_mismatch,
+                    }
+                    if is_admin
+                    else {}
+                ),
             },
         )
         db.commit()
@@ -157,13 +217,16 @@ async def import_afor_file(
         invalid_rows=len(rows) - valid_count,
         rows=rows,
         form_kind=form_kind,
+        region_id=region_id,
+        file_region_text=xlsx_region_text or None,
+        region_mismatch=region_mismatch,
     )
 
 
 @router.post("/afor/commit")
 async def commit_afor_import(
     request: Request,
-    user: Annotated[dict, Depends(get_regional_encoder)],
+    user: Annotated[dict, Depends(get_encoder_or_admin)],
     db: Annotated[Session, Depends(get_db_with_rls)],
 ):
     """Commit validated AFOR rows through the AFOR import command module."""
@@ -216,7 +279,25 @@ async def commit_afor_import(
             request=request,
             new_values={
                 "form_kind": body.form_kind,
-                "region_id": user["assigned_region_id"],
+                "region_id": (
+                    body.region_id if user.get("role") == "SYSTEM_ADMIN" else user["assigned_region_id"]
+                ),
+                **(
+                    {
+                        "actor_role": "SYSTEM_ADMIN",
+                        "chosen_region_id": body.region_id,
+                        "file_region_text": next(
+                            (
+                                str(r.get("_region_text")).strip()
+                                for r in body.rows
+                                if r.get("_region_text")
+                            ),
+                            None,
+                        ),
+                    }
+                    if user.get("role") == "SYSTEM_ADMIN"
+                    else {}
+                ),
                 "row_count": len(body.rows) if hasattr(body, "rows") else None,
                 "inserted_count": len(inserted) if isinstance(inserted, list) else 0,
                 "batch_id": result.get("batch_id"),

@@ -451,6 +451,35 @@ def _find_duplicates(
     return duplicates
 
 
+def resolve_import_region(
+    db: Session, user: dict[str, Any], requested_region_id: int | None
+) -> int:
+    """Return the region an AFOR import is bound to.
+
+    * REGIONAL_ENCODER: always their assigned region; any requested region is ignored.
+    * SYSTEM_ADMIN: has no assigned region, so ``requested_region_id`` is required
+      and must exist in ``wims.ref_regions``.
+    """
+    if user.get("role") == "SYSTEM_ADMIN":
+        if requested_region_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="region_id is required: choose the region this AFOR import belongs to",
+            )
+        exists = db.execute(
+            text("SELECT 1 FROM wims.ref_regions WHERE region_id = :rid"),
+            {"rid": requested_region_id},
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=400, detail="Unknown region_id")
+        return int(requested_region_id)
+
+    assigned = user.get("assigned_region_id")
+    if assigned is None:
+        raise HTTPException(status_code=403, detail="No assigned region for this user")
+    return int(assigned)
+
+
 def commit_afor_import_command(
     db: Session,
     user: dict[str, Any],
@@ -461,7 +490,7 @@ def commit_afor_import_command(
     """Commit validated AFOR rows to the database."""
     lon, lat = _wgs84_pair_from_raw(raw_body.get("latitude"), raw_body.get("longitude"))
 
-    region_id = user["assigned_region_id"]
+    region_id = resolve_import_region(db, user, body.region_id)
     user_id = user["user_id"]
 
     if not body.rows:

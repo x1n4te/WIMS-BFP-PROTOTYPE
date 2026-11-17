@@ -299,6 +299,20 @@ export async function resendAdminUserCredentials(
   });
 }
 
+/** Fallback when the set-password email cannot be delivered: the admin types a temporary
+ * password. Keycloak stores it as TEMPORARY (the user must change it at first login).
+ * The password is never generated, returned or logged by WIMS.
+ * - POST /admin/users/{keycloak_id}/temporary-password */
+export async function setAdminUserTemporaryPassword(
+  keycloakId: string,
+  temporaryPassword: string
+): Promise<{ status: string; must_change_at_first_login: boolean }> {
+  return apiFetch(`/admin/users/${keycloakId}/temporary-password`, {
+    method: 'POST',
+    body: JSON.stringify({ temporary_password: temporaryPassword }),
+  });
+}
+
 /** Fetch current user's profile details */
 export async function fetchMyProfile(): Promise<{
   first_name: string;
@@ -1342,6 +1356,12 @@ export interface AforImportPreviewResponse {
   form_kind: AforFormKind;
   /** When true, the file did not supply reliable coordinates; set WGS84 lat/lon before commit. */
   requires_location?: boolean;
+  /** Region the rows were parsed for (SYSTEM_ADMIN imports). */
+  region_id?: number | null;
+  /** Region text printed on the file, if any. */
+  file_region_text?: string | null;
+  /** SYSTEM_ADMIN only: the chosen region differs from the file's region (warn, allow). */
+  region_mismatch?: boolean;
   rows: Array<{
     row_index: number;
     status: string;
@@ -1350,9 +1370,29 @@ export interface AforImportPreviewResponse {
   }>;
 }
 
-export async function importAforFile(file: File): Promise<AforImportPreviewResponse> {
+export interface AforRegionDetection {
+  file_region_text: string | null;
+  suggested_region_id: number | null;
+}
+
+/** SYSTEM_ADMIN: read the region printed on an AFOR file to pre-select the region dropdown. */
+export async function detectAforRegion(file: File): Promise<AforRegionDetection> {
   const formData = new FormData();
   formData.append('file', file);
+  const res = await fetch(`${API_BASE.replace(/\/$/, '')}/regional/afor/detect-region`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  });
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return (await res.json()) as AforRegionDetection;
+}
+
+/** `regionId` is required for SYSTEM_ADMIN (no assigned region) and ignored for encoders. */
+export async function importAforFile(file: File, regionId?: number | null): Promise<AforImportPreviewResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (typeof regionId === 'number') formData.append('region_id', String(regionId));
   const url = `${API_BASE.replace(/\/$/, '')}/regional/afor/import`;
   const res = await fetch(url, {
     method: 'POST',
@@ -1410,9 +1450,14 @@ export async function commitAforImport(
     /** WGS84 decimal degrees. PostGIS stores POINT(longitude latitude); not GeoJSON [lat, lon]. */
     latitude?: number;
     longitude?: number;
+    /** Required for SYSTEM_ADMIN imports; ignored for encoders. */
+    regionId?: number | null;
   }
 ): Promise<AforCommitResult> {
   const body: Record<string, unknown> = { form_kind: formKind, rows };
+  if (typeof options?.regionId === 'number') {
+    body.region_id = options.regionId;
+  }
   if (options?.wildlandRowSource != null) {
     body.wildland_row_source = options.wildlandRowSource;
   }

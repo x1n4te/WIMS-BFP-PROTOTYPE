@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import {
   importAforFile,
+  detectAforRegion,
   commitAforImport,
   submitIncidentForReview,
   type AforImportPreviewResponse,
@@ -449,6 +450,12 @@ function AforImportPage() {
   const searchParams = useSearchParams();
   const { user } = useAuth();
   const assignedRegionId = (user as { assignedRegionId?: number | null } | null)?.assignedRegionId ?? null;
+  const isAdmin = (user as { role?: string } | null)?.role === 'SYSTEM_ADMIN';
+  // SYSTEM_ADMIN has no assigned region: the region is chosen per import.
+  const [adminRegionId, setAdminRegionId] = useState<number | null>(null);
+  const [detectedRegionText, setDetectedRegionText] = useState<string | null>(null);
+  const [regionDetectDone, setRegionDetectDone] = useState(false);
+  const homeRoute = isAdmin ? '/admin' : '/dashboard/regional';
   const { isOnline } = useNetworkStatus();
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -577,19 +584,39 @@ function AforImportPage() {
       return;
     }
     setFile(f);
+    if (isAdmin) {
+      // Pre-select the region dropdown from the region printed on the file.
+      setAdminRegionId(null);
+      setDetectedRegionText(null);
+      setRegionDetectDone(false);
+      detectAforRegion(f)
+        .then((d) => {
+          setDetectedRegionText(d.file_region_text);
+          if (d.suggested_region_id != null) setAdminRegionId(d.suggested_region_id);
+        })
+        .catch(() => {
+          /* detection is best-effort; the admin can still choose a region */
+        })
+        .finally(() => setRegionDetectDone(true));
+    }
   };
 
   const handleUpload = async () => {
     if (!file) return;
+    if (isAdmin && adminRegionId == null) {
+      setError('Choose the region this AFOR import belongs to.');
+      return;
+    }
     setIsUploading(true);
     setError(null);
     geocodeTriggered.current = false;
     try {
-      const data = await importAforFile(file);
+      const data = await importAforFile(file, isAdmin ? adminRegionId : undefined);
 
-      // If there are valid rows, redirect to the manual encoding form immediately.
-      // The encoder reviews / corrects the pre-filled data there before saving.
-      const firstValid = data.rows.find((r) => r.status === 'VALID');
+      // Encoders: with valid rows, redirect to the manual encoding form immediately so the
+      // encoder can review / correct the pre-filled data. SYSTEM_ADMIN uses the batch
+      // preview/commit path below instead (region chosen above).
+      const firstValid = isAdmin ? undefined : data.rows.find((r) => r.status === 'VALID');
       if (firstValid) {
         // Block import if AFOR region doesn't match encoder's assigned region
         const aforRegionId = (firstValid.data as Record<string, unknown>).region_id as number | undefined;
@@ -680,7 +707,17 @@ function AforImportPage() {
       return;
     }
 
+    if (isAdmin && adminRegionId == null) {
+      setError('Choose the region this AFOR import belongs to.');
+      return;
+    }
+
     // Offline check: use verified app reachability, not navigator.onLine.
+    if (isOffline && isAdmin) {
+      // Offline queueing is encoder-only (it is bound to an assigned region).
+      setError('AFOR import for administrators requires an internet connection.');
+      return;
+    }
     if (isOffline) {
       setIsCommitting(true);
       setError(null);
@@ -704,6 +741,7 @@ function AforImportPage() {
       const res = await commitAforImport(validRows, previewData.form_kind, {
         latitude: commitLat,
         longitude: commitLng,
+        regionId: isAdmin ? adminRegionId : undefined,
       });
       if (res.status === 'DUPLICATE_CHECK_REQUIRED') {
         setPendingDuplicates({
@@ -756,6 +794,7 @@ function AforImportPage() {
           latitude: pendingDuplicates.latitude,
           longitude: pendingDuplicates.longitude,
           resolutions,
+          regionId: isAdmin ? adminRegionId : undefined,
         },
       );
       if (res.status === 'ok') {
@@ -779,7 +818,7 @@ function AforImportPage() {
     setError(null);
     try {
       await Promise.all(committedIds.map((id) => submitIncidentForReview(id)));
-      router.push('/dashboard/regional');
+      router.push(homeRoute);
     } catch (err: unknown) {
       setError((err as { message?: string }).message || 'Failed to submit incidents for review.');
       setIsSubmittingAll(false);
@@ -851,7 +890,7 @@ function AforImportPage() {
           {error && <p className="text-sm text-red-700">{error}</p>}
           <div className="flex flex-wrap gap-3">
             <button
-              onClick={() => router.push('/dashboard/regional')}
+              onClick={() => router.push(homeRoute)}
               className="px-5 py-2 text-sm font-medium border border-gray-300 rounded-md bg-white hover:bg-gray-50"
             >
               Keep as Draft
@@ -915,6 +954,31 @@ function AforImportPage() {
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
               {file ? `${(file.size / 1024).toFixed(1)} KB` : 'Excel (.xlsx) files up to 10MB'}
             </p>
+            {file && isAdmin && (
+              <div className="mt-6 mx-auto max-w-sm text-left" onClick={(e) => e.stopPropagation()}>
+                <label htmlFor="afor-admin-region" className="block text-sm font-semibold mb-1">
+                  Region for this import
+                </label>
+                <select
+                  id="afor-admin-region"
+                  value={adminRegionId ?? ''}
+                  onChange={(e) => setAdminRegionId(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full border rounded-md px-3 py-2 text-sm bg-white"
+                >
+                  <option value="">Select a region…</option>
+                  {PH_REGIONS.map((r) => (
+                    <option key={r.regionId} value={r.regionId}>{r.regionName}</option>
+                  ))}
+                </select>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  {detectedRegionText
+                    ? `File region: "${detectedRegionText}" (pre-selected when recognised).`
+                    : regionDetectDone
+                      ? 'No region found in the file — choose one.'
+                      : 'Reading region from file…'}
+                </p>
+              </div>
+            )}
             {file && !isOffline && (
               <div className="mt-8 flex justify-center gap-3" onClick={(e) => e.stopPropagation()}>
                 <button onClick={reset} className="px-4 py-2 text-sm font-medium rounded-md border hover:bg-gray-50 transition-colors">
@@ -922,7 +986,7 @@ function AforImportPage() {
                 </button>
                 <button
                   onClick={handleUpload}
-                  disabled={isUploading || isOffline}
+                  disabled={isUploading || isOffline || (isAdmin && adminRegionId == null)}
                   className="px-6 py-2 text-sm font-bold text-white rounded-md flex items-center gap-2 transition-colors disabled:opacity-70"
                   style={{ backgroundColor: '#991B1B' }}
                 >
@@ -948,6 +1012,12 @@ function AforImportPage() {
               {previewData.form_kind === 'WILDLAND_AFOR' ? 'Wildland AFOR' : 'Structural AFOR'}
             </span>
           </div>
+          {isAdmin && previewData.region_mismatch && (
+            <div role="alert" className="card p-3 text-sm font-medium text-amber-800 border-amber-300 bg-amber-50">
+              Warning: the chosen region differs from the region on the file
+              ({previewData.file_region_text}). Importing is allowed and this is recorded in the audit log.
+            </div>
+          )}
 
           {/* FIX 9: Location picker with geocoding */}
           {requiresLocation && (

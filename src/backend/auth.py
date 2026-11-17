@@ -41,7 +41,9 @@ JWKS_CACHE_TTL_SECONDS = (
 # validates the token's iss claim against the browser-visible issuer.
 KEYCLOAK_ISSUER = os.environ.get("KEYCLOAK_ISSUER", KEYCLOAK_REALM_URL.rstrip("/") + "/")
 
-# WIMS roles in precedence order (highest first). Used when resolving from Keycloak JWT.
+# WIMS roles in precedence order (LOWEST privilege first). Used when resolving from
+# Keycloak JWT: the first match wins, so a multi-role token resolves to its least
+# privileged WIMS role (fail-safe against over-privileged tokens).
 WIMS_ROLES_FROM_KEYCLOAK = (
     "CIVILIAN_REPORTER",
     "REGIONAL_ENCODER",
@@ -746,6 +748,38 @@ async def get_regional_encoder(
     """
     if current_user.get("role") not in ("REGIONAL_ENCODER", "ENCODER"):
         raise HTTPException(status_code=403, detail="REGIONAL_ENCODER privileges required")
+
+    try:
+        row = db.execute(
+            text("SELECT assigned_region_id FROM wims.users WHERE user_id = :uid"),
+            {"uid": current_user["user_id"]},
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=403, detail="User not found")
+        current_user["assigned_region_id"] = row[0]
+        return current_user
+    except DataError as e:
+        logger.error(f"DB error fetching region for user {current_user['user_id']}: {e}")
+        raise HTTPException(status_code=500, detail="Authentication system error")
+
+
+async def get_encoder_or_admin(
+    current_user: Annotated[dict, Depends(get_current_wims_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """
+    Allow REGIONAL_ENCODER (and legacy ENCODER) or SYSTEM_ADMIN.
+
+    Used ONLY for AFOR import/commit and draft submission. SYSTEM_ADMIN has no
+    assigned region (``assigned_region_id`` is None), so callers must obtain the
+    region from the request. This guard grants NO approval rights: every
+    approval route keeps ``get_national_validator``.
+    """
+    if current_user.get("role") not in ("REGIONAL_ENCODER", "ENCODER", "SYSTEM_ADMIN"):
+        raise HTTPException(
+            status_code=403,
+            detail="REGIONAL_ENCODER or SYSTEM_ADMIN privileges required",
+        )
 
     try:
         row = db.execute(

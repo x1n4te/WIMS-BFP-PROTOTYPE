@@ -1,11 +1,12 @@
 """System Admin API — identity management routes."""
 
 import logging
+import uuid
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from keycloak.exceptions import KeycloakError
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from services.keycloak_admin import (
     create_keycloak_user,
     generate_temp_password,
     resend_update_account_email,
+    set_temporary_password,
     set_user_enabled,
     logout_user_sessions,
 )
@@ -226,6 +228,94 @@ def resend_credentials(
     """
     email_sent = resend_update_account_email(keycloak_id)
     return {"email_sent": email_sent}
+
+
+class TemporaryPasswordBody(BaseModel):
+    """Admin-typed temporary password. Never generated, echoed or logged by WIMS."""
+
+    temporary_password: str = Field(min_length=12, max_length=128, repr=False)
+
+
+@router.post("/users/{keycloak_id}/temporary-password")
+def set_user_temporary_password(
+    keycloak_id: str,
+    body: TemporaryPasswordBody,
+    request: Request,
+    _admin: Annotated[dict, Depends(get_system_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """
+    Fallback for when Keycloak cannot send the set-password email: the admin types a
+    temporary password and tells the user out of band.
+
+    Keycloak stores it as TEMPORARY (UPDATE_PASSWORD required action), so the user
+    must change it at first login; sessions are revoked. The password is forwarded
+    to Keycloak only: it is never generated, returned, logged or put in the audit row.
+    Keycloak's password policy (length, characters, history) is enforced.
+    """
+    try:
+        keycloak_id = str(uuid.UUID(keycloak_id))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="User not found")
+    row = db.execute(
+        text(
+            "SELECT user_id, username, role FROM wims.users "
+            "WHERE keycloak_id = CAST(:kid AS uuid)"
+        ),
+        {"kid": keycloak_id},
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    target_user_id, target_username, target_role = str(row[0]), row[1], row[2]
+
+    audit_values = {
+        "target_user_id": target_user_id,
+        "target_username": target_username,
+        "target_role": target_role,
+        "method": "admin_typed",
+        "temporary": True,
+    }
+    try:
+        set_temporary_password(keycloak_id, body.temporary_password)
+    except KeycloakError as e:
+        # Do not echo the exception text verbatim: only surface a policy hint.
+        msg = str(e).lower()
+        log_system_audit(
+            db=db,
+            user_id=_admin["user_id"],
+            action_type="SET_TEMPORARY_PASSWORD",
+            table_affected="users",
+            record_id=None,
+            request=request,
+            new_values=audit_values,
+            result="failure",
+        )
+        db.commit()
+        if "password" in msg and ("policy" in msg or "invalid" in msg or "must" in msg):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Password rejected by the password policy (at least 12 characters with "
+                    "upper, lower, digit and special character; not one of the last 3 passwords)."
+                ),
+            )
+        logger.error("Keycloak temporary password failed for user_id=%s", target_user_id)
+        raise HTTPException(
+            status_code=502, detail="Failed to set temporary password in identity provider."
+        )
+
+    log_system_audit(
+        db=db,
+        user_id=_admin["user_id"],
+        action_type="SET_TEMPORARY_PASSWORD",
+        table_affected="users",
+        record_id=None,
+        request=request,
+        new_values=audit_values,
+        sensitive=True,
+    )
+    db.commit()
+    return {"status": "temporary_password_set", "must_change_at_first_login": True}
 
 
 @router.get("/users")

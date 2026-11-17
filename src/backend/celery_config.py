@@ -27,6 +27,7 @@ celery_app = Celery(
         "tasks.device_blocklist",
         "tasks.monitoring",
         "tasks.notifications",
+        "tasks.password_expiry",
         "tasks.report_photos",
         "tasks.scheduled_backup",
         "tasks.suricata",
@@ -47,6 +48,7 @@ celery_app.conf.imports = (
     "tasks.kms_rotation",
     "tasks.monitoring",
     "tasks.notifications",
+    "tasks.password_expiry",
     "tasks.report_photos",
     "tasks.scheduled_backup",
     "tasks.scheduled_reports",
@@ -72,6 +74,7 @@ celery_app.conf.update(
         "tasks.kms_rotation",
         "tasks.monitoring",
         "tasks.notifications",
+        "tasks.password_expiry",
         "tasks.report_photos",
         "tasks.routing",
         "tasks.scheduled_backup",
@@ -131,6 +134,12 @@ celery_app.conf.update(
         "ensure-pii-key-rotation-daily": {
             "task": "tasks.kms_rotation.ensure_pii_key_rotation",
             "schedule": crontab(hour=3, minute=30),
+        },
+        # Turnover Phase 2: 90-day password expiry for SYSTEM_ADMIN / NATIONAL_VALIDATOR
+        # (adds UPDATE_PASSWORD in Keycloak; daily 03:45 UTC)
+        "enforce-password-expiry-daily": {
+            "task": "tasks.password_expiry.enforce_password_expiry",
+            "schedule": crontab(hour=3, minute=45),
         },
         # M8: Behavioral anomaly detection — every 60s
         "detect-behavioral-anomalies": {

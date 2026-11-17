@@ -65,6 +65,17 @@ describe('Sidebar — Rate Limits entry', () => {
     expect(screen.getByText('Rate Limits')).toBeInTheDocument();
   });
 
+  it('shows Import AFOR (/afor/import) for SYSTEM_ADMIN but not for validators', () => {
+    mockUseAuth.mockReturnValue({ user: { role: 'SYSTEM_ADMIN' }, loading: false, logout: vi.fn() });
+    const { unmount } = render(<Sidebar isOpen={true} onClose={vi.fn()} />);
+    expect(screen.getByText('Import AFOR').closest('a')).toHaveAttribute('href', '/afor/import');
+    unmount();
+
+    mockUseAuth.mockReturnValue({ user: { role: 'NATIONAL_VALIDATOR' }, loading: false, logout: vi.fn() });
+    render(<Sidebar isOpen={true} onClose={vi.fn()} />);
+    expect(screen.queryByText('Import AFOR')).not.toBeInTheDocument();
+  });
+
   it('Rate Limits link points to /admin/system/rate-limits', () => {
     mockUseAuth.mockReturnValue({
       user: { role: 'SYSTEM_ADMIN' },

@@ -92,6 +92,8 @@ Two parallel intake paths feed official AFOR incidents:
 
 Keycloak uses `--import-realm` with `IGNORE_EXISTING` strategy. Once the realm exists, the JSON is NOT re-imported. The only realm file is `src/keycloak/import/bfp-realm.json` (the former root `src/keycloak/bfp-realm.json` was removed). The realm ships with **no users**: create the first SYSTEM_ADMIN with `scripts/bootstrap-admin.sh` (env `BOOTSTRAP_ADMIN_USERNAME`/`_EMAIL`/`_PASSWORD`; forces password change + OTP enrolment on first login), then create everyone else through the admin UI. For local development only, `scripts/seed-dev-users.sh` creates the dev accounts. OTP is required for `SYSTEM_ADMIN` and `NATIONAL_VALIDATOR` only (built-in OTP form, conditional on realm role).
 
+Admin roles and credentials (turnover Phase 2): `SYSTEM_ADMIN` may also import AFOR files (region chosen per import) and submit its own drafts, but never approves (approval routes keep `get_national_validator`). When Keycloak email is unavailable an admin can type a temporary password (`POST /api/admin/users/{keycloak_id}/temporary-password`; set as temporary, audit row has no password). The daily Celery task `tasks.password_expiry.enforce_password_expiry` adds UPDATE_PASSWORD for `SYSTEM_ADMIN`/`NATIONAL_VALIDATOR` users whose password is older than 90 days. Backend and celery-worker need `KEYCLOAK_ADMIN_USER` (or `KEYCLOAK_ADMIN`) and `KEYCLOAK_ADMIN_PASSWORD`; there is no admin/admin fallback.
+
 Two issuer URLs exist: backend fetches JWKS from `keycloak:8080` (Docker internal) but validates tokens against `localhost` (browser-visible, set via `KC_HOSTNAME=localhost`).
 
 ### AI/XAI Pipeline

@@ -13,6 +13,7 @@ export {
   fetchRegionalStats,
   fetchValidatorStats,
   forceReplaceIncident,
+  detectAforRegion,
   importAforFile,
   listEncoderDrafts,
   submitIncidentForReview,

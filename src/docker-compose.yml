@@ -334,6 +334,9 @@ services:
       - DATABASE_URL=postgresql://wims_app_user:wimsapp@postgres:5432/wims
       - REDIS_URL=redis://redis:6379/0
       - KEYCLOAK_REALM_URL=http://keycloak:8080/auth/realms/bfp
+      # Keycloak admin API (password-expiry task). No fallback: compose fails if unset.
+      - KEYCLOAK_ADMIN_USER=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?error}
       - OLLAMA_URL=http://ollama:11434
       - SURICATA_EVE_PATH=/var/log/suricata/eve.json
       - EXPORT_DIR=/app/storage/exports

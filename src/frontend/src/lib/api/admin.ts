@@ -25,6 +25,7 @@ export {
   generateRecommendedAction,
   pruneWorkers,
   resendAdminUserCredentials,
+  setAdminUserTemporaryPassword,
   retrySyncOp,
   revokeUserSessions,
   terminateUserSessions,

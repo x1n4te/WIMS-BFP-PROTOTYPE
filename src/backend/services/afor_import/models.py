@@ -26,6 +26,16 @@ class AforParseResponse(BaseModel):
     form_kind: AforFormKind
     # True when the file does not supply reliable WGS84 coordinates; client must collect lat/lon before commit.
     requires_location: bool = True
+    # Region the rows were parsed for, the region text printed on the file (if any),
+    # and whether they disagree (SYSTEM_ADMIN imports only: warn, but allow).
+    region_id: int | None = None
+    file_region_text: str | None = None
+    region_mismatch: bool = False
+
+
+class AforRegionDetectResponse(BaseModel):
+    file_region_text: str | None = None
+    suggested_region_id: int | None = None
 
 
 DuplicateAction = Literal["skip", "merge", "force"]
@@ -47,6 +57,9 @@ class AforCommitRequest(BaseModel):
     # M4-D: per-row duplicate resolutions on second commit call.
     # None means first call: backend runs duplicate scan and may return DUPLICATE_CHECK_REQUIRED.
     resolutions: list[RowResolution] | None = None
+    # Required for SYSTEM_ADMIN imports (admins have no assigned region); ignored
+    # for REGIONAL_ENCODER, whose assigned region always wins.
+    region_id: int | None = None
 
 
 class AforCommitResponse(BaseModel):

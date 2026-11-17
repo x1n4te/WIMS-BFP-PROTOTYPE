@@ -8,6 +8,7 @@ import {
     updateAdminUser,
     createAdminUser,
     resendAdminUserCredentials,
+    setAdminUserTemporaryPassword,
     fetchAdminSecurityLogs,
     fetchAuditLogsOfflineAware,
     analyzeSecurityLog,
@@ -807,6 +808,8 @@ export default function AdminSystemPage() {
                 contact_number: payload.contact_number || undefined,
                 assigned_region_id: payload.assigned_region_id,
             });
+            setTempPasswordSet(false);
+            setTempPassword('');
             setCreatedUser({ username: result.username, keycloak_id: result.keycloak_id, email: result.email, email_sent: result.email_sent });
             setCreateForm({ first_name: '', last_name: '', email: '', username: '', role: 'REGIONAL_ENCODER', contact_number: '', assigned_region_id: '' });
             await loadUsers();
@@ -815,6 +818,26 @@ export default function AdminSystemPage() {
             setToast({ type: 'error', text: (e as { message?: string })?.message ?? 'Failed to create user' });
         } finally {
             setIsCreating(false);
+        }
+    };
+
+    const [tempPassword, setTempPassword] = useState('');
+    const [isSettingTempPassword, setIsSettingTempPassword] = useState(false);
+    const [tempPasswordSet, setTempPasswordSet] = useState(false);
+
+    const handleSetTempPassword = async () => {
+        if (!createdUser) return;
+        setIsSettingTempPassword(true);
+        try {
+            await setAdminUserTemporaryPassword(createdUser.keycloak_id, tempPassword);
+            setTempPasswordSet(true);
+            setToast({ type: 'success', text: 'Temporary password set. Tell the user out of band.' });
+        } catch (e: unknown) {
+            setToast({ type: 'error', text: (e as { message?: string })?.message ?? 'Failed to set temporary password' });
+        } finally {
+            // Never keep the typed password around once the request has finished.
+            setTempPassword('');
+            setIsSettingTempPassword(false);
         }
     };
 
@@ -2401,6 +2424,35 @@ export default function AdminSystemPage() {
                                             <RefreshCw className={`w-4 h-4 ${isResending ? 'animate-spin' : ''}`} />
                                             {isResending ? 'Resending…' : 'Resend set-password email'}
                                         </button>
+                                        <div className="border-t border-red-200 pt-3 space-y-2">
+                                            <p className="text-xs font-semibold text-gray-700">Email unavailable? Set a temporary password</p>
+                                            {tempPasswordSet ? (
+                                                <p className="text-xs text-green-700">
+                                                    Temporary password set. The user must change it at first login. Give it to them
+                                                    through a secure channel; WIMS does not display or store it.
+                                                </p>
+                                            ) : (
+                                                <>
+                                                    <input
+                                                        type="password"
+                                                        autoComplete="new-password"
+                                                        aria-label="Temporary password"
+                                                        value={tempPassword}
+                                                        onChange={(e) => setTempPassword(e.target.value)}
+                                                        placeholder="Type a temporary password (min 12 characters)"
+                                                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm"
+                                                    />
+                                                    <button
+                                                        onClick={handleSetTempPassword}
+                                                        disabled={isSettingTempPassword || tempPassword.length < 12}
+                                                        className="px-3 py-1.5 text-sm rounded-md font-medium text-white disabled:opacity-50"
+                                                        style={{ backgroundColor: 'var(--sidebar-bg)' }}
+                                                    >
+                                                        {isSettingTempPassword ? 'Setting…' : 'Set temporary password'}
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                                 <button

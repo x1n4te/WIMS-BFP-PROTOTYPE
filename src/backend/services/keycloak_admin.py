@@ -25,8 +25,24 @@ _KC_BASE_URL = _KC_SERVER_URL.split("/realms/")[0] + "/"
 _KC_REALM = "bfp"
 _KC_CLIENT_ID = os.environ.get("KEYCLOAK_ADMIN_CLIENT_ID", "wims-admin-service")
 _KC_CLIENT_SECRET = os.environ.get("KEYCLOAK_ADMIN_CLIENT_SECRET", "")
-_KC_ADMIN_USER = os.environ.get("KEYCLOAK_ADMIN_USER", "admin")
-_KC_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "admin")
+
+
+def _kc_admin_credentials() -> tuple[str, str]:
+    """Return the Keycloak master-admin (user, password) from the environment.
+
+    There is deliberately NO default: a missing value fails loudly instead of
+    silently trying ``admin``/``admin``. ``KEYCLOAK_ADMIN_USER`` is the name this
+    service reads; ``KEYCLOAK_ADMIN`` (the name Keycloak/compose/.env use) is
+    accepted as an alias so both backend and celery-worker work from one .env.
+    """
+    user = os.environ.get("KEYCLOAK_ADMIN_USER") or os.environ.get("KEYCLOAK_ADMIN")
+    password = os.environ.get("KEYCLOAK_ADMIN_PASSWORD")
+    if not user or not password:
+        raise RuntimeError(
+            "Keycloak admin credentials are not configured: set KEYCLOAK_ADMIN_USER "
+            "(or KEYCLOAK_ADMIN) and KEYCLOAK_ADMIN_PASSWORD in this service's environment."
+        )
+    return user, password
 
 # Password alphabet: upper + lower + digits + safe special chars.
 # Avoids confusable chars (0/O, l/1) and shell-sensitive chars.
@@ -54,7 +70,8 @@ def _get_admin_client() -> KeycloakAdmin:
         realm_name="master",
         client_id="admin-cli",
     )
-    token = oidc.token(_KC_ADMIN_USER, _KC_ADMIN_PASSWORD)
+    admin_user, admin_password = _kc_admin_credentials()
+    token = oidc.token(admin_user, admin_password)
     return KeycloakAdmin(
         server_url=_KC_BASE_URL,
         realm_name=_KC_REALM,
@@ -294,6 +311,73 @@ def update_user_profile(
     except KeycloakError as e:
         logger.error(f"Keycloak update_user_profile failed for {keycloak_id}: {e}")
         raise
+
+
+def set_temporary_password(keycloak_id: str, temporary_password: str) -> None:
+    """
+    Set an admin-typed TEMPORARY password: Keycloak marks the credential temporary
+    and adds the UPDATE_PASSWORD required action, so the user must change it at
+    first login. Existing sessions are revoked.
+
+    The password is passed straight to Keycloak. It is never logged, returned,
+    or stored by WIMS. Keycloak's password policy (length/character rules and
+    passwordHistory) applies.
+
+    Raises:
+        KeycloakError: on API failure (including a password-policy rejection).
+    """
+    adm = _get_admin_client()
+    adm.set_user_password(user_id=keycloak_id, password=temporary_password, temporary=True)
+    try:
+        adm.user_logout(user_id=keycloak_id)
+    except KeycloakError as e:
+        logger.warning(f"Could not revoke sessions for {keycloak_id}: {e}")
+    logger.info(f"Temporary password set for Keycloak user {keycloak_id}")
+
+
+def list_role_members_with_password_age(role_name: str) -> list[dict]:
+    """Return members of a realm role with their password credential ``createdDate``.
+
+    Each item: ``{"id", "username", "enabled", "required_actions", "password_created_ms"}``.
+    ``password_created_ms`` is the newest ``password`` credential's ``createdDate``
+    (epoch milliseconds) or None when the user has no password credential.
+    """
+    adm = _get_admin_client()
+    members: list[dict] = []
+    first = 0
+    page = 100
+    while True:
+        batch = adm.get_realm_role_members(role_name, query={"first": first, "max": page}) or []
+        members.extend(batch)
+        if len(batch) < page:
+            break
+        first += page
+
+    out: list[dict] = []
+    for m in members:
+        creds = adm.get_credentials(user_id=m["id"]) or []
+        dates = [c.get("createdDate") for c in creds if c.get("type") == "password" and c.get("createdDate")]
+        out.append(
+            {
+                "id": m["id"],
+                "username": m.get("username"),
+                "enabled": m.get("enabled", True),
+                "required_actions": list(m.get("requiredActions") or []),
+                "password_created_ms": max(dates) if dates else None,
+            }
+        )
+    return out
+
+
+def add_required_action(keycloak_id: str, action: str) -> bool:
+    """Add a required action to a user if absent. Returns True when it was added."""
+    adm = _get_admin_client()
+    user = adm.get_user(keycloak_id)
+    actions = list(user.get("requiredActions") or [])
+    if action in actions:
+        return False
+    adm.update_user(user_id=keycloak_id, payload={"requiredActions": actions + [action]})
+    return True
 
 
 def change_user_password(keycloak_id: str, new_password: str) -> None:

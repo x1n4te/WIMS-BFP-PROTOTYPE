@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from auth import get_regional_encoder
+from auth import get_encoder_or_admin, get_regional_encoder
 from auth import get_db_with_rls
 from services.afor_import import ALARM_LEVEL_MAP
 from services.event_bus import publish_incident_event_sync
@@ -684,7 +684,7 @@ def encoder_unarchive_incident(
 def submit_incident_for_review(
     request: Request,
     incident_id: int,
-    user: Annotated[dict, Depends(get_regional_encoder)],
+    user: Annotated[dict, Depends(get_encoder_or_admin)],
     db: Annotated[Session, Depends(get_db_with_rls)],
     ack_duplicate: bool = False,
     force: bool = False,
@@ -723,7 +723,7 @@ def submit_incident_for_review(
         incident_id=incident_id,
         status="PENDING",
         actor_id=str(encoder_id),
-        actor_role="REGIONAL_ENCODER",
+        actor_role=user.get("role") or "REGIONAL_ENCODER",
     )
 
     return result
