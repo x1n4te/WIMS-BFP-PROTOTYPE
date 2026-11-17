@@ -423,17 +423,17 @@ export default function AdminSystemPage() {
         }
     }, [role]);
 
-    // M9a: 60s grouped auto-refresh (health + system metrics + workers) — kept as
+    // M9a: 30s grouped auto-refresh (FRS module 9) (health + system metrics + workers) — kept as
     // fallback so monitoring data refreshes even when no system events fire.
     useEffect(() => {
         if (role !== 'SYSTEM_ADMIN') return;
         loadMonitoring();
-        const intervalId = setInterval(loadMonitoring, 60 * 1000);
+        const intervalId = setInterval(loadMonitoring, 30 * 1000);
         return () => clearInterval(intervalId);
     }, [role, loadMonitoring]);
 
     // SSE-driven supplement: fires immediately on system events so health data
-    // doesn't lag behind the 60 s interval.
+    // doesn't lag behind the 30 s interval.
     const { pending: autoRefreshPending, refreshing: autoRefreshing, justRefreshed: autoRefreshDone } = useAutoRefresh({
         eventTypes: ['system.health_changed', 'system.worker_status', 'system.config_changed'],
         onRefresh: loadMonitoring,

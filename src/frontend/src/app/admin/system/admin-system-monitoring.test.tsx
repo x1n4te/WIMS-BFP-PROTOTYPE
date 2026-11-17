@@ -198,7 +198,7 @@ describe('M9a: System Monitoring — initial fetch and 60s auto-refresh', () => 
         expect(mockFetchSystemHealth).toHaveBeenCalledTimes(1);
 
         await act(async () => {
-            await vi.advanceTimersByTimeAsync(60_000);
+            await vi.advanceTimersByTimeAsync(30_000);
         });
 
         expect(mockFetchSystemHealth).toHaveBeenCalledTimes(2);

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 MV_NAMES = [
     "mv_incident_counts_daily",
     "mv_incident_by_region",
+    "mv_incident_by_barangay",
     "mv_incident_type_distribution",
 ]
 

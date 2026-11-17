@@ -122,6 +122,12 @@ class TestPhase1Foundation:
 
         assert "mv_incident_by_region" in MV_NAMES
 
+    def test_mv_incident_by_barangay_is_refreshed(self):
+        """Every MV created in 12_analytics_mvs.sql must be in the refresh list."""
+        from tasks.analytics_refresh import MV_NAMES
+
+        assert "mv_incident_by_barangay" in MV_NAMES
+
     def test_mv_incident_type_distribution_exists(self, client: TestClient):
         """mv_incident_type_distribution materialized view must exist."""
         from tasks.analytics_refresh import MV_NAMES
