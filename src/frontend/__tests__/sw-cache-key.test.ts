@@ -32,7 +32,7 @@ const VALID_ANALYST_WORKFLOW_SLUGS = new Set([
   'incident-explorer',
 ]);
 
-const CACHE_NAME = 'wims-bfp-cache-v13';
+const CACHE_NAME = 'wims-bfp-cache-v14';
 const INCIDENT_DETAIL_SHELL = '/dashboard/regional/incidents/1';
 const ANALYST_DETAIL_SHELL = '/dashboard/analyst/incidents/1';
 const WILDLAND_SHELL = '/dashboard/analyst/incidents/1/wildland';
@@ -115,12 +115,10 @@ function offlineNavigationFallbackKeys(origin: string, pathname: string): string
 
 // Replicates the SW's urlsToCache list (only shells + nav anchors, no admin/validator).
 const urlsToCache: string[] = [
-  '/',
   '/dashboard',
   '/dashboard/regional',
   '/dashboard/regional/audit',
   INCIDENT_DETAIL_SHELL,
-  '/home',
   '/login',
   '/afor/create',
   '/afor/import',
@@ -323,9 +321,9 @@ describe('canonicalPath — analyst families (v12)', () => {
   });
 });
 
-describe('CACHE_NAME + urlsToCache (v13)', () => {
-  it('CACHE_NAME is bumped to v13', () => {
-    expect(CACHE_NAME).toBe('wims-bfp-cache-v13');
+describe('CACHE_NAME + urlsToCache (v14)', () => {
+  it('CACHE_NAME is bumped to v14', () => {
+    expect(CACHE_NAME).toBe('wims-bfp-cache-v14');
   });
 
   it('the 3 analyst shells are in urlsToCache (fallback anchors)', () => {
@@ -353,9 +351,33 @@ describe('CACHE_NAME + urlsToCache (v13)', () => {
   });
 });
 
+describe('public/sw.js turnover contract (Phase 4)', () => {
+  it('does not precache or prefetch any removed page', () => {
+    const removed = ["'/home'", "'/admin/monitoring'", "'/dashboard/validator/map'", "'/dashboard/validator/perimeter-draw'",
+      "'/register'", "'/report'", "'/contributor'", "'/incidents", "'/information'", "'/community"];
+    for (const r of removed) {
+      expect(SW_SOURCE, r).not.toContain(r);
+    }
+    expect(SW_SOURCE).not.toContain('/tracking');
+    expect(SW_SOURCE).not.toContain('/fire-stations');
+  });
+
+  it('no longer precaches the public landing page (/)', () => {
+    const arrayMatch = SW_SOURCE.match(/const\s+urlsToCache\s*=\s*\[([\s\S]*?)\]/);
+    expect(arrayMatch).not.toBeNull();
+    expect(arrayMatch![1]).not.toMatch(/'\/'/);
+    expect(arrayMatch![1]).toContain("'/login'");
+  });
+
+  it('is cache version v14 so activate() evicts the old cache holding removed pages', () => {
+    expect(SW_SOURCE).toMatch(/const\s+CACHE_NAME\s*=\s*['"]wims-bfp-cache-v14['"]/);
+    expect(SW_SOURCE).toMatch(/cacheWhitelist\s*=\s*\[CACHE_NAME/);
+  });
+});
+
 describe('public/sw.js source contract (Task 9)', () => {
-  it('CACHE_NAME is defined as wims-bfp-cache-v13', () => {
-    expect(SW_SOURCE).toMatch(/const\s+CACHE_NAME\s*=\s*['"]wims-bfp-cache-v13['"]/);
+  it('CACHE_NAME is defined as wims-bfp-cache-v14', () => {
+    expect(SW_SOURCE).toMatch(/const\s+CACHE_NAME\s*=\s*['"]wims-bfp-cache-v14['"]/);
   });
 
   it('defines all 3 analyst shell constants', () => {

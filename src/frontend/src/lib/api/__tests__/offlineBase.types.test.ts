@@ -122,8 +122,6 @@ describe('api/index.ts barrel coverage (issue #14)', () => {
     'fetchWorkerStatusOfflineAware',
     'fetchActiveSessionsOfflineAware',
     'fetchAuditLogsOfflineAware',
-    'fetchAdminSecurityLogsOfflineAware',
-    'fetchSecurityLogsSummaryOfflineAware',
     'fetchAnomaliesOfflineAware',
     'fetchBreachesOfflineAware',
     'fetchAdminConfigOfflineAware',
@@ -144,7 +142,6 @@ describe('api/index.ts barrel coverage (issue #14)', () => {
     'fetchRegionsOfflineAware',
     'fetchProvincesOfflineAware',
     'fetchCitiesOfflineAware',
-    'fetchOperationalMapOfflineAware',
     'fetchValidatorAuditLogsOfflineAware',
   ];
 

@@ -35,3 +35,24 @@ export async function updateBreach(id: number, payload: BreachUpdate): Promise<B
         body: JSON.stringify(payload),
     });
 }
+
+export type BreachSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+/** Body of POST /api/admin/breach: a breach logged manually by a SYSTEM_ADMIN. */
+export interface BreachCreate {
+    summary: string;
+    severity: BreachSeverity;
+    /** ISO timestamp; defaults to now on the server. The 72-hour NPC deadline runs from it. */
+    detected_at?: string;
+    affected_systems?: string;
+    data_scope?: string;
+    notes?: string;
+}
+
+export async function createBreach(payload: BreachCreate): Promise<Breach> {
+    return apiFetch<Breach>('/api/admin/breach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+}

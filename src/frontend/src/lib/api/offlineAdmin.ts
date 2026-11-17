@@ -4,8 +4,6 @@ import {
   fetchWorkerStatus as legacyFetchWorkerStatus,
   fetchActiveSessions as legacyFetchActiveSessions,
   fetchAuditLogs as legacyFetchAuditLogs,
-  fetchAdminSecurityLogs as legacyFetchAdminSecurityLogs,
-  fetchSecurityLogsSummary as legacyFetchSecurityLogsSummary,
   fetchAnomalies as legacyFetchAnomalies,
   fetchAdminConfig as legacyFetchAdminConfig,
   fetchRateLimits as legacyFetchRateLimits,
@@ -16,7 +14,6 @@ import type {
   SystemHealthResponse,
   SystemMetricsResponse,
   WorkerStatusPaginatedResponse,
-  SecurityLogsSummary,
   AnomalyAggregateResponse,
   SystemConfigEntry,
   RateLimitConfig,
@@ -65,16 +62,6 @@ export async function fetchAuditLogsOfflineAware(
   params?: { limit?: number; offset?: number; q?: string; user_id?: string; action_type?: string; table_affected?: string; ip_address?: string; date_from?: string; date_to?: string },
 ): Promise<OfflineResult<PaginatedResponse<AuditLogEntry>>> {
   return offlineAware('audit-logs', [params ?? {}], 'admin', ADMIN_CACHE_TTL_MS, () => legacyFetchAuditLogs(params), OFFLINE_ADMIN_ERROR);
-}
-
-export async function fetchAdminSecurityLogsOfflineAware(
-  params?: { q?: string; severity?: string; classification?: string; limit?: number; offset?: number; source_ip?: string; date_from?: string; date_to?: string; show_dismissed?: boolean | string },
-): Promise<OfflineResult<{ items: SecurityThreatLog[]; total: number }>> {
-  return offlineAware('security-logs', [params ?? {}], 'admin', ADMIN_CACHE_TTL_MS, () => legacyFetchAdminSecurityLogs(params), OFFLINE_ADMIN_ERROR);
-}
-
-export async function fetchSecurityLogsSummaryOfflineAware(): Promise<OfflineResult<SecurityLogsSummary>> {
-  return offlineAware('security-logs-summary', [], 'admin', ADMIN_CACHE_TTL_MS, () => legacyFetchSecurityLogsSummary(), OFFLINE_ADMIN_ERROR);
 }
 
 export async function fetchAnomaliesOfflineAware(

@@ -128,26 +128,6 @@ describe('Sidebar — Rate Limits entry', () => {
   });
 });
 
-describe('Sidebar — Validator perimeter workspace', () => {
-  afterEach(() => {
-    cleanup();
-  });
-
-  it('links NATIONAL_VALIDATOR to the perimeter workspace', () => {
-    mockUseAuth.mockReturnValue({
-      user: { role: 'NATIONAL_VALIDATOR' },
-      loading: false,
-      logout: vi.fn(),
-    });
-    render(<Sidebar isOpen={true} onClose={vi.fn()} />);
-
-    expect(screen.getByRole('link', { name: 'Perimeter Drawing' })).toHaveAttribute(
-      'href',
-      '/dashboard/validator/perimeter-draw',
-    );
-  });
-});
-
 describe('Sidebar — Offline Work badge (Item 10)', () => {
   afterEach(() => {
     cleanup();
@@ -249,59 +229,66 @@ describe('Sidebar — Offline Work badge (Item 10)', () => {
   });
 });
 
-describe('Sidebar — CIVILIAN_REPORTER uses navbar, not sidebar nav items (#615)', () => {
+describe('Sidebar — turnover build navigation', () => {
   afterEach(() => {
     cleanup();
   });
 
-  it('does NOT render the legacy Contributor (Megaphone) nav item for CIVILIAN_REPORTER', () => {
-    mockUseAuth.mockReturnValue({
-      user: { role: 'CIVILIAN_REPORTER' },
+  const REMOVED_LABELS = [
+    'Operations',
+    'Triage Queue',
+    'Operational Map',
+    'Perimeter Drawing',
+    'Security Monitoring',
+    'Telemetry',
+    'Civilian Management',
+    'Information Management',
+    'Contributor',
+    'Information',
+    'Incidents',
+  ];
+  const REMOVED_HREF = /^\/(home|incidents|contributor|information|admin\/monitoring|admin\/civilians|admin\/community|admin\/information|dashboard\/validator\/(map|perimeter-draw))/;
+
+  const ROLES = ['SYSTEM_ADMIN', 'REGIONAL_ENCODER', 'NATIONAL_VALIDATOR', 'NATIONAL_ANALYST'] as const;
+
+  it.each(ROLES)('%s sees no entry for a removed page and no link to a removed route', (role) => {
+    mockUseAuth.mockReturnValue({ user: { role }, loading: false, logout: vi.fn() });
+    mockOfflineWorkCounts.mockReturnValue({
+      pendingCount: 0,
+      failedCount: 0,
+      conflictCount: 0,
+      draftCount: 0,
+      totalActionableCount: 0,
       loading: false,
-      logout: vi.fn(),
     });
     render(<Sidebar isOpen={true} onClose={vi.fn()} />);
-    expect(screen.queryByText('Contributor')).not.toBeInTheDocument();
+    for (const label of REMOVED_LABELS) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    const hrefs = screen.getAllByRole('link').map((a) => a.getAttribute('href') ?? '');
+    expect(hrefs.length).toBeGreaterThan(1);
+    for (const h of hrefs) {
+      expect(h).not.toMatch(REMOVED_HREF);
+    }
   });
 
-  it('does NOT render the legacy Information (Newspaper) nav item for CIVILIAN_REPORTER', () => {
-    mockUseAuth.mockReturnValue({
-      user: { role: 'CIVILIAN_REPORTER' },
-      loading: false,
-      logout: vi.fn(),
-    });
+  it('SYSTEM_ADMIN keeps governance, breach, audit, anomalies, config and AFOR import', () => {
+    mockUseAuth.mockReturnValue({ user: { role: 'SYSTEM_ADMIN' }, loading: false, logout: vi.fn() });
     render(<Sidebar isOpen={true} onClose={vi.fn()} />);
-    expect(screen.queryByText('Information')).not.toBeInTheDocument();
+    for (const label of ['Governance', 'Breach Notifications', 'Import AFOR', 'System Audit', 'Anomaly Detection', 'Configuration']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
   });
 
-  it('does NOT render any nav sections for CIVILIAN_REPORTER (PublicHeader owns civilian nav)', () => {
-    mockUseAuth.mockReturnValue({
-      user: { role: 'CIVILIAN_REPORTER' },
-      loading: false,
-      logout: vi.fn(),
-    });
+  it('NATIONAL_VALIDATOR keeps the dashboard and audit trail', () => {
+    mockUseAuth.mockReturnValue({ user: { role: 'NATIONAL_VALIDATOR' }, loading: false, logout: vi.fn() });
     render(<Sidebar isOpen={true} onClose={vi.fn()} />);
-    expect(screen.queryByText('My Profile')).not.toBeInTheDocument();
-    expect(screen.queryByText('Operations')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('href', '/dashboard/validator');
+    expect(screen.getByText('Audit Trail')).toBeInTheDocument();
   });
 
-  it('leaves SYSTEM_ADMIN nav unaffected (regression guard: shared getNavSections branch)', () => {
-    mockUseAuth.mockReturnValue({
-      user: { role: 'SYSTEM_ADMIN' },
-      loading: false,
-      logout: vi.fn(),
-    });
-    render(<Sidebar isOpen={true} onClose={vi.fn()} />);
-    expect(screen.getByText('Governance')).toBeInTheDocument();
-    expect(screen.getByText('Configuration')).toBeInTheDocument();
-  });
-
-  it('leaves REGIONAL_ENCODER nav unaffected (regression guard: shared getNavSections branch)', () => {
-    mockUseAuth.mockReturnValue({
-      user: { role: 'REGIONAL_ENCODER', id: 'enc-4' },
-      loading: false,
-      logout: vi.fn(),
-    });
+  it('REGIONAL_ENCODER keeps manual entry, AFOR import and offline work', () => {
+    mockUseAuth.mockReturnValue({ user: { role: 'REGIONAL_ENCODER' }, loading: false, logout: vi.fn() });
     mockOfflineWorkCounts.mockReturnValue({
       pendingCount: 0,
       failedCount: 0,
@@ -313,5 +300,17 @@ describe('Sidebar — CIVILIAN_REPORTER uses navbar, not sidebar nav items (#615
     render(<Sidebar isOpen={true} onClose={vi.fn()} />);
     expect(screen.getByText('Manual Entry')).toBeInTheDocument();
     expect(screen.getByText('Import AFOR')).toBeInTheDocument();
+    expect(screen.getByText('Offline Work')).toBeInTheDocument();
+  });
+
+  it('a leftover CIVILIAN_REPORTER or legacy ENCODER account gets no navigation beyond the profile link', () => {
+    for (const role of ['CIVILIAN_REPORTER', 'ENCODER']) {
+      mockUseAuth.mockReturnValue({ user: { role }, loading: false, logout: vi.fn() });
+      const { unmount } = render(<Sidebar isOpen={true} onClose={vi.fn()} />);
+      expect(screen.queryByText('Manual Entry')).not.toBeInTheDocument();
+      expect(screen.queryByText('Import Data')).not.toBeInTheDocument();
+      expect(screen.queryByText('Incidents')).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });

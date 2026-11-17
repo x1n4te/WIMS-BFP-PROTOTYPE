@@ -11,45 +11,12 @@ vi.mock('../transport', () => ({ apiFetch: vi.fn() }));
 import { apiFetch } from '../transport';
 import {
   type AuditResponse,
-  fetchOperationalMap,
   fetchValidatorAuditLogs,
 } from '../validator';
-import type { MapClusterItem } from '../map';
 
 describe('validator API functions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it('fetchOperationalMap builds URLSearchParams and calls apiFetch', async () => {
-    const mockCluster: MapClusterItem = {
-      lat: 10.5,
-      lng: 120.5,
-      count: 3,
-      severity: 'low',
-      latest_at: '2025-06-01T00:00:00Z',
-    };
-    (apiFetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      clusters: [mockCluster],
-    });
-
-    const result = await fetchOperationalMap({
-      sw: [10.0, 120.0] as [number, number],
-      ne: [11.0, 121.0] as [number, number],
-      zoom: 12,
-      status: 'active',
-    });
-
-    expect(apiFetch).toHaveBeenCalledTimes(1);
-    const callUrl = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(callUrl).toContain('/api/validator/operational-map?');
-    expect(callUrl).toContain('sw_lat=');
-    expect(callUrl).toContain('sw_lng=');
-    expect(callUrl).toContain('ne_lat=');
-    expect(callUrl).toContain('ne_lng=');
-    expect(callUrl).toContain('zoom=');
-    expect(callUrl).toContain('status_filter=');
-    expect(result).toEqual([mockCluster]);
   });
 
   it('fetchValidatorAuditLogs builds URLSearchParams and calls apiFetch', async () => {

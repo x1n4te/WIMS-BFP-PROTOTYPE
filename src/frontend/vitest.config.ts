@@ -11,8 +11,6 @@ export default defineConfig({
     testTimeout: 15000,
     alias: {
       '@': path.resolve(__dirname, './src'),
-      'firebase/app': path.resolve(__dirname, './src/test/__mocks__/firebase-app.ts'),
-      'firebase/messaging': path.resolve(__dirname, './src/test/__mocks__/firebase-app.ts'),
     }
   }
 })

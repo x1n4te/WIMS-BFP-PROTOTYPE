@@ -50,25 +50,13 @@ export function usePreloadDashboardData(): void {
       return;
     }
 
-    // ── National validator: preload validator-only map + stats ──
+    // ── National validator: preload validator stats ──
     if (role === 'NATIONAL_VALIDATOR') {
-      void import('@/lib/api').then((api) => {
-        void api.fetchOperationalMapOfflineAware({
-          sw: [4.5, 116.5] as [number, number],
-          ne: [21.5, 127] as [number, number],
-          zoom: 6,
-        });
-      });
       void import('@/lib/api/offlineValidatorStats').then((m) => {
         void m.fetchValidatorStatsOfflineAware();
       });
       return;
     }
-
-    // ── Operations: preload for any role with access (encoder, validator, admin) ──
-    void import('@/lib/api/offlineOperations').then((m) => {
-      void m.fetchOperationsOfflineAware();
-    });
 
     // ── System admin: preload health + metrics + workers ──
     if (role === 'SYSTEM_ADMIN') {

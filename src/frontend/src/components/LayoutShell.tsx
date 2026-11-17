@@ -5,10 +5,9 @@ import { WifiOff } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
-import { PublicHeader } from './PublicHeader';
 import { PublicThemeProvider } from './public/PublicThemeProvider';
 import { usePathname } from 'next/navigation';
-import { isPublicRoute, isCivilianRoute } from '@/lib/routeUtils';
+import { isPublicRoute } from '@/lib/routeUtils';
 import { registerServiceWorker } from '@/lib/swRegistration';
 import { useNetworkStatus } from '@/lib/useNetworkStatus';
 import { maybePruneCaches } from '@/lib/offlineStore';
@@ -83,20 +82,12 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         );
     }
 
-    // Public surface — the landing page owns its overlay-positioned header.
-    // Login intentionally has no navigation/footer and provides only a return
-    // control, matching the Keycloak SSO screen.
-    const usesPublicShell =
-        isPublicRoute(pathname) ||
-        isCivilianRoute(pathname) ||
-        (pathname === '/profile' && user?.role === 'CIVILIAN_REPORTER');
-
-    if (usesPublicShell) {
+    // Unauthenticated surface: only /login, /callback and the static /privacy notice.
+    // Login owns its own chrome (matches the Keycloak SSO screen) and has no footer.
+    if (isPublicRoute(pathname)) {
         const isLoginPage = pathname === '/login';
-        const pageOwnsFooter = isLoginPage || pathname === '/';
         return (
-            <PublicThemeProvider showHeader={false} showFooter={!pageOwnsFooter}>
-                {!isLoginPage && pathname !== '/' && <PublicHeader />}
+            <PublicThemeProvider showHeader={false} showFooter={!isLoginPage}>
                 {children}
             </PublicThemeProvider>
         );

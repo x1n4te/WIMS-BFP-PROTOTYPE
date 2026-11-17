@@ -3,12 +3,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useNetworkStatus } from '@/lib/useNetworkStatus';
-import { updateBreach, Breach, BreachStatus } from '@/lib/api/breach';
+import { updateBreach, createBreach, Breach, BreachSeverity, BreachStatus } from '@/lib/api/breach';
 import { updateAdminConfig, SystemConfigEntry } from '@/lib/api/legacy';
 import { fetchBreachesOfflineAware, fetchAdminConfigOfflineAware } from '@/lib/api/offlineAdmin';
 import { StaleCacheBanner } from '@/components/ui/StaleCacheBanner';
 import Link from 'next/link';
-import { ShieldX, Clock, CheckCircle, AlertTriangle, Phone, User, Building2, Pencil, X, ArrowRight, WifiOff } from 'lucide-react';
+import { ShieldX, Clock, CheckCircle, AlertTriangle, Phone, User, Building2, Pencil, X, ArrowRight, WifiOff, Plus } from 'lucide-react';
 
 const STATUS_LABELS: Record<BreachStatus, string> = {
     DETECTED: 'Detected',
@@ -313,6 +313,164 @@ function StatusAdvanceModal({
     );
 }
 
+// ─── Log Breach Modal (manual entry, independent of any threat-detection flow) ─────
+
+function LogBreachModal({
+    onClose,
+    onCreated,
+}: {
+    onClose: () => void;
+    onCreated: (breach: Breach) => void;
+}) {
+    const [summary, setSummary] = useState('');
+    const [severity, setSeverity] = useState<BreachSeverity>('HIGH');
+    const [detectedAt, setDetectedAt] = useState('');
+    const [affectedSystems, setAffectedSystems] = useState('');
+    const [dataScope, setDataScope] = useState('');
+    const [notes, setNotes] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [formError, setFormError] = useState<string | null>(null);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (summary.trim().length < 3) {
+            setFormError('Describe the breach (at least 3 characters).');
+            return;
+        }
+        setSaving(true);
+        setFormError(null);
+        try {
+            const created = await createBreach({
+                summary: summary.trim(),
+                severity,
+                ...(detectedAt ? { detected_at: new Date(detectedAt).toISOString() } : {}),
+                ...(affectedSystems.trim() ? { affected_systems: affectedSystems.trim() } : {}),
+                ...(dataScope.trim() ? { data_scope: dataScope.trim() } : {}),
+                ...(notes.trim() ? { notes: notes.trim() } : {}),
+            });
+            onCreated(created);
+        } catch (err) {
+            const msg = (err as { message?: string })?.message;
+            setFormError(msg && msg.length < 200 ? msg : 'Failed to log the breach. Please try again.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-labelledby="log-breach-title">
+            <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto space-y-4" data-testid="log-breach-form">
+                <div className="flex items-center justify-between">
+                    <h2 id="log-breach-title" className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Log a Breach</h2>
+                    <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100" aria-label="Close">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Records a personal-data breach (RA 10173) in the register and starts the 72-hour NPC notification clock
+                    from the detection time. Administrators are notified by email.
+                </p>
+
+                <div>
+                    <label htmlFor="breach-summary" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                        What happened <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                        id="breach-summary"
+                        value={summary}
+                        onChange={(e) => setSummary(e.target.value)}
+                        rows={3}
+                        maxLength={2000}
+                        required
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label htmlFor="breach-severity" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Severity</label>
+                        <select
+                            id="breach-severity"
+                            value={severity}
+                            onChange={(e) => setSeverity(e.target.value as BreachSeverity)}
+                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                        >
+                            <option value="LOW">Low</option>
+                            <option value="MEDIUM">Medium</option>
+                            <option value="HIGH">High</option>
+                            <option value="CRITICAL">Critical</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label htmlFor="breach-detected-at" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Detected at</label>
+                        <input
+                            id="breach-detected-at"
+                            type="datetime-local"
+                            value={detectedAt}
+                            onChange={(e) => setDetectedAt(e.target.value)}
+                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                        />
+                        <p className="text-[11px] text-gray-400 mt-1">Leave empty for now.</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label htmlFor="breach-systems" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Affected systems</label>
+                    <input
+                        id="breach-systems"
+                        value={affectedSystems}
+                        onChange={(e) => setAffectedSystems(e.target.value)}
+                        maxLength={2000}
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                </div>
+                <div>
+                    <label htmlFor="breach-scope" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Data scope</label>
+                    <input
+                        id="breach-scope"
+                        value={dataScope}
+                        onChange={(e) => setDataScope(e.target.value)}
+                        maxLength={2000}
+                        placeholder="e.g. names and contact numbers of 120 reporters"
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                </div>
+                <div>
+                    <label htmlFor="breach-notes" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Notes</label>
+                    <textarea
+                        id="breach-notes"
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        rows={2}
+                        maxLength={4000}
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                </div>
+
+                {formError && (
+                    <div role="alert" className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm" data-testid="log-breach-error">
+                        {formError}
+                    </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-2">
+                    <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={saving}
+                        className="px-4 py-2 text-sm rounded-lg text-white font-medium disabled:opacity-50"
+                        style={{ backgroundColor: 'var(--bfp-maroon)' }}
+                    >
+                        {saving ? 'Logging…' : 'Log breach'}
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
+}
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function BreachNotificationsPage() {
@@ -337,6 +495,9 @@ export default function BreachNotificationsPage() {
 
     // Status advance modal state
     const [advanceTarget, setAdvanceTarget] = useState<Breach | null>(null);
+
+    // Manual breach entry
+    const [showLogBreach, setShowLogBreach] = useState(false);
 
     // Feedback state
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -496,15 +657,39 @@ export default function BreachNotificationsPage() {
                             </p>
                         </div>
                     </div>
-                    <button
-                        onClick={loadAll}
-                        className="text-sm px-4 py-2 rounded-lg font-medium transition-colors"
-                        style={{ backgroundColor: 'var(--bfp-maroon)', color: '#ffffff' }}
-                    >
-                        Refresh
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setShowLogBreach(true)}
+                            disabled={!isOnline}
+                            title={isOnline ? 'Record a breach manually' : 'Reconnect to log a breach'}
+                            className="flex items-center gap-1 text-sm px-4 py-2 rounded-lg font-medium transition-colors border disabled:opacity-50"
+                            style={{ borderColor: 'var(--bfp-maroon)', color: 'var(--bfp-maroon)' }}
+                            data-testid="log-breach-button"
+                        >
+                            <Plus className="w-4 h-4" /> Log breach
+                        </button>
+                        <button
+                            onClick={loadAll}
+                            className="text-sm px-4 py-2 rounded-lg font-medium transition-colors"
+                            style={{ backgroundColor: 'var(--bfp-maroon)', color: '#ffffff' }}
+                        >
+                            Refresh
+                        </button>
+                    </div>
                 </div>
             </div>
+
+            {showLogBreach && (
+                <LogBreachModal
+                    onClose={() => setShowLogBreach(false)}
+                    onCreated={(created) => {
+                        setShowLogBreach(false);
+                        setBreaches((prev) => [created, ...prev]);
+                        setSuccessMessage(`Breach #${created.breach_id} logged. The 72-hour NPC deadline is now running.`);
+                        setTimeout(() => setSuccessMessage(null), 6000);
+                    }}
+                />
+            )}
 
             {/* Success banner */}
             {successMessage && (
@@ -594,7 +779,7 @@ export default function BreachNotificationsPage() {
                             <thead>
                                 <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '1px solid var(--border-color)' }}>
                                     <th className="px-4 py-3 text-left font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Breach #</th>
-                                    <th className="px-4 py-3 text-left font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Threat Log</th>
+                                    <th className="px-4 py-3 text-left font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Source Log</th>
                                     <th className="px-4 py-3 text-left font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Detected</th>
                                     <th className="px-4 py-3 text-left font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>NPC Deadline</th>
                                     <th className="px-4 py-3 text-left font-semibold text-xs uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Status</th>

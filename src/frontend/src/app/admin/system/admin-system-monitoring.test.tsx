@@ -365,71 +365,34 @@ describe('M9a: System Monitoring — initial fetch and 60s auto-refresh', () => 
         connectivityState.isOnline = true;
     });
 
-    it('AI Inference and Network cards render with non-zero data', async () => {
-        const metricsWithExtras = {
-            ...mockSystemMetrics,
-            ai_inference: { avg_latency_ms: 3420, count: 5 },
-            network: { bytes_sent: 10485760, bytes_recv: 52428800 },
-        };
+    it('Network card renders usage and the removed AI / Suricata tiles are gone', async () => {
         mockFetchSystemHealth.mockResolvedValue(mockHealth);
-        mockFetchSystemMetrics.mockResolvedValue(metricsWithExtras);
+        mockFetchSystemMetrics.mockResolvedValue({
+            ...mockSystemMetrics,
+            network: { bytes_sent: 10485760, bytes_recv: 52428800 },
+        });
         mockFetchWorkerStatus.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
 
         vi.useRealTimers();
         render(<AdminSystemPage />);
 
         await waitFor(() => {
-            expect(screen.getByText('AI Inference')).toBeInTheDocument();
+            expect(screen.getByText('Network')).toBeInTheDocument();
         });
-        expect(screen.getByText('3420ms')).toBeInTheDocument();
-        expect(screen.getByText(/avg · 5 calls/)).toBeInTheDocument();
-        expect(screen.getByText('Network')).toBeInTheDocument();
-        // 10485760 / 1048576 = 10.0 MB, 52428800 / 1048576 = 50.0 MB
         expect(screen.getByText(/10\.0 MB sent/)).toBeInTheDocument();
         expect(screen.getByText(/50\.0 MB recv/)).toBeInTheDocument();
-    });
-
-    it('AI Inference card shows "No calls recorded" when count is 0', async () => {
-        const metricsNoInference = {
-            ...mockSystemMetrics,
-            ai_inference: { avg_latency_ms: null, count: 0 },
-            network: { bytes_sent: 0, bytes_recv: 0 },
-        };
-        mockFetchSystemHealth.mockResolvedValue(mockHealth);
-        mockFetchSystemMetrics.mockResolvedValue(metricsNoInference);
-        mockFetchWorkerStatus.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
-
-        vi.useRealTimers();
-        render(<AdminSystemPage />);
-
-        await waitFor(() => {
-            expect(screen.getByText('No calls recorded')).toBeInTheDocument();
-        });
-    });
-
-    it('renders "No calls recorded" when ai_inference is null (not just zero-count)', async () => {
-        const metricsNullInference = {
-            ...mockSystemMetrics,
-            ai_inference: null,
-            network: { bytes_sent: 0, bytes_recv: 0 },
-        };
-        mockFetchSystemHealth.mockResolvedValue(mockHealth);
-        mockFetchSystemMetrics.mockResolvedValue(metricsNullInference);
-        mockFetchWorkerStatus.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
-
-        vi.useRealTimers();
-        render(<AdminSystemPage />);
-
-        await waitFor(() => {
-            expect(screen.getByText('No calls recorded')).toBeInTheDocument();
-        });
-        expect(screen.queryByText(/NaN/)).toBeNull();
+        expect(screen.queryByText('AI Inference')).not.toBeInTheDocument();
+        expect(screen.queryByText(/Suricata/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Ollama/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Threat Telemetry/i)).not.toBeInTheDocument();
+        expect(screen.getByText('PostgreSQL')).toBeInTheDocument();
+        expect(screen.getByText('Redis')).toBeInTheDocument();
+        expect(screen.getByText('Keycloak')).toBeInTheDocument();
     });
 
     it('renders "N/A" when network is null', async () => {
         const metricsNullNetwork = {
             ...mockSystemMetrics,
-            ai_inference: { avg_latency_ms: null, count: 0 },
             network: null,
         };
         mockFetchSystemHealth.mockResolvedValue(mockHealth);

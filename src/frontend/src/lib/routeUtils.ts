@@ -1,41 +1,18 @@
 /**
- * Route constants and helpers for the public/civilian surface.
- * Centralises route matching used by LayoutShell to avoid duplication.
- * Issue #609 (PR feat/609-shared-header-nav)
+ * Route constants and helpers for the unauthenticated surface.
+ *
+ * Turnover build: the civilian/public portal is gone. Only the sign-in screen, the OIDC callback
+ * and the static privacy notice (RA 10173) are reachable without a session. Every other removed
+ * public URL is redirected to /login by next.config.ts.
  */
 
-export const PUBLIC_ROUTES = [
-  '/',
-  '/login',
-  '/register',
-  '/report',
-  '/information',
-  '/incidents',
-  '/callback',
-  '/verify-sent',
-  '/verify',
-] as const satisfies readonly string[];
+export const PUBLIC_ROUTES = ['/login', '/callback'] as const satisfies readonly string[];
 
-export const PUBLIC_ROUTE_PREFIXES = [
-  '/tracking',
-  '/fire-stations',
-  '/privacy',
-] as const satisfies readonly string[];
-
-export const CIVILIAN_ROUTES = [
-  '/contributor',
-  '/information',
-] as const satisfies readonly string[];
+export const PUBLIC_ROUTE_PREFIXES = ['/privacy'] as const satisfies readonly string[];
 
 export function isPublicRoute(pathname: string): boolean {
   return (
     (PUBLIC_ROUTES as readonly string[]).includes(pathname) ||
-    (PUBLIC_ROUTE_PREFIXES as readonly string[]).some((prefix) =>
-      pathname.startsWith(prefix),
-    )
+    (PUBLIC_ROUTE_PREFIXES as readonly string[]).some((prefix) => pathname.startsWith(prefix))
   );
-}
-
-export function isCivilianRoute(pathname: string): boolean {
-  return (CIVILIAN_ROUTES as readonly string[]).includes(pathname);
 }

@@ -8,7 +8,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   apiFetch,
-  submitCivilianReport,
   fetchHeatmapData,
   fetchTrendData,
   fetchComparativeData,
@@ -16,10 +15,8 @@ import {
   commitAforImport,
   fetchRegionalIncidents,
   fetchRegionalIncident,
-  fetchAdminSecurityLogs,
 } from './api';
 import { fetchHeatmapData as fetchHeatmapDataFromSlice } from './api/analytics';
-import { submitCivilianReport as submitCivilianReportFromSlice } from './api/civilian';
 import { fetchRegionalIncidents as fetchRegionalIncidentsFromSlice } from './api/regional';
 import {
   buildRegionalIncidentsQueryString,
@@ -97,113 +94,7 @@ describe('apiFetch content-type handling', () => {
 describe('domain API slices', () => {
   it('keep compatibility exports aligned with domain slice exports', () => {
     expect(fetchHeatmapDataFromSlice).toBe(fetchHeatmapData);
-    expect(submitCivilianReportFromSlice).toBe(submitCivilianReport);
     expect(fetchRegionalIncidentsFromSlice).toBe(fetchRegionalIncidents);
-  });
-});
-
-describe('fetchAdminSecurityLogs response parsing', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('parses paginated admin envelope {items: [...], total} ', async () => {
-    const responseBody = {
-      items: [{ log_id: 101, severity_level: 'HIGH' }],
-      total: 1,
-      limit: 20,
-      offset: 0,
-    };
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(responseBody),
-      text: () => Promise.resolve(JSON.stringify(responseBody)),
-    });
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const result = await fetchAdminSecurityLogs();
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0]).toMatchObject({ log_id: 101, severity_level: 'HIGH' });
-    expect(result.total).toBe(1);
-  });
-
-  it('keeps backward compatibility for {data: [...]} responses', async () => {
-    const responseBody = { data: [{ log_id: 7 }] };
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(responseBody),
-      text: () => Promise.resolve(JSON.stringify(responseBody)),
-    });
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const result = await fetchAdminSecurityLogs();
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0]).toMatchObject({ log_id: 7 });
-  });
-});
-
-describe('submitCivilianReport', () => {
-  let fetchSpy: ReturnType<typeof vi.fn>;
-
-  const civilianReportResponse = {
-    report_id: 1,
-    latitude: 14.5995,
-    longitude: 120.9842,
-    description: 'Fire in building',
-    trust_score: 0,
-    status: 'PENDING',
-    created_at: '2025-01-01T00:00:00Z',
-  };
-
-  beforeEach(() => {
-    fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(civilianReportResponse),
-      text: () => Promise.resolve(JSON.stringify(civilianReportResponse)),
-    });
-    vi.stubGlobal('fetch', fetchSpy);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('calls POST /civilian/reports (unauthenticated endpoint)', async () => {
-    await submitCivilianReport({
-      latitude: 14.5995,
-      longitude: 120.9842,
-      description: 'Fire in building',
-    });
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, options] = fetchSpy.mock.calls[0];
-    expect(url).toMatch(/\/civilian\/reports$/);
-    expect(options?.method).toBe('POST');
-  });
-
-  it('does NOT attach Authorization header or Keycloak token', async () => {
-    await submitCivilianReport({
-      latitude: 14.5995,
-      longitude: 120.9842,
-      description: 'Smoke visible',
-    });
-
-    const [, options] = fetchSpy.mock.calls[0];
-    const headers = (options?.headers as Record<string, string>) ?? {};
-    expect(headers['Authorization']).toBeUndefined();
-    expect(headers['authorization']).toBeUndefined();
-    expect(Object.keys(headers).some((k) => k.toLowerCase().includes('bearer'))).toBe(false);
-  });
-
-  it('uses credentials: omit to avoid sending auth cookies', async () => {
-    await submitCivilianReport({
-      latitude: 14.5995,
-      longitude: 120.9842,
-      description: 'Emergency',
-    });
-
-    const [, options] = fetchSpy.mock.calls[0];
-    expect(options?.credentials).toBe('omit');
   });
 });
 

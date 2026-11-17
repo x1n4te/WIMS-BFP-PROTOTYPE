@@ -103,6 +103,8 @@ The frontend supports offline-first operation for encoders, validators, analysts
 - `src/frontend/src/lib/api/offline*.ts` — Offline-aware read wrappers for analytics, regional, validator, and admin.
 - Public manifest at `src/frontend/public/manifest.webmanifest`.
 
+**Turnover build (Phase 4):** the frontend has no civilian/public surface. Only `/login`, `/callback` and the static `/privacy` notice are reachable unauthenticated; the removed public URLs (`/`, `/register`, `/report`, `/tracking*`, `/fire-stations`, `/information`, `/community*`, `/contributor`, `/incidents*`, `/home`, ...) redirect to `/login` via `next.config.ts`. Each role lands on its own dashboard (`lib/roleRedirect.ts`). The public offline-op and photo sync paths are gone from `syncEngine.ts` (the IndexedDB stores remain, unused, DB version unchanged). The service worker cache is `wims-bfp-cache-v14`; bump it whenever routes are removed so client PCs drop old pages. Firebase and Turnstile are removed.
+
 The offline/PWA architecture is expressed in the source modules themselves. Read `src/frontend/src/lib/offlineStore.ts`, `syncEngine.ts`, `connectivity.ts`, and the offline-aware API wrappers for the current state. See `docs/agents/gotchas.md` for known failure modes.
 
 ## Agent Routing

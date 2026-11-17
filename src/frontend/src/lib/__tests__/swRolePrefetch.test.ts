@@ -35,7 +35,6 @@ const WILDLAND_SHELL = '/dashboard/analyst/incidents/1/wildland';
 
 const ROLE_PREFETCH_ROUTES: Record<string, readonly string[]> = {
   SYSTEM_ADMIN: [
-    '/admin/monitoring',
     '/admin/anomalies',
     '/admin/breach',
     '/admin/system',
@@ -50,7 +49,6 @@ const ROLE_PREFETCH_ROUTES: Record<string, readonly string[]> = {
   ],
   NATIONAL_VALIDATOR: [
     '/dashboard/validator',
-    '/dashboard/validator/map',
     '/dashboard/validator/audit',
   ],
   REGIONAL_ENCODER: [
@@ -61,9 +59,8 @@ const ROLE_PREFETCH_ROUTES: Record<string, readonly string[]> = {
 // ── Test contract: role → route set ───────────────────────────────────────
 
 describe('ROLE_PREFETCH_ROTES — role → route set (Task 9)', () => {
-  it('SYSTEM_ADMIN maps to the 5 admin routes + /admin/system', () => {
+  it('SYSTEM_ADMIN maps to the 4 admin routes + /admin/system', () => {
     expect(ROLE_PREFETCH_ROUTES.SYSTEM_ADMIN).toEqual([
-      '/admin/monitoring',
       '/admin/anomalies',
       '/admin/breach',
       '/admin/system',
@@ -86,10 +83,9 @@ describe('ROLE_PREFETCH_ROTES — role → route set (Task 9)', () => {
     ]);
   });
 
-  it('NATIONAL_VALIDATOR maps to the 3 validator routes', () => {
+  it('NATIONAL_VALIDATOR maps to the 2 validator routes', () => {
     expect(ROLE_PREFETCH_ROUTES.NATIONAL_VALIDATOR).toEqual([
       '/dashboard/validator',
-      '/dashboard/validator/map',
       '/dashboard/validator/audit',
     ]);
   });
@@ -108,7 +104,6 @@ describe('ROLE_PREFETCH_ROTES — role → route set (Task 9)', () => {
     // Defensive: if a future refactor accidentally leaks admin routes into
     // a non-admin role's prefetch set, this catches it.
     const adminOnlyRoutes = [
-      '/admin/monitoring',
       '/admin/anomalies',
       '/admin/breach',
       '/admin/system/config',
@@ -123,7 +118,7 @@ describe('ROLE_PREFETCH_ROTES — role → route set (Task 9)', () => {
   });
 
   it('validator routes are scoped to NATIONAL_VALIDATOR (other roles do not include them)', () => {
-    const validatorRoutes = ['/dashboard/validator/map', '/dashboard/validator/audit'];
+    const validatorRoutes = ['/dashboard/validator/audit'];
     for (const [role, routes] of Object.entries(ROLE_PREFETCH_ROUTES)) {
       if (role === 'NATIONAL_VALIDATOR') continue;
       for (const route of validatorRoutes) {
@@ -150,7 +145,7 @@ describe('swRolePrefetch.test.ts ↔ public/sw.js sync guard', () => {
   });
 
   it('sw.js SYSTEM_ADMIN includes the 5 admin routes + /admin/system', () => {
-    expect(SW_SOURCE).toContain("'/admin/monitoring'");
+    expect(SW_SOURCE).not.toContain("'/admin/monitoring'");
     expect(SW_SOURCE).toContain("'/admin/anomalies'");
     expect(SW_SOURCE).toContain("'/admin/breach'");
     expect(SW_SOURCE).toContain("'/admin/system'");
@@ -160,7 +155,7 @@ describe('swRolePrefetch.test.ts ↔ public/sw.js sync guard', () => {
 
   it('sw.js NATIONAL_VALIDATOR includes the 3 validator routes', () => {
     expect(SW_SOURCE).toContain("'/dashboard/validator'");
-    expect(SW_SOURCE).toContain("'/dashboard/validator/map'");
+    expect(SW_SOURCE).not.toContain("'/dashboard/validator/map'");
     expect(SW_SOURCE).toContain("'/dashboard/validator/audit'");
   });
 
@@ -256,10 +251,9 @@ describe('prefetchRole — cache.match + Promise.allSettled contract', () => {
     );
     expect(fetched).toEqual([
       'https://wimsbfp.tech/dashboard/validator',
-      'https://wimsbfp.tech/dashboard/validator/map',
       'https://wimsbfp.tech/dashboard/validator/audit',
     ]);
-    expect(cache.store.size).toBe(3);
+    expect(cache.store.size).toBe(2);
   });
 
   it('skips already-cached routes (cache.match short-circuits fetch)', async () => {
@@ -279,11 +273,8 @@ describe('prefetchRole — cache.match + Promise.allSettled contract', () => {
       cache,
       fetchImpl,
     );
-    // Only the 2 uncached routes should have been fetched.
-    expect(fetched).toEqual([
-      'https://wimsbfp.tech/dashboard/validator/map',
-      'https://wimsbfp.tech/dashboard/validator/audit',
-    ]);
+    // Only the uncached route should have been fetched.
+    expect(fetched).toEqual(['https://wimsbfp.tech/dashboard/validator/audit']);
     // The pre-cached entry must NOT have been overwritten.
     expect(await cache.match('https://wimsbfp.tech/dashboard/validator')).toBe(preCached);
   });
@@ -291,7 +282,7 @@ describe('prefetchRole — cache.match + Promise.allSettled contract', () => {
   it('does NOT reject when a fetch fails (Promise.allSettled semantics)', async () => {
     const cache = makeFakeCache();
     const fetchImpl = async (url: string) => {
-      if (url.endsWith('/dashboard/validator/map')) {
+      if (url.endsWith('/dashboard/validator/audit')) {
         throw new TypeError('Failed to fetch');
       }
       return new Response('ok', { status: 200 });
@@ -306,10 +297,9 @@ describe('prefetchRole — cache.match + Promise.allSettled contract', () => {
         fetchImpl,
       )
     ).resolves.toBeUndefined();
-    // The 2 successful routes are cached; the failed one is not.
+    // The successful route is cached; the failed one is not.
     expect(await cache.match('https://wimsbfp.tech/dashboard/validator')).toBeDefined();
-    expect(await cache.match('https://wimsbfp.tech/dashboard/validator/audit')).toBeDefined();
-    expect(await cache.match('https://wimsbfp.tech/dashboard/validator/map')).toBeUndefined();
+    expect(await cache.match('https://wimsbfp.tech/dashboard/validator/audit')).toBeUndefined();
   });
 
   it('does not cache non-ok responses', async () => {

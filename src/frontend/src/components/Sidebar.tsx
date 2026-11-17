@@ -8,12 +8,8 @@ import { isFormDirty, setFormDirty } from '@/lib/formDirty';
 import { useOfflineWorkCounts } from '@/lib/useOfflineWorkCounts';
 import {
     LayoutDashboard,
-    Home,
-    Flame,
     FileText,
     Upload,
-    ClipboardList,
-    ShieldAlert,
     ShieldX,
     Users,
     Settings,
@@ -26,7 +22,6 @@ import {
     MapPinned,
     Search,
     TrendingUp,
-    Map,
     SlidersHorizontal,
     Activity,
     Timer,
@@ -215,24 +210,14 @@ function getNavSections(role: string | null, badgeCount: number = 0): NavSection
 
     const sections: NavSection[] = [];
 
-    // Common nav
-    const navItems: NavItem[] = [
-        { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-        { label: 'Operations', href: '/home', icon: Home },
-    ];
-
     if (role === 'SYSTEM_ADMIN') {
-        sections.push({ label: 'Navigation', items: navItems });
+        sections.push({ label: 'Navigation', items: [{ label: 'Admin Hub', href: '/admin/system', icon: LayoutDashboard }] });
         sections.push({
             label: 'Administration',
             items: [
                 { label: 'Governance', href: '/admin/system#governance', icon: Users },
-                { label: 'Security Monitoring', href: '/admin/monitoring', icon: ShieldAlert },
-                { label: 'Telemetry', href: '/admin/system#telemetry', icon: ShieldAlert },
                 { label: 'Breach Notifications', href: '/admin/breach', icon: ShieldX },
                 { label: 'Import AFOR', href: '/afor/import', icon: Upload },
-                { label: 'Civilian Management', href: '/admin/civilians', icon: Users },
-                { label: 'Information Management', href: '/admin/information', icon: FileText },
                 { label: 'System Audit', href: '/admin/audit', icon: Settings },
                 { label: 'Anomaly Detection', href: '/admin/anomalies', icon: Activity },
                 { label: 'Configuration', href: '/admin/system/config', icon: SlidersHorizontal },
@@ -248,7 +233,6 @@ function getNavSections(role: string | null, badgeCount: number = 0): NavSection
             label: 'Navigation',
             items: [
                 { label: 'Dashboard', href: '/dashboard/regional', icon: LayoutDashboard },
-                { label: 'Operations', href: '/home', icon: Home },
             ]
         });
 
@@ -284,15 +268,11 @@ function getNavSections(role: string | null, badgeCount: number = 0): NavSection
             label: 'Navigation',
             items: [
                 { label: 'Dashboard', href: '/dashboard/validator', icon: LayoutDashboard },
-                { label: 'Operations', href: '/home', icon: Home },
             ],
         });
         sections.push({
             label: 'Workflow',
             items: [
-                { label: 'Triage Queue', href: '/incidents/triage', icon: ClipboardList },
-                { label: 'Operational Map', href: '/dashboard/validator/map', icon: Map },
-                { label: 'Perimeter Drawing', href: '/dashboard/validator/perimeter-draw', icon: MapPinned },
                 { label: 'Audit Trail', href: '/dashboard/validator/audit', icon: History },
             ],
         });
@@ -304,7 +284,6 @@ function getNavSections(role: string | null, badgeCount: number = 0): NavSection
         sections.push({
             label: 'Navigation',
             items: [
-                { label: 'Operations', href: '/home', icon: Home },
                 { label: 'Analyst Dashboard', href: '/dashboard/analyst', icon: LayoutDashboard },
             ],
         });
@@ -323,35 +302,7 @@ function getNavSections(role: string | null, badgeCount: number = 0): NavSection
         return sections;
     }
 
-    // Civilian reporters use the shared public/contributor navbar (PublicHeader,
-    // see #609 + #615) instead of this sidebar — LayoutShell renders PublicHeader
-    // for isCivilianRoute() paths (/contributor, /information). This branch
-    // intentionally returns no sidebar items for this role; the Sidebar component
-    // is not mounted for civilian routes, but we keep the branch defined so
-    // getNavSections() never falls through to the generic "add Incidents" logic
-    // below for this role.
-    if (role === 'CIVILIAN_REPORTER') {
-        return sections;
-    }
-
-    // Add Incidents for non-system-admin and non-regional-encoder roles
-    navItems.push({ label: 'Incidents', href: '/incidents', icon: Flame });
-    sections.push({ label: 'Navigation', items: navItems });
-
-    // Role-specific management section
-    const mgmtItems: NavItem[] = [];
-
-    if (role === 'ENCODER') {
-        mgmtItems.push({ label: 'Manual Entry', href: '/incidents/create', icon: FileText });
-        mgmtItems.push({ label: 'Import Data', href: '/incidents/import', icon: Upload });
-        mgmtItems.push({ label: 'Triage Queue', href: '/incidents/triage', icon: ClipboardList });
-    }
-
-    if (mgmtItems.length > 0) {
-        sections.push({ label: 'Management', items: mgmtItems });
-    }
-
-    // All roles get a profile link
+    // Unknown role (e.g. a leftover legacy account): no navigation beyond the profile link.
     sections.push({ label: 'Account', items: [{ label: 'My Profile', href: '/profile', icon: UserCircle }] });
 
     return sections;

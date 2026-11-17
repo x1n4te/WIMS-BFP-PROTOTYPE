@@ -256,7 +256,7 @@ export default function PrivacyPage() {
       </main>
 
       <div className="px-4 pb-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
-        <Link href="/" className="font-semibold underline underline-offset-2" style={{ color: 'var(--primary)' }}>
+        <Link href="/login" className="font-semibold underline underline-offset-2" style={{ color: 'var(--primary)' }}>
           Return home
         </Link>
       </div>

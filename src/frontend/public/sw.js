@@ -9,7 +9,9 @@
  *   it delegates to the page rather than POSTing directly.
  */
 
-const CACHE_NAME = 'wims-bfp-cache-v13';
+// v14 (turnover Phase 4): the civilian/public pages, /home, /admin/monitoring and the validator map were removed; bumping
+// the version makes activate() delete the old cache so client PCs stop serving those pages.
+const CACHE_NAME = 'wims-bfp-cache-v14';
 // Separate long-lived cache for map tiles so they survive main-cache evictions.
 const TILE_CACHE_NAME = 'wims-tiles-v1';
 const SYNC_TAG = 'sync-pending-incidents';
@@ -43,7 +45,6 @@ const ANALYST_WORKFLOW_SLUGS = [
 
 const ROLE_PREFETCH_ROUTES = {
   SYSTEM_ADMIN: [
-    '/admin/monitoring',
     '/admin/anomalies',
     '/admin/breach',
     '/admin/system',
@@ -58,7 +59,6 @@ const ROLE_PREFETCH_ROUTES = {
   ],
   NATIONAL_VALIDATOR: [
     '/dashboard/validator',
-    '/dashboard/validator/map',
     '/dashboard/validator/audit',
   ],
   REGIONAL_ENCODER: [
@@ -82,12 +82,10 @@ const OFFLINE_HTML = `<!doctype html>
 </html>`;
 
 const urlsToCache = [
-  '/',
   '/dashboard',
   '/dashboard/regional',
   '/dashboard/regional/audit',
   INCIDENT_DETAIL_SHELL,
-  '/home',
   '/login',
   '/afor/create',
   '/afor/import',
@@ -118,17 +116,13 @@ const VALID_ANALYST_WORKFLOW_SLUGS = new Set([
   'incident-explorer',
 ]);
 
-// Public routes that may legitimately fall back to the '/' cache entry.
-// Authenticated routes (/afor, /dashboard, /admin, etc.) must NOT fall back
-// to '/' because that serves the civilian reporting form, which would appear
-// as the page content while the URL still shows an authenticated route.
+// Public routes that may legitimately fall back to the '/login' cache entry (the only
+// unauthenticated page). Authenticated routes (/afor, /dashboard, /admin, etc.) must NOT fall
+// back to it, or the sign-in screen would appear while the URL still shows a staff route.
 function isPublicPath(pathname) {
   return (
-    pathname === '/' ||
     pathname === '/login' ||
     pathname === '/callback' ||
-    pathname.startsWith('/tracking') ||
-    pathname.startsWith('/fire-stations') ||
     pathname.startsWith('/privacy')
   );
 }
@@ -311,11 +305,11 @@ self.addEventListener('fetch', (event) => {
         } else if (isCanonicalDetail) {
           detailShell = await cache.match(requestUrl.origin + INCIDENT_DETAIL_SHELL);
         }
-        // Only serve the '/' cache entry as a fallback for public routes.
+        // Only serve the cached '/login' entry as a fallback for public routes.
         // Serving it for authenticated routes (e.g. /afor/create) would render
-        // the civilian reporting form at the wrong URL, confusing the encoder.
+        // the sign-in screen at the wrong URL, confusing the encoder.
         const publicFallback = isPublicPath(requestUrl.pathname)
-          ? await cache.match('/')
+          ? await cache.match('/login')
           : null;
         return (
           (await cache.match(request)) ||

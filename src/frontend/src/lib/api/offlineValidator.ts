@@ -17,11 +17,8 @@ import {
 import {
   type AuditLogParams,
   type AuditResponse,
-  fetchOperationalMap,
   fetchValidatorAuditLogs,
-  type OperationalMapParams,
 } from './validator';
-import type { MapClusterItem } from './map';
 
 export interface OfflineQueueResult {
   queued: boolean;
@@ -39,7 +36,6 @@ const VALIDATOR_CACHE_TTL_MS = 30 * 60 * 1000;
 // window balances offline availability with freshness on reconnect.
 const VALIDATOR_READ_CACHE_TTL_MS = 60_000;
 
-const OFFLINE_VALIDATOR_MAP_ERROR =
   'Validator operational map is unavailable offline. Reconnect to refresh this view.';
 const OFFLINE_VALIDATOR_AUDIT_ERROR =
   'Validator audit logs are unavailable offline. Reconnect to refresh this view.';
@@ -211,20 +207,7 @@ export async function fetchValidatorQueueOfflineAware<T>(
   }
 }
 
-// ── Task 6: encrypted read wrappers (operational map + audit logs) ──
-
-export async function fetchOperationalMapOfflineAware(
-  params: OperationalMapParams,
-): Promise<OfflineResult<MapClusterItem[]>> {
-  return offlineAware(
-    'operational-map',
-    [params],
-    'validator',
-    VALIDATOR_READ_CACHE_TTL_MS,
-    () => fetchOperationalMap(params),
-    OFFLINE_VALIDATOR_MAP_ERROR,
-  );
-}
+// ── Encrypted read wrapper (audit logs) ──
 
 export async function fetchValidatorAuditLogsOfflineAware(
   params: AuditLogParams,

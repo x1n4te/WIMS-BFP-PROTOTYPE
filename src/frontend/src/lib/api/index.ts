@@ -13,10 +13,6 @@ export * from './backup';
 export * from './analytics';
 export { fetchAnalystIncidentWildlandDetailOfflineAware } from './analytics';
 export * from './breach';
-export * from './civilian';
-export * from './community';
-export * from './adminCommunity';
-export * from './contributor';
 export * from './reference';
 export {
   fetchRegionsOfflineAware,
@@ -24,13 +20,8 @@ export {
   fetchCitiesOfflineAware,
 } from './offlineReference';
 export * from './regional';
-export * from './triage';
-export * from './map';
-export * from './operations';
-export * from './perimeters';
 export * from './validator';
 export {
-  fetchOperationalMapOfflineAware,
   fetchValidatorAuditLogsOfflineAware,
 } from './offlineValidator';
 
@@ -45,8 +36,6 @@ export {
   fetchWorkerStatusOfflineAware,
   fetchActiveSessionsOfflineAware,
   fetchAuditLogsOfflineAware,
-  fetchAdminSecurityLogsOfflineAware,
-  fetchSecurityLogsSummaryOfflineAware,
   fetchAnomaliesOfflineAware,
   fetchBreachesOfflineAware,
   fetchAdminConfigOfflineAware,

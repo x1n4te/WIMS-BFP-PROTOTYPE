@@ -9,14 +9,11 @@ import {
     createAdminUser,
     resendAdminUserCredentials,
     setAdminUserTemporaryPassword,
-    fetchAdminSecurityLogs,
     fetchAuditLogsOfflineAware,
-    analyzeSecurityLog,
     fetchRegionsOfflineAware,
     fetchUserSessions,
     terminateUserSessions,
     KeycloakSession,
-    RelatedAuditItem,
     fetchActiveSessionsOfflineAware,
     revokeUserSessions,
     fetchSystemHealthOfflineAware,
@@ -42,7 +39,6 @@ import { useAutoRefresh } from '@/lib/useAutoRefresh';
 import { AutoRefreshToast } from '@/components/ui/AutoRefreshToast';
 import { getConnectivitySnapshot, subscribeConnectivity, probeConnectivity } from '@/lib/connectivity';
 import { resetFailedOp, deleteOfflineOp } from '@/lib/offlineStore';
-import { SuricataAlertModal } from './components/SuricataAlertModal';
 import { ActiveSession, Region } from '@/types/api';
 import ReportFilterBuilder from '@/components/admin/ReportFilterBuilder';
 import {
@@ -83,22 +79,6 @@ interface AdminUser {
     created_at: string | null;
 }
 
-interface SecurityLog {
-    log_id: number;
-    timestamp: string | null;
-    source_ip: string | null;
-    destination_ip: string | null;
-    suricata_sid: number | null;
-    severity_level: string | null;
-    raw_payload: string | null;
-    xai_narrative: string | null;
-    xai_confidence: number | null;
-    admin_action_taken: string | null;
-    resolved_at: string | null;
-    reviewed_by: string | null;
-    hitl_decision?: { action?: string; note?: string | null; reviewed_at?: string | null; reviewed_by?: string | null } | null;
-}
-
 interface AuditItem {
     audit_id: number;
     user_id: string | null;
@@ -114,7 +94,6 @@ interface SystemMetrics {
     cpu_percent: number;
     memory: { total_mb: number; used_mb: number; percent: number };
     disk: { total_gb: number; used_gb: number; percent: number };
-    ai_inference: { avg_latency_ms: number | null; count: number } | null;
     network: { bytes_sent: number; bytes_recv: number } | null;
 }
 
@@ -183,7 +162,6 @@ export default function AdminSystemPage() {
     const [connectivitySnapshot, setConnectivitySnapshot] = useState(getConnectivitySnapshot);
 
     const [users, setUsers] = useState<AdminUser[]>([]);
-    const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([]);
     const [auditLogs, setAuditLogs] = useState<{ items: AuditItem[]; total: number }>({ items: [], total: 0 });
     const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
     const [health, setHealth] = useState<{ status: string; components: Record<string, { status: string; latency_ms: number; detail?: string; error?: string }> } | null>(null);
@@ -201,23 +179,7 @@ export default function AdminSystemPage() {
     const [monitoringFromCache, setMonitoringFromCache] = useState(false);
     const [sessionsLastChecked, setSessionsLastChecked] = useState<Date | null>(null);
     const [sessionsFromCache, setSessionsFromCache] = useState(false);
-    const [securitySearchQ, setSecuritySearchQ] = useState('');
-
-    // Threat Telemetry filter & pagination state (#348)
-    const [telemetryPage, setTelemetryPage] = useState(0);
-    const [telemetryTotal, setTelemetryTotal] = useState(0);
-    const [telemetrySeverities, setTelemetrySeverities] = useState<Set<string>>(new Set());
-    const [telemetrySourceIp, setTelemetrySourceIp] = useState('');
-    const [telemetryDateFrom, setTelemetryDateFrom] = useState('');
-    const [telemetryDateTo, setTelemetryDateTo] = useState('');
-    const [telemetryError, setTelemetryError] = useState<string | null>(null);
-
-    const TELEMETRY_PAGE_SIZE = 20;
-    const securitySearchQRef = React.useRef(securitySearchQ);
-    securitySearchQRef.current = securitySearchQ;
-
     const [loadingUsers, setLoadingUsers] = useState(false);
-    const [loadingLogs, setLoadingLogs] = useState(false);
     const [loadingHighlights, setLoadingHighlights] = useState(false);
     const [loadingSessions, setLoadingSessions] = useState(false);
     const [loadingMonitoring, setLoadingMonitoring] = useState(true);
@@ -226,8 +188,6 @@ export default function AdminSystemPage() {
     const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
     const [confirmDeleteReportId, setConfirmDeleteReportId] = useState<number | null>(null);
     const [regions, setRegions] = useState<Region[]>([]);
-    const [selectedLog, setSelectedLog] = useState<SecurityLog | null>(null);
-    const [analyzingLogId, setAnalyzingLogId] = useState<number | null>(null);
     const [isRevoking, setIsRevoking] = useState<string | null>(null);
 
     // Sessions state
@@ -454,7 +414,6 @@ export default function AdminSystemPage() {
     useEffect(() => {
         if (role === 'SYSTEM_ADMIN') {
             loadUsers();
-            loadSecurityLogs();
             loadHighlightAudit();
             loadRegions();
             loadSessions();
@@ -688,63 +647,6 @@ export default function AdminSystemPage() {
         }
     };
 
-    const loadSecurityLogs = async () => {
-        setLoadingLogs(true);
-        setTelemetryError(null);
-        try {
-            const q = securitySearchQRef.current.trim();
-            const params: Record<string, unknown> = {
-                limit: TELEMETRY_PAGE_SIZE,
-                offset: telemetryPage * TELEMETRY_PAGE_SIZE,
-            };
-            if (q) params.q = q;
-            if (telemetrySeverities.size > 0) params.severity = Array.from(telemetrySeverities).join(',');
-            if (telemetrySourceIp.trim()) params.source_ip = telemetrySourceIp.trim();
-            if (telemetryDateFrom) params.date_from = telemetryDateFrom;
-            if (telemetryDateTo) params.date_to = telemetryDateTo;
-
-            const data = await fetchAdminSecurityLogs(params);
-            setSecurityLogs(data.items as SecurityLog[]);
-            setTelemetryTotal(data.total);
-        } catch {
-            setSecurityLogs([]);
-            setTelemetryTotal(0);
-            setTelemetryError('Failed to load security logs');
-        } finally {
-            setLoadingLogs(false);
-        }
-    };
-
-    // Auto-reload when telemetry filters change (#348)
-    const prevTelemetryKeyRef = React.useRef('');
-    useEffect(() => {
-        if (role !== 'SYSTEM_ADMIN') return;
-        const key = `${telemetryPage}|${Array.from(telemetrySeverities).sort().join(',')}|${telemetrySourceIp}|${telemetryDateFrom}|${telemetryDateTo}`;
-        if (key !== prevTelemetryKeyRef.current) {
-            prevTelemetryKeyRef.current = key;
-            loadSecurityLogs();
-        }
-    }, [role, telemetryPage, telemetrySeverities, telemetrySourceIp, telemetryDateFrom, telemetryDateTo]);
-
-    const handleToggleTelemetrySeverity = (sev: string) => {
-        setTelemetrySeverities((prev) => {
-            const next = new Set(prev);
-            if (next.has(sev)) next.delete(sev);
-            else next.add(sev);
-            return next;
-        });
-        setTelemetryPage(0);
-    };
-
-    const handleClearTelemetryFilters = () => {
-        setSecuritySearchQ('');
-        setTelemetryPage(0);
-        setTelemetrySeverities(new Set());
-        setTelemetrySourceIp('');
-        setTelemetryDateFrom('');
-        setTelemetryDateTo('');
-        setTelemetryError(null);
-    };
 
     const loadHighlightAudit = async () => {
         setLoadingHighlights(true);
@@ -859,28 +761,6 @@ export default function AdminSystemPage() {
         }
     };
 
-    const handleAnalyze = async (log: SecurityLog) => {
-        if (log.xai_narrative) return;
-        setAnalyzingLogId(log.log_id);
-        try {
-            const updated = await analyzeSecurityLog(log.log_id);
-            setSecurityLogs((prev) =>
-                prev.map((l) =>
-                    l.log_id === log.log_id
-                        ? { ...l, xai_narrative: updated.xai_narrative, xai_confidence: updated.xai_confidence }
-                        : l
-                )
-            );
-            if (selectedLog?.log_id === log.log_id) {
-                setSelectedLog((s) => (s && s.log_id === log.log_id ? { ...s, ...updated } : s));
-            }
-        } catch (e: unknown) {
-            setToast({ type: 'error', text: (e as { message?: string })?.message ?? 'Failed to analyze' });
-        } finally {
-            setAnalyzingLogId(null);
-        }
-    };
-
     const handlePruneWorkers = async () => {
         setConfirmPruneWorkers(false);
         setPruningWorkers(true);
@@ -938,7 +818,7 @@ export default function AdminSystemPage() {
             <AutoRefreshToast pending={autoRefreshPending} refreshing={autoRefreshing} justRefreshed={autoRefreshDone} />
             <div>
                 <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>System Admin Hub</h1>
-                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Identity governance, threat telemetry, and system audit.</p>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>Identity governance, system health, and system audit.</p>
             </div>
 
             {(!networkStatus.isOnline || connectivitySnapshot.state === 'offline') && (
@@ -1110,21 +990,6 @@ export default function AdminSystemPage() {
                                         </div>
                                     </div>
                                     <div className="p-4 rounded-lg" style={{ backgroundColor: '#f8f9fa', border: '1px solid var(--border-color)' }}>
-                                        <div className="text-sm text-gray-500">AI Inference</div>
-                                        {systemMetrics.ai_inference && systemMetrics.ai_inference.count > 0 ? (
-                                            <>
-                                                <div className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                                                    {systemMetrics.ai_inference.avg_latency_ms}ms
-                                                </div>
-                                                <div className="text-xs text-gray-400">
-                                                    avg · {systemMetrics.ai_inference.count} call{systemMetrics.ai_inference.count !== 1 ? 's' : ''}
-                                                </div>
-                                            </>
-                                        ) : (
-                                            <div className="text-sm text-gray-400 mt-1">No calls recorded</div>
-                                        )}
-                                    </div>
-                                    <div className="p-4 rounded-lg" style={{ backgroundColor: '#f8f9fa', border: '1px solid var(--border-color)' }}>
                                         <div className="text-sm text-gray-500">Network</div>
                                         {systemMetrics.network ? (
                                             <>
@@ -1184,22 +1049,7 @@ export default function AdminSystemPage() {
                                             </div>
                                             <span className={`w-3 h-3 rounded-full ${health.components.keycloak?.status === 'HEALTHY' ? 'bg-green-500' : 'bg-red-500'}`} />
                                         </div>
-                                        <div className="p-4 rounded-lg flex items-center justify-between" style={{ backgroundColor: '#f8f9fa', border: '1px solid var(--border-color)' }}>
-                                            <div className="flex items-center gap-3">
-                                                <ShieldAlert className="w-5 h-5 text-gray-500" />
-                                                <div>
-                                                    <div className="text-sm font-semibold">Suricata IDS</div>
-                                                    <div className="text-xs text-gray-500">{health.components.suricata?.latency_ms ?? 0}ms</div>
-                                                    {health.components.suricata?.detail && (
-                                                        <div className={`text-xs mt-0.5 font-medium ${getComponentStatusTextColor(health.components.suricata?.status ?? '')}`}>
-                                                            {health.components.suricata.detail}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <span className={`w-3 h-3 rounded-full ${getComponentStatusColor(health.components.suricata?.status ?? '')}`} />
-                                        </div>
-                                    </div>
+                                                                            </div>
                                 </div>
                             )}
 
@@ -1588,240 +1438,6 @@ export default function AdminSystemPage() {
                 )}
             </section>
 
-            <section id="telemetry" className="card overflow-hidden">
-                <div className="card-header flex items-center justify-between" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
-                    <div className="flex items-center gap-2">
-                        <ShieldAlert className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
-                        <span>Threat Telemetry</span>
-                    </div>
-                    <button onClick={() => loadSecurityLogs()} disabled={loadingLogs} className="flex items-center gap-1 text-sm font-medium disabled:opacity-50" style={{ color: 'var(--bfp-maroon)' }}>
-                        <RefreshCw className={`w-4 h-4 ${loadingLogs ? 'animate-spin' : ''}`} /> Refresh
-                    </button>
-                </div>
-                {/* Search bar */}
-                <form
-                    onSubmit={e => { e.preventDefault(); loadSecurityLogs(); }}
-                    className="px-6 py-3 border-b border-gray-100 flex items-center gap-2"
-                >
-                    <input
-                        type="text"
-                        aria-label="Search security logs"
-                        value={securitySearchQ}
-                        onChange={e => setSecuritySearchQ(e.target.value)}
-                        placeholder="Search logs (narrative, IP, severity…)"
-                        className="flex-1 border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2"
-                        style={{ '--tw-ring-color': 'var(--sidebar-bg)' } as React.CSSProperties}
-                    />
-                    <button
-                        type="submit"
-                        className="flex items-center gap-1 px-3 py-1.5 rounded text-sm text-white"
-                        style={{ backgroundColor: 'var(--sidebar-bg)' }}
-                        aria-label="Search security logs"
-                    >
-                        <Search className="w-3 h-3" />
-                    </button>
-                    {securitySearchQ && (
-                        <button
-                            type="button"
-                            onClick={() => { setSecuritySearchQ(''); securitySearchQRef.current = ''; loadSecurityLogs(); }}
-                            className="text-xs px-2 py-1 text-gray-500 hover:text-gray-700"
-                        >
-                            Clear
-                        </button>
-                    )}
-                </form>
-
-                {/* Advanced filter bar (#348) */}
-                <div className="px-6 py-3 border-b border-gray-100 space-y-3">
-                    {/* Severity chips */}
-                    <div>
-                        <span className="text-xs font-medium text-gray-500 block mb-2">Severity</span>
-                        <div className="flex gap-2 flex-wrap">
-                            {(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const).map((sev) => {
-                                const active = telemetrySeverities.has(sev);
-                                const chipColors: Record<string, string> = {
-                                    LOW: active ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600',
-                                    MEDIUM: active ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-600',
-                                    HIGH: active ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-600',
-                                    CRITICAL: active ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600',
-                                };
-                                return (
-                                    <button
-                                        key={sev}
-                                        type="button"
-                                        onClick={() => handleToggleTelemetrySeverity(sev)}
-                                        className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${chipColors[sev]}`}
-                                    >
-                                        {sev}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-                    {/* Source IP + Date range on one row */}
-                    <div className="flex flex-wrap gap-3">
-                        <div className="flex-1 min-w-[160px]">
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Source IP</label>
-                            <input
-                                type="text"
-                                value={telemetrySourceIp}
-                                onChange={(e) => { setTelemetrySourceIp(e.target.value); setTelemetryPage(0); }}
-                                onBlur={() => loadSecurityLogs()}
-                                onKeyDown={(e) => { if (e.key === 'Enter') loadSecurityLogs(); }}
-                                placeholder="e.g. 192.168.1.1"
-                                className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2"
-                                style={{ '--tw-ring-color': 'var(--sidebar-bg)' } as React.CSSProperties}
-                            />
-                        </div>
-                        <div className="min-w-[140px]">
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Date From</label>
-                            <input
-                                type="text"
-                                value={telemetryDateFrom}
-                                onChange={(e) => { setTelemetryDateFrom(e.target.value); setTelemetryPage(0); }}
-                                onBlur={() => loadSecurityLogs()}
-                                onKeyDown={(e) => { if (e.key === 'Enter') loadSecurityLogs(); }}
-                                placeholder="YYYY-MM-DD"
-                                className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2"
-                                style={{ '--tw-ring-color': 'var(--sidebar-bg)' } as React.CSSProperties}
-                            />
-                        </div>
-                        <div className="min-w-[140px]">
-                            <label className="block text-xs font-medium text-gray-500 mb-1">Date To</label>
-                            <input
-                                type="text"
-                                value={telemetryDateTo}
-                                onChange={(e) => { setTelemetryDateTo(e.target.value); setTelemetryPage(0); }}
-                                onBlur={() => loadSecurityLogs()}
-                                onKeyDown={(e) => { if (e.key === 'Enter') loadSecurityLogs(); }}
-                                placeholder="YYYY-MM-DD"
-                                className="w-full border border-gray-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2"
-                                style={{ '--tw-ring-color': 'var(--sidebar-bg)' } as React.CSSProperties}
-                            />
-                        </div>
-                    </div>
-                    {/* Reset controls */}
-                    {(telemetrySeverities.size > 0 || telemetrySourceIp || telemetryDateFrom || telemetryDateTo || securitySearchQ) && (
-                        <div className="pt-1">
-                            <button
-                                type="button"
-                                onClick={handleClearTelemetryFilters}
-                                className="text-xs px-3 py-1.5 rounded-md font-medium transition-colors"
-                                style={{ backgroundColor: 'var(--bfp-maroon)', color: '#ffffff' }}
-                            >
-                                Reset All Filters
-                            </button>
-                        </div>
-                    )}
-                </div>
-
-                {/* Error state (#348) */}
-                {telemetryError && !loadingLogs && (
-                    <div className="mx-6 mt-3 p-3 rounded-md text-sm font-medium bg-red-50 border border-red-200 text-red-800" role="alert">
-                        {telemetryError}
-                    </div>
-                )}
-
-                <div className="overflow-x-auto">
-                    {/* Loading skeleton */}
-                    {loadingLogs ? (
-                        <div className="p-4 space-y-3 animate-pulse">
-                            {Array.from({ length: 5 }).map((_, i) => (
-                                <div key={i} className="flex gap-4">
-                                    <div className="h-6 bg-gray-100 rounded w-16" />
-                                    <div className="h-6 bg-gray-100 rounded w-40" />
-                                    <div className="h-6 bg-gray-100 rounded w-48 flex-1" />
-                                    <div className="h-6 bg-gray-100 rounded w-12" />
-                                    <div className="h-6 bg-gray-100 rounded w-20" />
-                                    <div className="h-6 bg-gray-100 rounded w-12" />
-                                </div>
-                            ))}
-                        </div>
-                    ) : securityLogs.length === 0 ? (
-                        /* Empty state */
-                        <div className="p-8 text-center text-gray-500">
-                            {telemetrySeverities.size > 0 || telemetrySourceIp || telemetryDateFrom || telemetryDateTo || securitySearchQ
-                                ? 'No alerts match the current filters.'
-                                : 'No Suricata alerts.'}
-                        </div>
-                    ) : (
-                        <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source → Dest</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SID</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">View</th>
-                                </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {securityLogs.map((log) => (
-                                    <tr key={log.log_id} className="hover:bg-gray-50">
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${log.severity_level === 'CRITICAL' ? 'bg-red-100 text-red-800' : log.severity_level === 'HIGH' ? 'bg-orange-100 text-orange-800' : log.severity_level === 'MEDIUM' ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800'}`}>
-                                                {log.severity_level ?? '—'}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600">{log.source_ip ?? '—'} → {log.destination_ip ?? '—'}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.suricata_sid ?? '—'}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm">{log.admin_action_taken ? <span className="text-green-700 font-medium">{log.admin_action_taken}</span> : <span className="text-gray-400 italic">Unreviewed</span>}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-right">
-                                            <div className="flex items-center justify-end gap-2">
-                                                {!log.xai_narrative && (
-                                                    <button
-                                                        onClick={() => handleAnalyze(log)}
-                                                        disabled={analyzingLogId === log.log_id}
-                                                        className="text-purple-600 hover:text-purple-800 text-sm font-medium flex items-center gap-1 disabled:opacity-50"
-                                                    >
-                                                        <Sparkles className="w-4 h-4" />
-                                                        {analyzingLogId === log.log_id ? 'Analyzing…' : 'Analyze with AI'}
-                                                    </button>
-                                                )}
-                                                <button onClick={() => setSelectedLog(log)} className="text-blue-600 hover:text-blue-800 text-sm font-medium">View</button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
-
-                {/* Pagination (#348) */}
-                {!loadingLogs && telemetryTotal > 0 && (
-                    <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
-                        <span className="text-xs text-gray-500">
-                            Showing {Math.min((telemetryPage * TELEMETRY_PAGE_SIZE) + 1, telemetryTotal)}–{Math.min((telemetryPage + 1) * TELEMETRY_PAGE_SIZE, telemetryTotal)} of {telemetryTotal}
-                        </span>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={() => setTelemetryPage((p) => Math.max(0, p - 1))}
-                                disabled={telemetryPage === 0}
-                                className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
-                                style={{ backgroundColor: 'var(--bfp-maroon)', color: '#ffffff' }}
-                            >
-                                Previous
-                            </button>
-                            <span className="text-xs text-gray-500">
-                                Page {telemetryPage + 1} of {Math.max(1, Math.ceil(telemetryTotal / TELEMETRY_PAGE_SIZE))}
-                            </span>
-                            <button
-                                onClick={() => setTelemetryPage((p) => p + 1)}
-                                disabled={(telemetryPage + 1) * TELEMETRY_PAGE_SIZE >= telemetryTotal}
-                                className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-50"
-                                style={{ backgroundColor: 'var(--bfp-maroon)', color: '#ffffff' }}
-                            >
-                                Next
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </section>
-
-            {/* System Audit — dedicated page CTA (#352) */}
             <section id="audit" className="card overflow-hidden">
                 <div className="card-header flex items-center gap-2" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
                     <FileText className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
@@ -1933,7 +1549,7 @@ export default function AdminSystemPage() {
                 <div className="card-header flex items-center justify-between" style={{ borderLeft: '4px solid var(--sidebar-bg)' }}>
                     <div className="flex items-center gap-2">
                         <ShieldAlert className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
-                        <span>Alert Action Highlights</span>
+                        <span>Security Action Highlights</span>
                     </div>
                     <button onClick={loadHighlightAudit} disabled={loadingHighlights} className="flex items-center gap-1 text-sm font-medium disabled:opacity-50" style={{ color: 'var(--bfp-maroon)' }}>
                         <RefreshCw className={`w-4 h-4 ${loadingHighlights ? 'animate-spin' : ''}`} /> Refresh
@@ -1941,10 +1557,10 @@ export default function AdminSystemPage() {
                 </div>
                 <div className="overflow-x-auto">
                     {(() => {
-                        const highlightActions = new Set(['HITL_REVIEW', 'CREATE_INCIDENT_FROM_ALERT', 'BREACH_DETECTED']);
+                        const highlightActions = new Set(['BREACH_DETECTED', 'BREACH_STATUS_UPDATE', 'SET_TEMPORARY_PASSWORD', 'PASSWORD_EXPIRY_FLAGGED']);
                         const highlights = auditLogs.items.filter(a => a.action_type && highlightActions.has(a.action_type));
                         if (highlights.length === 0) {
-                            return <div className="p-8 text-center text-gray-500">No security action highlights yet. Admin HITL decisions, incident creation from alerts, and breach detections will appear here.</div>;
+                            return <div className="p-8 text-center text-gray-500">No security action highlights yet. Breach records, admin-set temporary passwords and password-expiry flags will appear here.</div>;
                         }
                         return (
                             <table className="min-w-full divide-y divide-gray-200">
@@ -1963,23 +1579,18 @@ export default function AdminSystemPage() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{a.timestamp ? new Date(a.timestamp).toLocaleString() : '\u2014'}</td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                 <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                                                    a.action_type === 'HITL_REVIEW' ? 'bg-blue-100 text-blue-800' :
-                                                    a.action_type === 'CREATE_INCIDENT_FROM_ALERT' ? 'bg-orange-100 text-orange-800' :
-                                                    'bg-red-100 text-red-800'
+                                                    a.action_type === 'BREACH_DETECTED' ? 'bg-red-100 text-red-800' :
+                                                    a.action_type === 'BREACH_STATUS_UPDATE' ? 'bg-orange-100 text-orange-800' :
+                                                    'bg-blue-100 text-blue-800'
                                                 }`}>
-                                                    {a.action_type === 'HITL_REVIEW' ? 'HITL Review' :
-                                                     a.action_type === 'CREATE_INCIDENT_FROM_ALERT' ? 'Incident Created' :
-                                                     'Breach Detected'}
+                                                    {a.action_type === 'BREACH_DETECTED' ? 'Breach Detected' :
+                                                     a.action_type === 'BREACH_STATUS_UPDATE' ? 'Breach Updated' :
+                                                     a.action_type === 'SET_TEMPORARY_PASSWORD' ? 'Temporary Password Set' :
+                                                     'Password Expiry Flagged'}
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                {a.table_affected === 'security_threat_logs' && a.record_id ? (
-                                                    <a href={`#telemetry`} className="text-blue-600 hover:underline font-mono text-xs" onClick={(e) => { e.preventDefault(); setSecuritySearchQ(''); securitySearchQRef.current = ''; loadSecurityLogs(); }}>
-                                                        alert #{a.record_id}
-                                                    </a>
-                                                ) : (
-                                                    <span className="text-gray-400">{a.table_affected ?? '\u2014'}</span>
-                                                )}
+                                                <span className="text-gray-400">{a.table_affected ?? '\u2014'}</span>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{a.record_id ?? '\u2014'}</td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
@@ -2310,22 +1921,6 @@ export default function AdminSystemPage() {
                 </div>
             )}
 
-            {selectedLog && (
-                <SuricataAlertModal
-                    log={selectedLog}
-                    onClose={() => setSelectedLog(null)}
-                    onDecisionComplete={(logId, updatedLog) => {
-                        setSecurityLogs((prev) =>
-                            prev.map((l) =>
-                                l.log_id === logId ? { ...l, ...updatedLog } : l
-                            )
-                        );
-                        setSelectedLog((prev) =>
-                            prev && prev.log_id === logId ? { ...prev, ...updatedLog } : prev
-                        );
-                    }}
-                />
-            )}
 
             {/* Sessions Modal */}
             {selectedSessionUser && (

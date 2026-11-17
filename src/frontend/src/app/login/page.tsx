@@ -1,28 +1,12 @@
 'use client';
 
-import { Suspense, useEffect } from 'react';
+import { useEffect } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { defaultRouteForRole } from '@/lib/roleRedirect';
-import { ArrowLeft, CheckCircle, Lock } from 'lucide-react';
+import { CheckCircle, Lock } from 'lucide-react';
 import '@/styles/public-surface.css';
-
-function RegistrationBanner() {
-    const searchParams = useSearchParams();
-    const registered = searchParams.get('registered') === 'true';
-    if (!registered) return null;
-    return (
-        <div
-            role="alert"
-            className="ps-registration-banner"
-        >
-            <CheckCircle className="w-4 h-4" aria-hidden />
-            Account created! Sign in to continue.
-        </div>
-    );
-}
 
 function LoginInner() {
     const router = useRouter();
@@ -45,11 +29,6 @@ function LoginInner() {
 
     return (
         <div className="ps-auth-split ps-auth-login">
-            <Link href="/" className="ps-login-return" data-testid="login-return">
-                <ArrowLeft className="w-4 h-4" aria-hidden />
-                Return to WIMS-BFP
-            </Link>
-
             {/* Left Panel — BFP Branding */}
             <div className="ps-auth-branding">
                 <div className="ps-branding-content">
@@ -89,10 +68,6 @@ function LoginInner() {
                         </p>
                     </div>
 
-                    <Suspense fallback={null}>
-                        <RegistrationBanner />
-                    </Suspense>
-
                     <div className="ps-form-card">
                         <div className="ps-sso-notice">
                             <Lock className="w-4 h-4 ps-sso-icon" aria-hidden />
@@ -111,13 +86,6 @@ function LoginInner() {
                             Continue to secure sign-in
                         </button>
                     </div>
-
-                    <p className="ps-form-foot">
-                        New to WIMS-BFP?{' '}
-                        <Link href="/register" className="ps-form-link">
-                            Create a reporter account
-                        </Link>
-                    </p>
 
                     <p className="ps-copyright">
                         &copy; 2026 Bureau of Fire Protection &mdash; All rights reserved.

@@ -21,7 +21,6 @@ import {
 
 import { API_BASE, ApiRequestError, apiFetch, errorMessageFromJson } from './transport';
 import { publicApiFetch, fetchWithOptionalAuth } from './public-transport';
-import type { MapClusterItem, StationItem } from './map';
 
 /** Fetch incidents list - returns [] on error or 404 */
 export async function fetchIncidents(params?: { region_id?: number; category?: string; from?: string; to?: string; type?: string }): Promise<IncidentListItem[]> {
@@ -353,29 +352,6 @@ export async function changeMyPassword(payload: {
   });
 }
 
-/** Fetch security logs (admin) - ordered by timestamp desc, or by ts_rank when q is set, supports severity filter.
- * Returns the full paginated response including `total` so callers can correctly disable Next when on the last page. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function fetchAdminSecurityLogs(params?: { q?: string; severity?: string; classification?: string; limit?: number; offset?: number; source_ip?: string; date_from?: string; date_to?: string; show_dismissed?: boolean | string }): Promise<{ items: any[]; total: number }> {
-  const search = new URLSearchParams();
-  if (params?.q) search.set('q', params.q);
-  if (params?.severity) search.set('severity', params.severity);
-  if (params?.classification) search.set('classification', params.classification);
-  if (params?.limit != null) search.set('limit', String(params.limit));
-  if (params?.offset != null) search.set('offset', String(params.offset));
-  if (params?.source_ip) search.set('source_ip', params.source_ip);
-  if (params?.date_from) search.set('date_from', params.date_from);
-  if (params?.date_to) search.set('date_to', params.date_to);
-  if (params?.show_dismissed != null) search.set('show_dismissed', String(params.show_dismissed));
-  const qs = search.toString();
-  const data = await apiFetch<
-    Record<string, unknown>[] | { items?: Record<string, unknown>[]; data?: Record<string, unknown>[]; total?: number }
-  >(`/admin/security-logs${qs ? `?${qs}` : ''}`);
-  if (Array.isArray(data)) return { items: data, total: data.length };
-  const items = data?.items ?? data?.data ?? [];
-  return { items, total: (data?.total as number | undefined) ?? items.length };
-}
-
 export interface SecurityLogsSummary {
   by_severity: { LOW: number; MEDIUM: number; HIGH: number; CRITICAL: number };
   unreviewed_count: number;
@@ -388,65 +364,6 @@ export interface SecurityLogsSummary {
     xai_narrative: string | null;
     timestamp: string;
   }>;
-}
-
-/** Fetch security logs summary (admin) - GET /admin/security-logs/summary */
-export async function fetchSecurityLogsSummary(): Promise<SecurityLogsSummary> {
-  return apiFetch<SecurityLogsSummary>('/admin/security-logs/summary');
-}
-
-
-/** Analyze security log with AI (admin) - POST /admin/security-logs/{logId}/analyze */
-export async function analyzeSecurityLog(logId: number): Promise<{
-  log_id: number;
-  xai_narrative: string | null;
-  xai_confidence: number | null;
-  [key: string]: unknown;
-}> {
-  return apiFetch(`/admin/security-logs/${logId}/analyze`, { method: 'POST' });
-}
-
-/** Check AI analysis status for a security log - GET /admin/security-logs/{logId}/analyze-status */
-export async function checkAnalysisStatus(
-  logId: number,
-): Promise<{ log_id: number; status: 'running' | 'completed' | 'idle' }> {
-  return apiFetch(`/admin/security-logs/${logId}/analyze-status`);
-}
-
-/** Generate recommended action for analyzed security log - POST /admin/security-logs/{logId}/recommended-action */
-export async function generateRecommendedAction(logId: number): Promise<{
-  log_id: number;
-  xai_narrative: string | null;
-  xai_confidence: number | null;
-  [key: string]: unknown;
-}> {
-  return apiFetch(`/admin/security-logs/${logId}/recommended-action`, { method: 'POST' });
-}
-
-/** Check recommended-action generation status - GET /admin/security-logs/{logId}/recommended-action-status */
-export async function checkRecommendedActionStatus(
-  logId: number,
-): Promise<{ log_id: number; status: 'running' | 'completed' | 'idle' | 'needs_analysis' }> {
-  return apiFetch(`/admin/security-logs/${logId}/recommended-action-status`);
-}
-
-/** Update security log (admin) - structured HITL action or legacy free-text admin_action_taken */
-export async function updateAdminSecurityLog(
-  logId: number,
-  payload: { action?: string; note?: string; admin_action_taken?: string; resolved_at?: string }
-): Promise<{ status: string; log_id: number }> {
-  return apiFetch(`/admin/security-logs/${logId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  });
-}
-
-/** Manually create a DRAFT fire incident from a reviewed security alert */
-export async function createIncidentFromAlert(logId: number): Promise<{
-  status: string;
-  incident_id: number;
-}> {
-  return apiFetch(`/admin/security-logs/${logId}/create-incident`, { method: 'POST' });
 }
 
 export interface RelatedAuditItem {
@@ -476,11 +393,6 @@ export interface RelatedAuditResponse {
   log_id: number;
   items: RelatedAuditItem[];
   related_alerts: RelatedAlertItem[];
-}
-
-/** Fetch audit trail rows related to a security log (±1 hour window) */
-export async function fetchRelatedAuditLogs(logId: number): Promise<RelatedAuditResponse> {
-  return apiFetch<RelatedAuditResponse>(`/admin/security-logs/${logId}/related-audit`);
 }
 
 // ---------------------------------------------------------------------------
@@ -668,62 +580,6 @@ export interface TriageQueueResponse {
   total_reports: number;
 }
 
-export async function fetchTriageQueue(params?: Record<string, string | boolean | undefined>): Promise<TriageQueueResponse> {
-  const search = new URLSearchParams();
-  Object.entries(params ?? {}).forEach(([key, value]) => {
-    if (value === undefined || value === false || value === '') return;
-    search.set(key, String(value));
-  });
-  return apiFetch(`/triage/queue${search.toString() ? `?${search.toString()}` : ''}`);
-}
-
-export async function claimTriageCluster(clusterId: number, reason?: string) {
-  return apiFetch(`/triage/clusters/${clusterId}/claim`, {
-    method: 'POST',
-    body: JSON.stringify({ reason }),
-  });
-}
-
-export async function applyTriageTerminalAction(
-  clusterId: number,
-  payload: { report_ids: number[]; status: TerminalCitizenStatus; status_explanation: string; internal_note?: string },
-) {
-  return apiFetch(`/triage/clusters/${clusterId}/terminal-action`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function correctTriageReport(
-  reportId: number,
-  payload: { status: TerminalCitizenStatus; status_explanation: string; correction_reason: string },
-) {
-  return apiFetch(`/triage/reports/${reportId}/correct`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function splitTriageCluster(
-  clusterId: number,
-  payload: { report_ids: number[]; internal_note: string },
-) {
-  return apiFetch(`/triage/clusters/${clusterId}/split`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function mergeTriageClusters(
-  targetClusterId: number,
-  payload: { source_cluster_id: number; internal_note: string },
-) {
-  return apiFetch(`/triage/clusters/${targetClusterId}/merge`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
 export interface TriageClusterActivityEntry {
   event_type: string;
   occurred_at: string | null;
@@ -735,11 +591,6 @@ export interface TriageClusterActivityEntry {
   note: string | null;
 }
 
-export async function fetchTriageClusterActivity(clusterId: number): Promise<TriageClusterActivityEntry[]> {
-  const result = await apiFetch<{ events: TriageClusterActivityEntry[] }>(`/triage/clusters/${clusterId}/activity`);
-  return result.events ?? [];
-}
-
 export interface MergeCandidateEntry {
   cluster_id: number;
   anchor_report_id: number;
@@ -747,25 +598,6 @@ export interface MergeCandidateEntry {
   minutes_apart: number;
   status: string;
   member_count: number;
-}
-
-export async function fetchMergeCandidates(clusterId: number): Promise<MergeCandidateEntry[]> {
-  const result = await apiFetch<{ cluster_id: number; candidates: MergeCandidateEntry[] }>(
-    `/triage/clusters/${clusterId}/merge-candidates`,
-  );
-  return result.candidates ?? [];
-}
-
-/** Send a validator-to-civilian status update for a single civilian report.
- * POST /api/triage/reports/{reportId}/update-status (NATIONAL_VALIDATOR / REGIONAL_ENCODER). */
-export async function applyReportStatusUpdate(
-  reportId: number,
-  payload: StatusUpdateRequestPayload,
-): Promise<{ update_id: number; report_id: number; stage: string; created_at: string }> {
-  return apiFetch(`/triage/reports/${reportId}/update-status`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
 }
 
 export type CivilianCategory = 'STRUCTURAL' | 'NON_STRUCTURAL' | 'TRANSPORTATION' | 'UNSURE';
@@ -792,8 +624,6 @@ export interface CivilianReportV2Payload {
   previous_report_id?: number;
   source_url?: string;
   client_report_id?: string;
-  /** Cloudflare Turnstile token for anonymous CAPTCHA verification. */
-  turnstile_token?: string;
 }
 
 export interface CivilianReportV2Response {
@@ -838,81 +668,6 @@ export function storeTrackingLink(reportId: number, trackingUrl: string | null |
   } catch {}
 }
 
-/** Submit civilian emergency report — Zero-Trust, NO auth. POST /api/civilian/reports */
-export async function submitCivilianReport(payload: {
-  latitude: number;
-  longitude: number;
-  description: string;
-}): Promise<{ report_id: number; latitude: number; longitude: number; description: string; trust_score: number; status: string; created_at: string }> {
-  return publicApiFetch('/civilian/reports', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-/** Submit Phase 2 structured civilian report — supports optional_auth. POST /api/civilian/reports */
-export async function submitCivilianReportV2(payload: CivilianReportV2Payload): Promise<CivilianReportV2Response> {
-  const result = await fetchWithOptionalAuth<CivilianReportV2Response>('/civilian/reports', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-  try {
-    localStorage.setItem(
-      LAST_REPORT_KEY,
-      JSON.stringify({
-        id: result.report_id,
-        category: payload.category,
-        tracking_url: result.tracking_url ?? null,
-      }),
-    );
-    storeTrackingLink(result.report_id, result.tracking_url);
-  } catch {}
-  return result;
-}
-
-/** Claim an anonymous report into the signed-in CIVILIAN_REPORTER account.
- *  POST /api/civilian/reports/claim — secure handshake using the tracking token.
- *  Returns the updated report; throws ApiRequestError (409 already linked, 404
- *  invalid token, 401 not authenticated). */
-export async function claimCivilianReport(
-  reportId: number,
-  trackingToken: string,
-): Promise<CivilianReportV2Response> {
-  return fetchWithOptionalAuth<CivilianReportV2Response>('/civilian/reports/claim', {
-    method: 'POST',
-    body: JSON.stringify({ report_id: reportId, tracking_token: trackingToken }),
-  });
-}
-
-/** Append additional data to an existing civilian report — supports optional_auth. PATCH /api/civilian/reports/{reportId}/append */
-export async function appendCivilianReport(
-  reportId: number,
-  payload: {
-    latitude?: number;
-    longitude?: number;
-    category?: string;
-    sub_category?: string;
-    reported_at?: string;
-    device_id?: string;
-    reporting_context?: string;
-    safety_status?: string;
-    phone_latitude?: number;
-    phone_longitude?: number;
-    gps_distance_m?: number;
-    gps_warning_confirmed?: boolean;
-    witness_name?: string;
-    witness_phone?: string;
-    description?: string;
-    /** Cloudflare Turnstile token for anonymous CAPTCHA verification. */
-    turnstile_token?: string;
-  },
-): Promise<CivilianReportTrackingResponse> {
-  return fetchWithOptionalAuth(`/civilian/reports/${reportId}/append`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  });
-}
-
 export interface CivilianDuplicateSuggestion {
   report_id: number;
   distance_m: number;
@@ -922,16 +677,6 @@ export interface CivilianDuplicateSuggestion {
   status: string;
   created_at: string;
   nearest_station_name: string | null;
-}
-
-export async function fetchCivilianDuplicateSuggestions(
-  payload: CivilianReportV2Payload,
-): Promise<CivilianDuplicateSuggestion[]> {
-  const json = await publicApiFetch<{ suggestions?: CivilianDuplicateSuggestion[] }>('/civilian/reports/duplicate-suggestions', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-  return json.suggestions ?? [];
 }
 
 // ─── Civilian Reporting Phase 2 ─────────────────────────────────────────────
@@ -975,17 +720,6 @@ export interface CivilianFollowupResponse {
   created_at: string;
 }
 
-export async function submitFollowup(
-  reportId: string | number,
-  followupText: string,
-  deviceId: string,
-): Promise<CivilianFollowupResponse> {
-  return publicApiFetch(`/civilian/reports/${reportId}/followup`, {
-    method: 'POST',
-    body: JSON.stringify({ device_id: deviceId, followup_text: followupText }),
-  });
-}
-
 export interface FireStation {
   station_id: number;
   station_name: string;
@@ -993,11 +727,6 @@ export interface FireStation {
   latitude: number;
   longitude: number;
   distance_m: number | null;
-}
-
-/** Nearest BFP fire stations — Zero-Trust, NO auth. GET /api/ref/fire-stations */
-export async function fetchNearbyStations(lat: number, lon: number): Promise<FireStation[]> {
-  return publicApiFetch(`/ref/fire-stations?lat=${lat}&lon=${lon}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,34 +1028,6 @@ export interface AuditLogParams {
   action?: string;
   page?: number;
   pageSize?: number;
-}
-
-/** Fetch operational map clusters — GET /api/validator/operational-map */
-export async function fetchOperationalMap(
-  params: OperationalMapParams,
-): Promise<MapClusterItem[]> {
-  const search = new URLSearchParams({
-    sw_lat: params.sw[0].toFixed(6),
-    sw_lng: params.sw[1].toFixed(6),
-    ne_lat: params.ne[0].toFixed(6),
-    ne_lng: params.ne[1].toFixed(6),
-    zoom: String(params.zoom),
-  });
-  if (params.status) search.set('status_filter', params.status);
-  if (params.date_from) search.set('date_from', params.date_from);
-  if (params.date_to) search.set('date_to', params.date_to);
-  const data = await apiFetch<{ clusters?: MapClusterItem[] }>(
-    `/api/validator/operational-map?${search}`,
-  );
-  return data.clusters ?? [];
-}
-
-/** Fetch fire stations for validator operational map — GET /api/validator/fire-stations */
-export async function fetchValidatorFireStations(): Promise<StationItem[]> {
-  const data = await apiFetch<StationItem[]>(
-    `/api/validator/fire-stations`,
-  );
-  return data ?? [];
 }
 
 /** Fetch validator audit logs — GET /regional/validator/audit-logs */
