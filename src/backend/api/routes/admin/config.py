@@ -19,10 +19,8 @@ router = APIRouter()
 #       changed by this setting.
 VALID_CONFIG_KEYS = frozenset(
     {
-        "alert_severity_threshold",
         "session_timeout_minutes",
         "offline_storage_mb",
-        "ai_timeout_seconds",
         "npc_contact_name",
         "npc_contact_phone",
         "npc_office_phone",
@@ -44,17 +42,20 @@ VALID_CONFIG_KEYS = frozenset(
         "retention.security_rollups_daily_days",
         "siem.raw_dedup_window_minutes",
         "siem.store_low_value_raw",
-        "auto_ai_analysis_enabled",
     }
+)
+
+# Config rows that belong to removed features (Suricata alerting / Ollama AI analysis). The rows
+# stay in wims.system_config (no schema/data change) but are hidden from the admin UI and API.
+HIDDEN_CONFIG_KEYS = frozenset(
+    {"ai_timeout_seconds", "alert_severity_threshold", "auto_ai_analysis_enabled"}
 )
 
 # Per-key type/range validation for numeric config values.
 # Each entry: (converter, min_value).  converter is int or float.
 _NUMERIC_CONFIG_KEYS: dict[str, tuple[type, int | float]] = {
-    "alert_severity_threshold": (int, 1),
     "session_timeout_minutes": (int, 1),
     "offline_storage_mb": (int, 1),
-    "ai_timeout_seconds": (float, 0.1),
     "worker_stale_timeout_seconds": (int, 30),
     "worker_offline_timeout_seconds": (int, 60),
     "worker_heartbeat_retention_days": (int, 1),
@@ -101,6 +102,7 @@ def list_config(
                 "updated_at": r[4].isoformat() if r[4] else None,
             }
             for r in rows
+            if r[0] not in HIDDEN_CONFIG_KEYS
         ]
     }
 

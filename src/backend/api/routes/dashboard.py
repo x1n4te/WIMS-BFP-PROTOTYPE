@@ -39,15 +39,6 @@ _W["awaiting_validation"] = {
     """,
     "value_key": "count",
 }
-_W["citizen_reports"] = {
-    "roles": {"NATIONAL_VALIDATOR"},
-    "query": """
-        SELECT COUNT(*)
-        FROM wims.citizen_reports
-        WHERE status = 'PENDING'
-    """,
-    "value_key": "count",
-}
 _W["verified_today"] = {
     "roles": {"NATIONAL_VALIDATOR"},
     "query": """

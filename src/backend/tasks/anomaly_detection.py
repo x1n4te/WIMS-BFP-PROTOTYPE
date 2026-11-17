@@ -83,30 +83,6 @@ _MAX_AUDIT_ROWS = 10_000
 # ---------------------------------------------------------------------------
 
 
-def _push_ai_queue_anomaly(log_id: int, severity: str) -> None:
-    """Fire-and-forget push to ai:queue for anomaly-sourced security_threat_logs rows.
-
-    Mirrors suricata_ingestion._push_ai_queue(). Only called when a NEW anomaly
-    row is inserted (dedup guard already passed). Skips MEDIUM/LOW severities to
-    avoid overwhelming the Ollama narrative queue with low-signal events.
-    """
-    if severity not in ("HIGH", "CRITICAL"):
-        return
-    try:
-        r = _redis_lib.Redis.from_url(
-            os.environ.get("REDIS_URL", "redis://redis:6379/0"),
-            decode_responses=True,
-        )
-        r.xadd(
-            _AI_QUEUE_KEY,
-            {"log_id": str(log_id), "severity": severity},
-            maxlen=_AI_QUEUE_MAXLEN,
-        )
-        r.close()
-    except Exception as exc:
-        logger.warning("Failed to push anomaly log_id=%s to ai:queue: %s", log_id, exc)
-
-
 # ---------------------------------------------------------------------------
 # Detector helpers
 # ---------------------------------------------------------------------------
@@ -725,23 +701,6 @@ def _write_anomaly(
     if row is None:
         return False  # dedup hit — already recorded
 
-    threat_payload = json.dumps({**details, "anomaly_type": anomaly_type})
-    result = db.execute(
-        text("""
-            INSERT INTO wims.security_threat_logs
-                (severity_level, raw_payload, source_ip)
-            VALUES (:severity, :payload, :source_ip)
-            RETURNING log_id
-        """),
-        {
-            "severity": severity,
-            "payload": threat_payload,
-            "source_ip": source_ip,
-        },
-    )
-    log_id = result.scalar()
-    if log_id is not None:
-        _push_ai_queue_anomaly(log_id, severity)
     return True
 
 

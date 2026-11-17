@@ -48,32 +48,23 @@ from sqlalchemy.orm import sessionmaker as _sessionmaker
 from api.routes import (
     incidents,
     admin,
-    civilian,
-    triage,
     regional,
     analytics,
     ref,
     sessions,
     dashboard,
 )
-from api.routes.public_dmz import router as public_dmz_router
 from api.routes.user import router as user_profile_router
-from api.routes.map import router as public_map_router, operational_router as validator_map_router
 from api.routes.events import router as events_router
 from api.routes.geocode import router as geocode_router
-from api.routes.operations import router as operations_router
 from api.routes.auth import router as auth_router
-from api.routes.consent import router as consent_router
 from api.routes.security_events import router as security_events_router
-from api.routes.community_content import public_router as community_public_router
-from api.routes.information import router as information_router
 
 # WIMS role resolution — canonical source in auth.py
 from auth import resolve_wims_role_from_token as _resolve_role_from_token, JIT_PRIVILEGED_ROLES
 from utils.csrf import csrf_middleware
 from services.ip_blocklist import _get_request_client_ip, resync_blocklist_to_redis
 from utils.audit import trusted_client_ip, log_system_audit
-from middleware.device_token import device_token_middleware, device_block_middleware
 
 # Module-level logger — must be defined before use in schema patches and rate limiter
 logger = logging.getLogger("wims.rate_limit")
@@ -795,26 +786,6 @@ async def _resync_blocklist_on_boot():
         logger.warning("Boot blocklist resync failed: %s", e)
 
 
-@app.on_event("startup")
-def _require_turnstile_secret_key():
-    """Fail fast at boot if TURNSTILE_SECRET_KEY is unset (issue #570
-    criterion 5). Previously this was only discovered per-request, the first
-    time an anonymous civilian submission or registration actually needed
-    CAPTCHA verification (services/captcha.py raises 500 there) — a
-    misconfigured deploy could sit unnoticed until a real user hit it.
-    .env.example ships a working default (Cloudflare's documented always-pass
-    test key), so every environment — dev, CI, and production — is expected
-    to have this set to *something*; there is no legitimate "not configured"
-    state to tolerate.
-    """
-    if not os.environ.get("TURNSTILE_SECRET_KEY", ""):
-        raise RuntimeError(
-            "TURNSTILE_SECRET_KEY must be set — see .env.example for a local/CI "
-            "dummy value (Cloudflare's always-pass test key) or configure the "
-            "real production secret."
-        )
-
-
 def _apply_users_rls(db) -> None:  # type: ignore[type-arg]
     """Broaden users SELECT policy so BFP staff roles can JOIN wims.users."""
     db.execute(text("DROP POLICY IF EXISTS users_self_or_admin_select ON wims.users"))
@@ -959,27 +930,20 @@ app.include_router(incidents.router)
 app.include_router(admin.router, prefix="/api/admin")
 app.include_router(sessions.router, prefix="/api/admin")
 app.include_router(user_profile_router)  # PATCH /api/user/me, PATCH /api/user/me/password
-app.include_router(civilian.router)
-app.include_router(triage.router)
 app.include_router(regional.router)
 app.include_router(analytics.router)
 app.include_router(ref.router)  # GET /api/ref/regions, /api/ref/provinces, /api/ref/cities
-app.include_router(public_dmz_router)  # POST /api/v1/public/report (no-auth DMZ)
-app.include_router(public_map_router)  # GET /api/public/clusters, /api/public/emergency-services
 app.include_router(events_router)  # GET /api/events/stream (SSE real-time notifications)
-app.include_router(validator_map_router)  # GET /api/validator/operational-map (auth)
 app.include_router(
     geocode_router
-)  # GET /api/geocode/reverse, /api/geocode/search (Nominatim proxy)
+)  # GET /api/geocode/reverse, /api/geocode/search (Nominatim proxy; staff map pickers)
 app.include_router(dashboard.router)  # GET /api/dashboard/widgets
-app.include_router(operations_router)  # GET/POST/PATCH/DELETE /api/operations
 app.include_router(auth_router)  # POST /api/auth/change-email, POST /api/auth/verify-email
-app.include_router(consent_router)  # POST /api/auth/consent (public, no-auth)
 app.include_router(security_events_router)  # POST /api/auth/keycloak-event (Keycloak SPI ingest)
-app.include_router(community_public_router)  # GET /api/community/hub, /api/community/{slug}
-app.include_router(
-    information_router
-)  # GET /api/information/announcements, /api/information/emergencies
+
+# Turnover Phase 3: the civilian/public portal (/api/civilian, /api/v1/public, /api/public,
+# /api/community, /api/information, /api/triage, /api/operations, /api/validator map,
+# /api/auth consent/register) is intentionally NOT mounted. The source modules are kept.
 
 # ---------------------------------------------------------------------------
 # Celery
@@ -1213,8 +1177,8 @@ async def prometheus_metrics_middleware(request: Request, call_next):
 # (device_token_middleware injects request.state.device_token_hash that
 # device_block_middleware reads).
 # ---------------------------------------------------------------------------
-app.middleware("http")(device_block_middleware)
-app.middleware("http")(device_token_middleware)
+# Turnover Phase 3: device_token / device_block middleware removed (civilian-only; the device
+# blocklist admin router is unmounted). Source kept in middleware/device_token.py.
 
 
 # ---------------------------------------------------------------------------

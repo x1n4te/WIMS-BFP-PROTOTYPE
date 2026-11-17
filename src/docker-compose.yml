@@ -3,7 +3,7 @@ networks:
     driver: bridge
     name: wims_internal
     # Pen-test follow-up 2026-06-29: explicit subnet + static IPs for redis,
-    # postgres, keycloak, openbao, and ollama. These IPs are referenced by
+    # postgres, keycloak, and openbao. These IPs are referenced by
     # extra_hosts entries that bypass broken Docker DNS after wims_internal
     # network recreation on the live VPS (see PR #485-#487).
     # Keep dynamic allocations in 172.18.0.128/25 so short-lived/dynamic
@@ -47,8 +47,8 @@ services:
     container_name: wims-redis
     command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
     # Pen-test follow-up 2026-06-29: pin redis to 172.18.0.5 (the IP the live
-    # VPS was already using dynamically) so the wims-suricata `extra_hosts`
-    # mapping below stays valid across `docker compose down && up` cycles.
+    # VPS was already using dynamically) so the `extra_hosts` mappings
+    # stay valid across `docker compose down && up` cycles.
     networks:
       wims_internal:
         ipv4_address: 172.18.0.5
@@ -73,7 +73,7 @@ services:
     # VPS — `getent hosts postgres` returns empty even after a fresh
     # container recreate, while TCP to the static IP works). Inject the
     # mapping directly into /etc/hosts to bypass the broken DNS. Same fix
-    # pattern as the wims-suricata `extra_hosts` in PR #485.
+    # pattern as the other `extra_hosts` pins in PR #485.
     extra_hosts:
       - "postgres:172.18.0.3"
       - "redis:172.18.0.5"
@@ -193,45 +193,6 @@ services:
         condition: service_started
     restart: "no"
 
-  ollama:
-    image: ollama/ollama:0.30.10
-    container_name: wims-ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      OLLAMA_NUM_PARALLEL: "1"
-      OLLAMA_MAX_LOADED_MODELS: "1"
-    networks:
-      wims_internal:
-        ipv4_address: 172.18.0.4
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 6gb
-    restart: always
-
-  ollama-model-pull:
-    image: ollama/ollama:0.30.10
-    container_name: wims-ollama-model-pull
-    command: pull qwen2.5:3b
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    extra_hosts:
-      - "ollama:172.18.0.4"
-    networks:
-      - wims_internal
-    depends_on:
-      ollama:
-        condition: service_healthy
-    restart: "no"
-
   # --- Applications ---
   backend:
     image: ${BACKEND_IMAGE:-wims-backend:local}
@@ -241,14 +202,11 @@ services:
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "200", "--timeout-keep-alive", "5", "--lifespan", "off"]
     # Pen-test follow-up 2026-06-29 (deploy fix): see keycloak comment above
     # for rationale. Same Docker DNS unreliability after wims_internal
-    # network recreation. Inject the hostnames the backend connects to into
-    # /etc/hosts. OSRM is production-only; its entry is inert when routing is disabled.
+    # network recreation. Inject the hostnames the backend connects to into /etc/hosts.
     extra_hosts:
       - "postgres:172.18.0.3"
       - "redis:172.18.0.5"
       - "keycloak:172.18.0.7"
-      - "ollama:172.18.0.4"
-      - "osrm:172.18.0.9"
     environment:
       - DATABASE_URL=postgresql://wims_app_user:wimsapp@postgres:5432/wims
       - DATABASE_ADMIN_URL=postgresql://postgres:${POSTGRES_PASSWORD:?error}@postgres:5432/wims
@@ -262,8 +220,6 @@ services:
       - KEYCLOAK_ADMIN_CLIENT_SECRET=${KEYCLOAK_ADMIN_CLIENT_SECRET:-}
       - KEYCLOAK_ADMIN_USER=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?error}
-      - OLLAMA_URL=http://ollama:11434
-      - SURICATA_EVE_PATH=/var/log/suricata/eve.json
       - AFOR_TEMPLATE_PATH=/app/AFOR-FORMATTED.xlsx
       - CSRF_TRUSTED_ORIGINS=http://localhost,https://localhost,http://127.0.0.1,http://127.0.0.1:3000,http://localhost:8090,http://localhost:3000,http://localhost:8000
       - NEXT_PUBLIC_APP_URL=http://localhost
@@ -272,19 +228,10 @@ services:
       - OPENBAO_TOKEN_FILE=/openbao-creds/.wims-app-token
       - OPENBAO_TRANSIT_MOUNT=${OPENBAO_TRANSIT_MOUNT:-transit}
       - WIMS_CRYPTO_PROVIDER=${WIMS_CRYPTO_PROVIDER:-env_aesgcm}
-      - DEVICE_TOKEN_SIGNING_KEY=${DEVICE_TOKEN_SIGNING_KEY:-}
-      - DEVICE_TOKEN_SIGNING_KEY_V2=${DEVICE_TOKEN_SIGNING_KEY_V2:-}
-      - DEVICE_TOKEN_SIGNING_KEY_ACTIVE_VERSION=${DEVICE_TOKEN_SIGNING_KEY_ACTIVE_VERSION:-1}
       # WS-B (RP-08/RP-18): shared secret for Keycloak → WIMS audit event push
       - WIMS_KEYCLOAK_EVENT_SECRET=${WIMS_KEYCLOAK_EVENT_SECRET:-}
-      - OLLAMA_NUM_PREDICT=${OLLAMA_NUM_PREDICT:-256}
-      # Phase-2 civilian photo storage (shared volume, backend+worker)
-      - CIVILIAN_PHOTO_STORAGE_DIR=/app/storage/civilian-photos
-      # Phase-3 Turnstile CAPTCHA
-      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
     volumes:
       - incident_attachments_data:/app/storage
-      - ./suricata/logs:/var/log/suricata:ro
       - ./postgres-init:/postgres-init:ro
       - openbao_data:/openbao-creds:ro
     networks:
@@ -300,10 +247,6 @@ services:
       keycloak:
         condition: service_started
       keycloak-bootstrap:
-        condition: service_completed_successfully
-      ollama:
-        condition: service_healthy
-      ollama-model-pull:
         condition: service_completed_successfully
     ports:
       - "127.0.0.1:8000:8000"
@@ -328,8 +271,6 @@ services:
       - "postgres:172.18.0.3"
       - "redis:172.18.0.5"
       - "keycloak:172.18.0.7"
-      - "ollama:172.18.0.4"
-      - "osrm:172.18.0.9"
     environment:
       - DATABASE_URL=postgresql://wims_app_user:wimsapp@postgres:5432/wims
       - REDIS_URL=redis://redis:6379/0
@@ -337,13 +278,9 @@ services:
       # Keycloak admin API (password-expiry task). No fallback: compose fails if unset.
       - KEYCLOAK_ADMIN_USER=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?error}
-      - OLLAMA_URL=http://ollama:11434
-      - SURICATA_EVE_PATH=/var/log/suricata/eve.json
       - EXPORT_DIR=/app/storage/exports
       - AFOR_TEMPLATE_PATH=/app/AFOR-FORMATTED.xlsx
       - NEXT_PUBLIC_APP_URL=http://localhost
-      - FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON:-}
-      - FIREBASE_CREDENTIALS_PATH=/app/firebase-creds.json
       - SMTP_HOST=${SMTP_HOST:-smtp-relay.brevo.com}
       - SMTP_PORT=${SMTP_PORT:-2525}
       - SMTP_FROM=${SMTP_FROM:-noreply@wims-bfp.local}
@@ -355,28 +292,15 @@ services:
       - OPENBAO_TOKEN_FILE=/openbao-creds/.wims-app-token
       - OPENBAO_TRANSIT_MOUNT=${OPENBAO_TRANSIT_MOUNT:-transit}
       - WIMS_CRYPTO_PROVIDER=${WIMS_CRYPTO_PROVIDER:-env_aesgcm}
-      - OLLAMA_NUM_PREDICT=${OLLAMA_NUM_PREDICT:-256}
       # MaxMind GeoLite2-City for IMPOSSIBLE_TRAVEL anomaly detector.
       # Download GeoLite2-City.mmdb from maxmind.com and place it in ./geoip/.
       # Detector silently skips if the file is absent.
       - GEOIP_DB_PATH=/app/geoip/GeoLite2-City.mmdb
-      # Phase-2 civilian photo storage (shared volume, backend+worker)
-      - CIVILIAN_PHOTO_STORAGE_DIR=/app/storage/civilian-photos
     volumes:
-      - ./suricata/logs:/var/log/suricata:ro
       - ./postgres-init:/postgres-init:ro
       - incident_attachments_data:/app/storage
       - openbao_data:/openbao-creds:ro
-      - ./firebase-creds.json:/app/firebase-creds.json:ro
       - ./geoip:/app/geoip:ro
-      # SECURITY NOTE: Docker socket mount is required for live Suricata rule
-      # reload (suricata-update + kill -USR2). Without the socket, the Celery
-      # worker cannot exec into the wims-suricata container to trigger a
-      # graceful rule reload. A shared rules volume alone cannot deliver USR2.
-      # Risk: broad Docker daemon access inside the Celery container.
-      # Mitigation: Celery worker runs with the least-privileged service
-      # account and only interacts with the wims-suricata container by name.
-      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - wims_internal
     depends_on:
@@ -384,10 +308,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
-      ollama-model-pull:
-        condition: service_completed_successfully
 
   frontend:
     image: ${FRONTEND_IMAGE:-wims-frontend:local}
@@ -433,54 +353,6 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
 
-  wims-suricata:
-    image: jasonish/suricata:8.0.5
-    container_name: wims-suricata
-    restart: unless-stopped
-    network_mode: "host"
-    environment:
-      # Match the wims host user (UID 1000) so the entrypoint's chown -R
-      # on /etc/suricata, /var/lib/suricata, and /var/log/suricata doesn't
-      # change bind-mount ownership to an unmatched UID, which would block
-      # subsequent git operations (pull, reset) by the wims user.
-      - PUID=1000
-      - PGID=1000
-      # Docker bridge for decrypted HTTP capture (G-4). Auto-detected by
-      # entrypoint.sh; override via SURICATA_INTERFACE if a single interface
-      # is needed (e.g. SURICATA_INTERFACE=eth0).
-      - SURICATA_INTERFACE=
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-      - SYS_NICE       # needed for CPU affinity on multi-interface AF_PACKET capture (G-4)
-    command: /entrypoint.sh
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1g
-        reservations:
-          memory: 512m
-    # Pen-test follow-up 2026-06-29: wims-suricata uses network_mode: "host"
-    # for AF_PACKET raw-socket capture, so it does NOT participate in the
-    # wims_internal bridge network and Docker DNS cannot resolve `redis` for
-    # it. `extra_hosts` injects the mapping into the container's /etc/hosts
-    # (separate from the host's /etc/hosts even with host networking). The
-    # 172.18.0.5 IP is pinned by the redis service's `ipv4_address` above.
-    extra_hosts:
-      - "redis:172.18.0.5"
-    volumes:
-      - ./suricata/logs:/var/log/suricata
-      - ./suricata/rules:/var/lib/suricata/rules
-      - ./suricata/suricata.yaml:/etc/suricata/suricata.yaml
-      - ./suricata/entrypoint.sh:/entrypoint.sh
-    healthcheck:
-      test: ["CMD", "pgrep", "Suricata-Main"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
   # --- Edge Gateway ---
   nginx-gateway:
     image: nginx:1.30.3-alpine
@@ -502,6 +374,5 @@ services:
 
 volumes:
   postgres_data:
-  ollama_data:
   incident_attachments_data:
   openbao_data:

@@ -129,8 +129,6 @@ class TestValidatorWidgets:
             {
                 # awaiting_validation: verification_status IN ('PENDING', 'PENDING_VALIDATION')
                 "PENDING_VALIDATION": [(5,)],
-                # citizen_reports: status = 'PENDING'
-                "citizen_reports": [(3,)],
                 # verified_today: verification_status = 'VERIFIED'
                 "DATE(updated_at AT TIME ZONE": [(12,)],
             }
@@ -138,14 +136,13 @@ class TestValidatorWidgets:
         app.dependency_overrides[get_db_with_rls] = lambda: db
 
         resp = client.get(
-            "/api/dashboard/widgets?ids=awaiting_validation,citizen_reports,verified_today",
+            "/api/dashboard/widgets?ids=awaiting_validation,verified_today",
         )
         assert resp.status_code == 200
         data = resp.json()
         assert "awaiting_validation" in data
         assert data["awaiting_validation"]["count"] == 5
-        assert "citizen_reports" in data
-        assert data["citizen_reports"]["count"] == 3
+        assert "citizen_reports" not in data  # civilian widget removed (turnover Phase 3)
         assert "verified_today" in data
         assert data["verified_today"]["count"] == 12
 

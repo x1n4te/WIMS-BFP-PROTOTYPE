@@ -39,7 +39,7 @@ WIMS-BFP is a Dockerized full-stack incident management system for the Philippin
 ```
 src/
 ├── backend/                # FastAPI + Celery (Python 3.10+)
-│   ├── api/routes/         # incidents, analytics, triage, regional, admin, civilian
+│   ├── api/routes/         # incidents, analytics, regional, admin (civilian/triage/public routers kept but unmounted)
 │   ├── models/             # SQLAlchemy ORM models
 │   ├── schemas/            # Pydantic request/response schemas
 │   ├── services/           # AI/XAI, analytics, duplicate detection
@@ -51,10 +51,10 @@ src/
 ├── openbao/                # OpenBao init/bootstrap for KMS
 ├── suricata/               # Suricata IDS rules/log mounts
 ├── nginx/                  # Nginx edge gateway config
-├── docker-compose.yml      # 14 services: postgres, redis, mailhog, keycloak,
+├── docker-compose.yml      # services: postgres, redis, mailhog, keycloak,
 │                           # keycloak-bootstrap, openbao, openbao-bootstrap,
-│                           # ollama, ollama-model-pull, backend, celery-worker,
-│                           # frontend, wims-suricata, nginx-gateway
+│                           # backend, celery-worker, frontend, nginx-gateway
+│                           # (turnover Phase 3: no suricata, ollama or osrm)
 └── docker-compose.override.yml / docker-compose.ci.yml / docker-compose.prod.yml
 ```
 
@@ -76,17 +76,11 @@ PII fields (`caller_name`, `caller_number`, `owner_name`, `occupant_name`) in `w
 
 ### Incident Pipeline
 
-Two parallel intake paths feed official AFOR incidents:
+**Turnover build (Phase 3):** the civilian/public intake (`/api/civilian`, `/api/v1/public`, `/api/triage`, `/api/operations`, community/information, perimeters) is **not mounted**; the source modules are kept. Staff intake only:
 
-**Public DMZ (zero-trust, unauthenticated):**  
-`POST /api/v1/public/report` → `wims.fire_incidents` (direct). Used for zero-trust submissions from anonymous reporters.
-
-**Civilian staging:**  
-1. `POST /api/civilian/reports` → `wims.citizen_reports` (pending, structured staging)
-2. `GET /api/triage/pending` → validator reviews → `POST /api/triage/{id}/promote`
-3. Promotion creates official record in `wims.fire_incidents`
-4. Regional encoders import AFOR workbooks via `POST /api/regional/afor/import` → `POST /api/regional/afor/commit` (structural or wildland)
-5. Analysts read via `/api/analytics/*`
+1. Encoders create incidents or import AFOR workbooks (`POST /api/regional/afor/import` then `/commit`, structural; SYSTEM_ADMIN may import too, with a chosen region). Imports are DRAFT.
+2. `PATCH /api/regional/incidents/{id}/submit` -> PENDING; NATIONAL_VALIDATOR approves/rejects (`/verification`).
+3. Analysts read via `/api/analytics/*` (exports run in Celery).
 
 ### Keycloak Configuration
 
@@ -96,9 +90,9 @@ Admin roles and credentials (turnover Phase 2): `SYSTEM_ADMIN` may also import A
 
 Two issuer URLs exist: backend fetches JWKS from `keycloak:8080` (Docker internal) but validates tokens against `localhost` (browser-visible, set via `KC_HOSTNAME=localhost`).
 
-### AI/XAI Pipeline
+### Removed in the turnover build (Phase 3)
 
-Suricata IDS → EVE JSON → Celery worker → FastAPI extracts metadata → prompt template → Ollama (Qwen2.5-3B) → narrative → `security_threat_logs`. The SLM is a translator (JSON → plain English), not a threat detector. Suricata rules carry the security knowledge.
+Suricata IDS ingestion, the HITL threat flow (`/api/admin/security-logs*`), Ollama/AI narratives, the IP/device blocklist admin routers, FCM push, Turnstile and OSRM routing are unmounted/unscheduled (beat has no Suricata, AI-queue, civilian, blocklist or community jobs) and their compose services are gone. Source files stay. Breaches are logged manually (`POST /api/admin/breach`), which writes a backing `security_threat_logs` row because `breach_notifications.threat_log_id` is NOT NULL. `tests/conftest.py` lists the skipped tests of unmounted features.
 
 ### Offline/PWA
 

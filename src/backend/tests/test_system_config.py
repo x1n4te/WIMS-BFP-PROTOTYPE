@@ -109,8 +109,9 @@ class TestGetConfig:
         data = response.json()
         assert "config" in data
         keys = [entry["key"] for entry in data["config"]]
-        assert "ai_timeout_seconds" in keys
-        assert "alert_severity_threshold" in keys
+        # AI / Suricata keys are hidden (turnover Phase 3)
+        for hidden in ("ai_timeout_seconds", "alert_severity_threshold", "auto_ai_analysis_enabled"):
+            assert hidden not in keys
         assert "offline_storage_mb" in keys
         assert "session_timeout_minutes" in keys
         assert "worker_stale_timeout_seconds" in keys
@@ -127,9 +128,8 @@ class TestGetConfig:
 
         response = client.get("/api/admin/config")
         data = response.json()
-        ai_entry = next(e for e in data["config"] if e["key"] == "ai_timeout_seconds")
-        assert ai_entry["value"] == "60"
-        assert ai_entry["description"] == "Ollama timeout"
+        entry = next(e for e in data["config"] if e["key"] == "offline_storage_mb")
+        assert "value" in entry and "description" in entry
 
     def test_requires_admin(self, client: TestClient):
         """Non-admin role returns 403."""
@@ -212,16 +212,16 @@ class TestNpcConfigKeys:
 
 class TestPatchConfig:
     def test_updates_ai_timeout(self, client: TestClient):
-        """PATCH ai_timeout_seconds with a valid value returns 200."""
+        """PATCH offline_storage_mb with a valid value returns 200."""
         app.dependency_overrides[auth.get_current_wims_user] = mock_admin_user
         mock_db, mock_get_db = _mock_config_db()
         app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-        response = client.patch("/api/admin/config/ai_timeout_seconds", json={"value": "120"})
+        response = client.patch("/api/admin/config/offline_storage_mb", json={"value": "120"})
 
         assert response.status_code == 200
         data = response.json()
-        assert data["key"] == "ai_timeout_seconds"
+        assert data["key"] == "offline_storage_mb"
         assert data["value"] == "120"
         assert data["status"] == "ok"
 
@@ -231,7 +231,7 @@ class TestPatchConfig:
         mock_db, mock_get_db = _mock_config_db()
         app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-        client.patch("/api/admin/config/alert_severity_threshold", json={"value": "2"})
+        client.patch("/api/admin/config/session_timeout_minutes", json={"value": "2"})
 
         # At minimum: UPDATE system_config + INSERT system_audit_trails
         assert mock_db.execute.call_count >= 2
@@ -255,7 +255,7 @@ class TestPatchConfig:
         mock_db, mock_get_db = _mock_config_db(fetchone_row=None)
         app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-        response = client.patch("/api/admin/config/ai_timeout_seconds", json={"value": "30"})
+        response = client.patch("/api/admin/config/worker_stale_timeout_seconds", json={"value": "30"})
         assert response.status_code == 404
 
     def test_requires_admin(self, client: TestClient):
@@ -264,7 +264,7 @@ class TestPatchConfig:
         _, mock_get_db = _mock_config_db()
         app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-        response = client.patch("/api/admin/config/ai_timeout_seconds", json={"value": "99"})
+        response = client.patch("/api/admin/config/worker_stale_timeout_seconds", json={"value": "99"})
         assert response.status_code in (401, 403)
 
     def test_audit_log_includes_forensic_old_new_values(self, client: TestClient):
@@ -277,7 +277,7 @@ class TestPatchConfig:
         mock_db, mock_get_db = _mock_config_db(fetchone_row=old_row)
         app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-        client.patch("/api/admin/config/alert_severity_threshold", json={"value": "2"})
+        client.patch("/api/admin/config/session_timeout_minutes", json={"value": "2"})
 
         # Collect the params from the audit INSERT call
         audit_params = None

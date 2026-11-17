@@ -16,9 +16,9 @@ from fastapi import HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from database import set_rls_context
 from services.analytics_read_model import sync_incident_to_analytics
 from services.duplicate_detection import check_for_duplicate
-from services.information_emergencies import ensure_incident_emergency_draft
 from services.regional_incidents.helpers import (
     DuplicateClientIdError,
     compute_incident_data_hash,
@@ -724,13 +724,6 @@ def verify_incident_command(
             sync_status="SYNCED",
             client_id=client_id,
         )
-        if target_status == "VERIFIED":
-            ensure_incident_emergency_draft(
-                db,
-                incident_id=incident_id,
-                actor_user_id=str(validator_user_id),
-                require_civilian_link=True,
-            )
         db.commit()
     except DuplicateClientIdError:
         db.rollback()
@@ -743,6 +736,10 @@ def verify_incident_command(
             detail="Failed to apply verification action — transaction rolled back",
         )
 
+    # The commit above ended the transaction (SET LOCAL RLS context is gone): re-apply it so the
+    # analytics sync can see / write the rows it needs, otherwise newly verified incidents never
+    # reach analytics_incident_facts.
+    set_rls_context(db, validator_user_id)
     sync_incident_to_analytics(db, incident_id)
     if parent_to_archive:
         sync_incident_to_analytics(db, parent_to_archive)
@@ -990,6 +987,10 @@ def archive_finalized_incident(
         logger.exception("Failed to archive incident_id=%s", incident_id)
         raise HTTPException(status_code=500, detail="Archive failed — transaction rolled back")
 
+    # The commit above ended the transaction (SET LOCAL RLS context is gone): re-apply it so the
+    # analytics sync can see / write the rows it needs, otherwise newly verified incidents never
+    # reach analytics_incident_facts.
+    set_rls_context(db, validator_user_id)
     sync_incident_to_analytics(db, incident_id)
     db.commit()
     return {"status": "archived", "incident_id": incident_id}
@@ -1056,6 +1057,10 @@ def unarchive_finalized_incident(
         logger.exception("Failed to unarchive incident_id=%s", incident_id)
         raise HTTPException(status_code=500, detail="Unarchive failed — transaction rolled back")
 
+    # The commit above ended the transaction (SET LOCAL RLS context is gone): re-apply it so the
+    # analytics sync can see / write the rows it needs, otherwise newly verified incidents never
+    # reach analytics_incident_facts.
+    set_rls_context(db, actor_user_id)
     sync_incident_to_analytics(db, incident_id)
     db.commit()
     return {"status": "unarchived", "incident_id": incident_id}

@@ -9,26 +9,19 @@ from . import (
     backup_schedule,
     backups,
     breach,
-    civilians,
-    community,
     config,
-    device_blocklist,
-    ip_blocklist,
     monitoring,
     privacy,
     rate_limits,
     scheduled_reports,
-    security,
     sync,
     users,
-    information,
 )
 
 router = APIRouter(tags=["admin"])
 router.include_router(users.router)
 router.include_router(backups.router)
 router.include_router(backup_schedule.router)
-router.include_router(security.router)
 router.include_router(rate_limits.router)
 router.include_router(monitoring.router)
 router.include_router(analytics.router)
@@ -38,11 +31,7 @@ router.include_router(config.router)
 router.include_router(breach.router)
 router.include_router(privacy.router)
 router.include_router(anomalies.router)
-router.include_router(ip_blocklist.router, prefix="/ip-blocklist", tags=["admin-ip-blocklist"])
-router.include_router(
-    device_blocklist.router, prefix="/device-blocklist", tags=["admin-device-blocklist"]
-)
 router.include_router(sync.router)
-router.include_router(community.admin_router)
-router.include_router(information.router)
-router.include_router(civilians.router)
+
+# Turnover Phase 3: not mounted (source kept): security (security-logs, HITL, analyze, block,
+# create-incident), ip_blocklist, device_blocklist, civilians, community, information.

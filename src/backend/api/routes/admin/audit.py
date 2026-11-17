@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from auth import get_system_admin
 from auth import get_db_with_rls
-from services.ai_service import analyze_audit_logs
 from services.audit_export import build_audit_where
 from services.audit_export_orchestration import (
     AuditExportAuditError,
@@ -319,13 +318,3 @@ def verify_secure_audit_export(
         checks=checks,
         manifest=manifest,
     )
-
-
-@router.post("/audit-logs/analyze")
-async def analyze_audit_entries(
-    body: AuditLogsAnalyzeRequest,
-    _admin: Annotated[dict, Depends(get_system_admin)],
-    db: Annotated[Session, Depends(get_db_with_rls)],
-):
-    """Run AI analysis on selected audit log entries via Ollama."""
-    return await analyze_audit_logs(body.audit_ids, db)

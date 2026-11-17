@@ -49,6 +49,9 @@ from utils.audit import log_system_audit, trusted_client_ip
 logger = logging.getLogger("wims.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+# Civilian self-registration routes (register / verify-registration). Defined here to keep the
+# source, but NOT mounted in the turnover build (Phase 3); only the civilian portal used them.
+civilian_router = APIRouter(prefix="/api/auth", tags=["auth-civilian"])
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 VERIFICATION_CODE_TTL = 600  # 10 minutes
@@ -396,7 +399,7 @@ def _lookup_user_by_email(adm, email: str) -> str | None:
         return None
 
 
-@router.post("/register", response_model=RegisterResponse, status_code=201)
+@civilian_router.post("/register", response_model=RegisterResponse, status_code=201)
 async def register(
     body: CivilianRegisterRequest,
     request: Request,
@@ -569,7 +572,7 @@ async def register(
     )
 
 
-@router.post(
+@civilian_router.post(
     "/verify-registration",
     response_model=VerifyRegistrationResponse,
     status_code=200,

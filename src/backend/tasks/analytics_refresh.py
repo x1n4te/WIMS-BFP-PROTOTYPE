@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 
-from celery import shared_task
 from sqlalchemy import text
+
+from celery_config import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,9 @@ MV_NAMES = [
 ]
 
 
-@shared_task(name="analytics.refresh_materialized_views")
+# Bound to the project app (not @shared_task): API request threads have no thread-local current
+# app, so .delay() on a shared task fell back to the default AMQP broker and returned HTTP 500.
+@celery_app.task(name="analytics.refresh_materialized_views")
 def refresh_materialized_views(concurrent: bool = True) -> dict[str, str]:
     """Refresh all analytics materialized views CONCURRENTLY.
 

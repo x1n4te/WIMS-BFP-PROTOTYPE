@@ -29,8 +29,6 @@ echo "=== Deploy VPS: $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
 
 cd /opt/wims-bfp
 
-# Restore git ownership before reset (suricata entrypoint chown can break git)
-sudo chown -R wims:wims src/suricata/rules src/suricata/logs 2>/dev/null || true
 
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-master}"
 git fetch origin "$DEPLOY_BRANCH"
@@ -44,7 +42,7 @@ test -f .env.production || { echo "FATAL: .env.production is missing on VPS"; ex
 compose() {
   local extra_args=() f
   # Optional per-host overlay(s) — space-separated — layered on top of the
-  # default prod compose files, e.g. docker-compose.prod.small.yml for specs
+  # default prod compose files, e.g. a size override for small hosts
   # smaller than docker-compose.prod.yml targets, or docker-compose.prod.demo.yml
   # for a domain other than wimsbfp.tech. Unset by default, so standard
   # deploys are unaffected.
@@ -74,7 +72,7 @@ cleanup_stale_compose_renames() {
   fi
 
   # Remove stale one-shot containers
-  for name in wims-ollama-model-pull wims-openbao-bootstrap; do
+  for name in wims-openbao-bootstrap; do
     cid=$(docker ps -aq --filter "name=^/${name}$" 2>/dev/null || true)
     if [ -n "$cid" ]; then
       echo "Removing stale container $name..."
@@ -131,9 +129,9 @@ export FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/x1n4te/wims-frontend:latest}"
 echo "Pre-pulling service images..."
 for img in \
   "$BACKEND_IMAGE" "$FRONTEND_IMAGE" \
-  jasonish/suricata:8.0.5 nginx:1.30.3-alpine \
+  nginx:1.30.3-alpine \
   postgis/postgis:15-3.4-alpine redis:8.8-alpine \
-  mailhog/mailhog:v1.0.1 ollama/ollama:0.30.10 \
+  mailhog/mailhog:v1.0.1 \
   openbao/openbao:2.5.5 quay.io/keycloak/keycloak:26.6.4; do
   echo "  Pulling $img..."
   docker pull "$img" || echo "  Warning: pull failed for $img"
@@ -200,7 +198,7 @@ done
 # Apply Alembic migrations
 # ---------------------------------------------------------------------------
 echo "Stopping app services for migration..."
-compose stop backend celery-worker wims-suricata || true
+compose stop backend celery-worker || true
 
 echo "Applying Alembic migrations..."
 compose run --rm --no-deps backend alembic upgrade head
@@ -253,10 +251,8 @@ BASE="${BASE:-https://wimsbfp.tech}"
 curl -fsS "$BASE/health" >/dev/null
 curl -fsS "$BASE/auth/realms/bfp/.well-known/openid-configuration" >/dev/null
 curl -fsS "$BASE/login" >/dev/null
-curl -fsS "$BASE/api/public/emergency-services" >/dev/null
-
-echo "Checking Ollama model provisioning..."
-docker exec wims-ollama ollama list | grep -q 'qwen2.5:3b'
+# Backend reachable through the gateway: an unauthenticated staff route must answer 401.
+test "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/ref/regions")" = "401"
 
 echo "=== Deploy successful — commit $DEPLOY_COMMIT ==="
 echo "DEPLOY_COMMIT=${DEPLOY_COMMIT:-unknown} $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> /opt/wims-bfp/.deploy_history

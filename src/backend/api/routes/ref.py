@@ -15,6 +15,9 @@ from auth import get_db_with_rls
 from database import get_db
 
 router = APIRouter(prefix="/api/ref", tags=["ref"])
+# Anonymous civilian-portal reference routes (fire stations, emergency numbers). Not mounted
+# in the turnover build (Phase 3); only civilian pages used them.
+public_router = APIRouter(prefix="/api/ref", tags=["ref-public"])
 
 
 @router.get("/regions")
@@ -97,7 +100,7 @@ def get_cities(
     return [{"city_id": r[0], "city_name": r[1], "province_id": r[2]} for r in rows]
 
 
-@router.get("/fire-stations")
+@public_router.get("/fire-stations")
 def get_fire_stations(
     db: Annotated[Session, Depends(get_db)],
     lat: Optional[float] = Query(None),
@@ -162,7 +165,7 @@ def get_fire_stations(
     ]
 
 
-@router.get("/emergency-services")
+@public_router.get("/emergency-services")
 def get_emergency_services(
     db: Annotated[Session, Depends(get_db)],
     lat: Optional[float] = Query(None),

@@ -10,8 +10,8 @@
 # container names and loopback ports, so stop the full stack before starting
 # it; the two topologies cannot run concurrently. Raw
 # `docker compose up <extra-service>` is unsupported: inherited non-selected
-# services (ollama, openbao,
-# celery-worker, wims-suricata, ...) keep the base file's static 172.18.0.x
+# services (openbao,
+# celery-worker, ...) keep the base file's static 172.18.0.x
 # addresses, which lie outside this stack's subnet, so their containers fail
 # to create and would corrupt the local network.
 #
@@ -87,8 +87,7 @@ services:
     # optional src/.env env_file; create that ignored file for crypto-backed
     # report flows.
     # Re-point the base file's extra_hosts pins (172.18.0.x) at this stack's
-    # subnet; the ollama/osrm entries are dropped because those services are
-    # not part of the reduced topology.
+    # subnet.
     extra_hosts: !override
       - "postgres:${WIMS_LOCAL_POSTGRES_IP:-172.28.0.3}"
       - "redis:${WIMS_LOCAL_REDIS_IP:-172.28.0.5}"
@@ -98,7 +97,6 @@ services:
         ipv4_address: ${WIMS_LOCAL_BACKEND_IP:-172.28.0.130}
     volumes: !override
       - incident_attachments_data:/app/storage
-      - ./suricata/logs:/var/log/suricata:ro
       - ./postgres-init:/postgres-init:ro
     depends_on: !override
       postgres:

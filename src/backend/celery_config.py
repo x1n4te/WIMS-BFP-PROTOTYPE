@@ -19,18 +19,12 @@ celery_app = Celery(
     ),
     include=[
         "tasks.analytics_refresh",
-        "tasks.civilian_reports",
-        "tasks.expire_content",
         "tasks.drafts",
         "tasks.exports",
-        "tasks.ip_blocklist",
-        "tasks.device_blocklist",
         "tasks.monitoring",
         "tasks.notifications",
         "tasks.password_expiry",
-        "tasks.report_photos",
         "tasks.scheduled_backup",
-        "tasks.suricata",
     ],
 )
 
@@ -39,23 +33,17 @@ celery_app = Celery(
 celery_app.conf.imports = (
     "tasks.analytics_refresh",
     "tasks.anomaly_detection",
-    "tasks.civilian_reports",
-    "tasks.expire_content",
     "tasks.drafts",
     "tasks.exports",
-    "tasks.ip_blocklist",
-    "tasks.device_blocklist",
     "tasks.kms_rotation",
     "tasks.monitoring",
     "tasks.notifications",
     "tasks.password_expiry",
-    "tasks.report_photos",
     "tasks.scheduled_backup",
     "tasks.scheduled_reports",
-    "tasks.suricata",
 )
 # Auto-discover task modules instead of side-effect imports in main.py
-celery_app.autodiscover_tasks(["tasks", "tasks.suricata_redis", "tasks.ai_forwarding"])
+celery_app.autodiscover_tasks(["tasks"])
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -65,21 +53,14 @@ celery_app.conf.update(
     imports=(
         "tasks.analytics_refresh",
         "tasks.anomaly_detection",
-        "tasks.civilian_reports",
-        "tasks.expire_content",
         "tasks.drafts",
         "tasks.exports",
-        "tasks.ip_blocklist",
-        "tasks.device_blocklist",
         "tasks.kms_rotation",
         "tasks.monitoring",
         "tasks.notifications",
         "tasks.password_expiry",
-        "tasks.report_photos",
-        "tasks.routing",
         "tasks.scheduled_backup",
         "tasks.scheduled_reports",
-        "tasks.suricata",
     ),
     # Refresh interval in seconds. Default: 6 hours.
     # Override via CELERY_MV_REFRESH_INTERVAL env var.
@@ -91,10 +72,6 @@ celery_app.conf.update(
             "task": "analytics.refresh_materialized_views",
             "schedule": MV_REFRESH_INTERVAL,
         },
-        "ingest-suricata-eve": {
-            "task": "tasks.suricata.ingest_suricata_eve",
-            "schedule": 10.0,  # every 10 seconds
-        },
         # M4-E: Auto-archive DRAFT incidents older than 30 days. Runs daily at 02:00 UTC.
         "expire-stale-drafts-daily": {
             "task": "tasks.drafts.expire_old_drafts",
@@ -105,30 +82,14 @@ celery_app.conf.update(
             "task": "tasks.monitoring.worker_heartbeat",
             "schedule": 30.0,
         },
-        "timeout-pending-civilian-reports": {
-            "task": "tasks.civilian_reports.timeout_pending_reports",
-            "schedule": 300.0,
-        },
         "snapshot-system-metrics": {
             "task": "tasks.monitoring.snapshot_system_metrics",
             "schedule": 60.0,
-        },
-        "update-suricata-rules-weekly": {
-            "task": "tasks.suricata.update_rules",
-            "schedule": crontab(hour=3, minute=0, day_of_week=0),
         },
         # M13b: Weekly analytics report â€” Monday 07:00 UTC
         "send-weekly-report-email": {
             "task": "tasks.notifications.send_weekly_report_email",
             "schedule": crontab(day_of_week=1, hour=7, minute=0),
-        },
-        "subscribe-suricata-alerts": {
-            "task": "tasks.suricata_redis.subscribe_alerts",
-            "schedule": 10.0,
-        },
-        "process-ai-queue": {
-            "task": "tasks.ai_forwarding.process_queue",
-            "schedule": 10.0,
         },
         # GH #152 Phase 6: Daily KMS key rotation check (03:30 UTC)
         "ensure-pii-key-rotation-daily": {
@@ -155,27 +116,7 @@ celery_app.conf.update(
             "task": "tasks.scheduled_reports.execute_due_reports",
             "schedule": SCHEDULE_CHECK_INTERVAL,
         },
-        # Phase 2: Orphan civilian photo cleanup (hourly)
-        "cleanup-orphan-civilian-photos": {
-            "task": "tasks.report_photos.cleanup_orphan_civilian_photos",
-            "schedule": 3600.0,
-        },
-        # Task 7: Periodic Redis blocklist resync (every 5 min)
-        "resync-ip-blocklist": {
-            "task": "tasks.ip_blocklist.resync_ip_blocklist",
-            "schedule": 300.0,
-        },
-        # Wayfinder #569: Periodic Redis device blocklist resync (every 5 min)
-        "resync-device-blocklist": {
-            "task": "tasks.device_blocklist.resync_device_blocklist",
-            "schedule": 300.0,
-        },
-        # Slice F: Archive expired published Community Safety Hub content
-        # (every 5 minutes). Public reads also enforce expiry at read time, so
-        # the hub stays correct even if this beat is delayed.
-        "expire-community-content": {
-            "task": "tasks.expire_content.expire_published_content",
-            "schedule": 300.0,
-        },
+        # Turnover Phase 3: Suricata ingest/rules, AI queue, civilian report/photo/community and
+        # IP/device blocklist resync jobs are intentionally unscheduled (source kept).
     },
 )

@@ -7,7 +7,7 @@ services:
   # that copy for demo.wimsbfp.tech (a straight domain substitution — see
   # its header). Load this ON TOP OF docker-compose.prod.yml via:
   #
-  #   EXTRA_COMPOSE_FILE="docker-compose.prod.small.yml docker-compose.prod.demo.yml" bash run.sh install
+  #   EXTRA_COMPOSE_FILE="docker-compose.prod.demo.yml" bash run.sh install
   #
   # For a different domain: copy nginx.demo.conf, substitute the domain
   # (`sed 's/demo\.wimsbfp\.tech/your-domain/g'`), and point this file's

@@ -51,6 +51,95 @@ def pytest_configure(config):
 
 
 # =============================================================================
+# Turnover Phase 3: features unmounted from the client build
+# =============================================================================
+# Source and tests for these features are kept in the repo, but their routers/tasks are
+# not mounted/scheduled in the turnover build, so their tests would only assert 404s.
+# Files whose imports no longer resolve are not collected at all; the rest are skipped.
+# Remove an entry here when the feature is re-mounted.
+
+collect_ignore = [
+    "test_civilian_api.py",
+    "test_civilian_capability_tracking.py",
+    "test_civilian_claim.py",
+    "test_civilian_triage_module.py",
+    "test_triage_notifications.py",
+    "test_triage_queue_province.py",
+    "test_triage_workspace.py",
+]
+
+_TURNOVER_UNMOUNTED = (
+    # civilian / public
+    "tests/test_admin_civilians.py",
+    "tests/test_community_content_routes.py",
+    "tests/test_consent_rate_limit.py",
+    "tests/test_information_admin.py",
+    "tests/test_information_public.py",
+    "tests/test_information_emergency_verification_bridge.py",
+    "tests/test_operational_map.py",
+    "tests/test_operations.py",
+    "tests/test_operations_auth.py",
+    "tests/test_perimeter_api.py",
+    "tests/test_public_abuse_controls.py",
+    "tests/test_public_map.py",
+    "tests/test_public_submission.py",
+    "tests/test_status_update_api.py",
+    "tests/test_triage_bulk_actions.py",
+    "tests/test_validator_civilian_profile.py",
+    # device / ip blocklist, Suricata / AI / HITL
+    "tests/test_device_blocklist_router.py",
+    "tests/test_device_token_middleware.py",
+    "tests/test_wayfinder_integration.py",
+    "tests/test_ip_blocklist_api.py",
+    "tests/test_ip_blocklist_router.py",
+    "tests/test_security_device_block_api.py",
+    "tests/test_security_logs_device_hash.py",
+    "tests/test_security_monitoring.py",
+    "tests/test_suricata_redis_host_networking.py",
+    "tests/test_osrm_infra_config.py",
+    # live-stack integration tests of removed features
+    "tests/integration/test_ai_ids_api.py",
+    "tests/integration/test_civilian_api.py",
+    "tests/integration/test_community_content_rls.py",
+    "tests/integration/test_contributor_endpoints.py",
+    "tests/integration/test_operations_linked_reports_sql.py",
+    "tests/integration/test_report_photos_rls.py",
+    "tests/integration/test_triage_api.py",
+    "tests/integration/test_triage_queue.py",
+    "tests/integration/test_ref_emergency.py",
+    # classes / tests inside mixed files
+    "tests/test_ai_service_retry.py::TestDockerComposeConfig",
+    "tests/test_admin_new_routes.py::TestAnalyzeAuditLogsBatchLimit",
+    "tests/test_admin_new_routes.py::TestAuditLogsAnalyze",
+    "tests/test_admin_new_routes.py::TestCreateIncidentFromAlert",
+    "tests/test_admin_new_routes.py::TestCreateIncidentFromAlertExtended",
+    "tests/test_admin_new_routes.py::TestGetRelatedAudit",
+    "tests/test_admin_new_routes.py::TestGetSecurityLogsFiltered",
+    "tests/test_admin_new_routes.py::TestGetSecurityLogsPagination",
+    "tests/test_admin_new_routes.py::TestLegacyHitlAuditTrail",
+    "tests/test_admin_new_routes.py::TestPatchSecurityLogHitl",
+    "tests/test_admin_new_routes.py::TestSecurityAuditRequestParam",
+    "tests/test_log_fulltext_search.py::TestSecurityLogSearch",
+    "tests/test_sqli_allowlists.py::TestAdminSecurityLogs",
+    "tests/test_breach_notifications.py::TestBreachCreatedOnConfirmThreat",
+    "tests/test_breach_notifications.py::TestBreachDeadline",
+    "tests/test_breach_notifications.py::TestBreachEmailDispatch",
+    "tests/test_breach_notifications.py::TestBreachAuditLog",
+    "tests/test_auth_register.py::TestRegisterEndpoint",
+    "tests/test_auth_register.py::TestVerifyRegistrationEndpoint",
+)
+
+
+def pytest_collection_modifyitems(config, items):
+    skip = pytest.mark.skip(reason="Feature unmounted in turnover Phase 3 (source kept)")
+    for item in items:
+        if item.nodeid.startswith(_TURNOVER_UNMOUNTED):
+            item.add_marker(skip)
+        elif item.nodeid.startswith("tests/test_system_monitoring.py::test_suricata_"):
+            item.add_marker(skip)
+
+
+# =============================================================================
 # Redis rate-limit test isolation
 # =============================================================================
 

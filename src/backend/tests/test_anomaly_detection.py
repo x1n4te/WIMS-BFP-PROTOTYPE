@@ -308,8 +308,8 @@ class TestWriteAnomaly:
         mock_db.execute.side_effect = [insert_result, threat_result]
         return mock_db
 
-    def test_new_anomaly_inserts_threat_log(self):
-        """When anomaly_detections INSERT returns a row, security_threat_logs is also written."""
+    def test_new_anomaly_does_not_write_threat_log(self):
+        """A new anomaly only writes anomaly_detections (Suricata/threat-log flow removed in Phase 3)."""
         db = self._make_write_db(anomaly_id=1)
         inserted = _write_anomaly(
             db,
@@ -320,10 +320,9 @@ class TestWriteAnomaly:
             dedup_key="BULK_DELETE:test:202606121430",
         )
         assert inserted is True
-        assert db.execute.call_count == 2
-        # Second call should be the security_threat_logs INSERT
-        second_sql = str(db.execute.call_args_list[1][0][0])
-        assert "security_threat_logs" in second_sql
+        assert db.execute.call_count == 1
+        assert "anomaly_detections" in str(db.execute.call_args_list[0][0][0])
+        assert "security_threat_logs" not in str(db.execute.call_args_list[0][0][0])
 
     def test_dedup_skips_threat_log(self):
         """When ON CONFLICT fires (fetchone returns None), no threat-log insert."""
@@ -340,25 +339,6 @@ class TestWriteAnomaly:
         # Only the anomaly_detections INSERT was called; no threat-log write
         assert db.execute.call_count == 1
 
-    def test_threat_log_payload_contains_anomaly_type(self):
-        """The security_threat_logs raw_payload includes anomaly_type."""
-        db = self._make_write_db(anomaly_id=5)
-        _write_anomaly(
-            db,
-            anomaly_type="OFF_HOURS",
-            subject_user_id=str(_USER_A),
-            severity="MEDIUM",
-            details={"action_type": "PII_EXPORT", "audit_id": 42},
-            dedup_key="OFF_HOURS:42",
-            source_ip="1.2.3.4",
-        )
-        # Extract the params passed to the second execute call
-        second_params = db.execute.call_args_list[1][0][1]
-        payload = json.loads(second_params["payload"])
-        assert payload["anomaly_type"] == "OFF_HOURS"
-        assert payload["action_type"] == "PII_EXPORT"
-        assert second_params["source_ip"] == "1.2.3.4"
-
     def test_anomaly_details_serialised_as_json(self):
         """details dict is JSON-serialised into the anomaly_detections INSERT."""
         db = self._make_write_db(anomaly_id=2)
@@ -374,21 +354,6 @@ class TestWriteAnomaly:
         loaded = json.loads(first_params["details"])
         assert loaded["distinct_ip_count"] == 2
         assert "1.1.1.1" in loaded["ips"]
-
-    def test_source_ip_none_passed_cleanly_to_threat_log(self):
-        """_write_anomaly(..., source_ip=None) passes None cleanly to threat logs."""
-        db = self._make_write_db(anomaly_id=3)
-        _write_anomaly(
-            db,
-            anomaly_type="BULK_DELETE",
-            subject_user_id=str(_USER_A),
-            severity="HIGH",
-            details={"count": 12},
-            dedup_key="BULK_DELETE:test:202606121430",
-            source_ip=None,
-        )
-        second_params = db.execute.call_args_list[1][0][1]
-        assert second_params["source_ip"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +431,7 @@ class TestWindowFloorDedup:
         assert inserted_run1 is True
         assert inserted_run2 is False
         # Run 1: 2 executes (anomaly_detections INSERT + threat_log INSERT)
-        assert write_db_run1.execute.call_count == 2
+        assert write_db_run1.execute.call_count == 1
         # Run 2: 1 execute only (anomaly_detections INSERT, no threat_log)
         assert write_db_run2.execute.call_count == 1
 
@@ -497,7 +462,7 @@ class TestWindowFloorDedup:
 
         assert _write_anomaly(write_db_run1, **r1[0]) is True
         assert _write_anomaly(write_db_run2, **r2[0]) is False
-        assert write_db_run1.execute.call_count == 2
+        assert write_db_run1.execute.call_count == 1
         assert write_db_run2.execute.call_count == 1
 
 
@@ -595,7 +560,6 @@ class TestDetectBehavioralAnomaliesTask:
         mock_db.execute.side_effect = [
             fetch_result_bulk,  # 0: _detect_bulk_delete query
             insert_result_new,  # 1: _write_anomaly #1 anomaly_detections INSERT
-            threat_result_1,  # 2: _write_anomaly #1 security_threat_logs INSERT
             insert_result_dedup,  # 3: _write_anomaly #2 anomaly_detections INSERT (dedup)
             fetch_result_empty,  # 4: _detect_off_hours query
             fetch_result_empty,  # 5: _detect_privilege_escalation query
@@ -762,7 +726,7 @@ class TestSuspiciousQueryPatternWindowFloor:
 
         assert _write_anomaly(write_db_run1, **r1[0]) is True
         assert _write_anomaly(write_db_run2, **r2[0]) is False
-        assert write_db_run1.execute.call_count == 2  # anomaly_detections + threat_log
+        assert write_db_run1.execute.call_count == 1  # anomaly_detections only
         assert write_db_run2.execute.call_count == 1  # anomaly_detections only (dedup)
 
 

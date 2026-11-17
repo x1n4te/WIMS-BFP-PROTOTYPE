@@ -1,5 +1,9 @@
 """System Admin API — breach notification routes (M10d, RA 10173)."""
 
+import json
+import logging
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -7,10 +11,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from auth import get_db_with_rls, get_system_admin
-from schemas.breach import BreachResponse, BreachUpdate
+from schemas.breach import BreachCreate, BreachResponse, BreachUpdate
 from utils.audit import log_system_audit
 
 router = APIRouter()
+logger = logging.getLogger("wims.admin.breach")
 
 
 def _row_to_dict(row) -> dict:
@@ -143,10 +148,122 @@ def update_breach(
         old_values=old_values,
         new_values=new_values,
     )
-    db.commit()
-
+    # Read the updated row BEFORE commit: the commit ends the transaction and clears the
+    # SET LOCAL RLS context, after which this SELECT would return no row (-> 500).
     row = db.execute(
         text(f"SELECT {_SELECT_COLS} FROM wims.breach_notifications WHERE breach_id = :bid"),
         {"bid": breach_id},
     ).fetchone()
+    db.commit()
     return _row_to_dict(row)
+
+
+@router.post("/breach", response_model=BreachResponse, status_code=201)
+def create_breach(
+    body: BreachCreate,
+    request: Request,
+    _admin: Annotated[dict, Depends(get_system_admin)],
+    db: Annotated[Session, Depends(get_db_with_rls)],
+):
+    """Log a breach manually (RA 10173 register), independent of any threat-detection flow.
+
+    ``breach_notifications.threat_log_id`` is NOT NULL and references
+    ``security_threat_logs``, so a manual report is anchored to a backing log row
+    (``suricata_sid`` NULL, ``admin_action_taken`` = MANUAL_BREACH_REPORT) created in the same
+    transaction. The 72-hour NPC deadline runs from ``detected_at``.
+    """
+    now = datetime.now(timezone.utc)
+    detected_at = body.detected_at or now
+    if detected_at.tzinfo is None:
+        detected_at = detected_at.replace(tzinfo=timezone.utc)
+    if detected_at > now + timedelta(minutes=5):
+        raise HTTPException(status_code=422, detail="detected_at cannot be in the future")
+    npc_deadline = detected_at + timedelta(hours=72)
+
+    payload = json.dumps(
+        {
+            "source": "MANUAL_BREACH_REPORT",
+            "summary": body.summary,
+            "reported_by": str(_admin["user_id"]),
+        }
+    )
+    log_id = db.execute(
+        text(
+            "INSERT INTO wims.security_threat_logs"
+            " (timestamp, severity_level, raw_payload, admin_action_taken, reviewed_by)"
+            " VALUES (:ts, :sev, :payload, 'MANUAL_BREACH_REPORT', CAST(:uid AS uuid))"
+            " RETURNING log_id"
+        ),
+        {"ts": detected_at, "sev": body.severity.value, "payload": payload, "uid": _admin["user_id"]},
+    ).scalar()
+
+    row = db.execute(
+        text(
+            "INSERT INTO wims.breach_notifications"
+            " (threat_log_id, detected_at, npc_deadline_at, status, affected_systems,"
+            "  data_scope, notes, reported_by)"
+            " VALUES (:log_id, :detected_at, :deadline, 'DETECTED', :systems, :scope, :notes,"
+            "  CAST(:uid AS uuid))"
+            f" RETURNING {_SELECT_COLS}"
+        ),
+        {
+            "log_id": log_id,
+            "detected_at": detected_at,
+            "deadline": npc_deadline,
+            "systems": body.affected_systems,
+            "scope": body.data_scope,
+            "notes": body.notes,
+            "uid": _admin["user_id"],
+        },
+    ).fetchone()
+    result = _row_to_dict(row)
+
+    log_system_audit(
+        db=db,
+        user_id=_admin["user_id"],
+        action_type="BREACH_DETECTED",
+        table_affected="breach_notifications",
+        record_id=result["breach_id"],
+        request=request,
+        new_values={
+            "source": "manual",
+            "breach_id": result["breach_id"],
+            "threat_log_id": log_id,
+            "severity": body.severity.value,
+        },
+        sensitive=True,
+    )
+
+    # Collect admin emails BEFORE commit: the RLS GUC is cleared by the commit.
+    admin_emails = [
+        r[0]
+        for r in db.execute(
+            text(
+                "SELECT email FROM wims.users"
+                " WHERE role = 'SYSTEM_ADMIN' AND is_active = TRUE AND email IS NOT NULL"
+            )
+        ).fetchall()
+    ]
+    db.commit()
+
+    if admin_emails:
+        try:
+            from tasks.notifications import send_email_task
+
+            frontend_url = os.environ.get("NEXT_PUBLIC_APP_URL", "http://localhost:3000")
+            send_email_task.delay(
+                to=admin_emails,
+                template_name="breach_alert",
+                context={
+                    "breach_id": result["breach_id"],
+                    "severity": body.severity.value,
+                    "summary": body.summary,
+                    "detected_at": detected_at.isoformat(),
+                    "npc_deadline": npc_deadline.isoformat(),
+                    "dashboard_link": f"{frontend_url}/admin/breach",
+                },
+            )
+        except Exception as exc:  # broker hiccup must not fail a committed record
+            logger.warning("breach_alert email dispatch failed (breach_id=%s): %s", result["breach_id"], exc)
+
+    return result

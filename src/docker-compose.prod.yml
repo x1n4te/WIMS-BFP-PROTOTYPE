@@ -3,41 +3,17 @@ services:
     environment:
       KC_HOSTNAME_URL: ${PUBLIC_BASE_URL}/auth
 
-  osrm:
-    image: osrm/osrm-backend:v5.25.0
-    container_name: wims-osrm
-    command: ["osrm-routed", "--algorithm", "mld", "--verbosity", "WARNING", "/data/active/metro-manila.osrm"]
-    volumes:
-      - ${OSRM_DATA_DIR:?set OSRM_DATA_DIR}:/data:ro
-    networks:
-      wims_internal:
-        ipv4_address: 172.18.0.9
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /data/active/metro-manila.osrm.cells && test -f /data/active/metro-manila.osrm.partition"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1gb
-
   backend:
     environment:
       - KEYCLOAK_ISSUER=${PUBLIC_BASE_URL}/auth/realms/bfp
       - CSRF_TRUSTED_ORIGINS=${PUBLIC_BASE_URL}
       - NEXT_PUBLIC_APP_URL=${PUBLIC_BASE_URL}
       - WIMS_MASTER_KEY=${WIMS_MASTER_KEY}
-      - OSRM_BASE_URL=http://osrm:5000
 
   celery-worker:
     environment:
       - NEXT_PUBLIC_APP_URL=${PUBLIC_BASE_URL}
       - WIMS_MASTER_KEY=${WIMS_MASTER_KEY}
-      - OSRM_BASE_URL=http://osrm:5000
 
   frontend:
     build:
@@ -59,23 +35,6 @@ services:
       # Keycloak to reject the token with an issuer mismatch.
       - AUTH_SERVER_URL=${PUBLIC_BASE_URL}/auth
       - BACKEND_URL=http://backend:8000
-
-  # Contabo production VPS has 8 vCPUs / 23 GiB RAM.
-  # Give 6 CPUs to Ollama (inference is CPU-bound), leaving 2 for all other
-  # services (Postgres, Keycloak, Suricata, etc. which total ~0.5 CPU idle).
-  ollama:
-    environment:
-      # Use memory-mapped IO for model loading (avoids anonymous RAM copy on
-      # cold start).  Single-user CPU inference benefits from OS page cache.
-      - OLLAMA_MMAP=1
-      # Match the Docker CPU limit below.  Oversubscribing threads causes
-      # context-switching thrash that kills throughput.
-      - OLLAMA_NUM_THREADS=6
-    deploy:
-      resources:
-        limits:
-          cpus: '6'
-          memory: 6gb
 
   # Production TLS certs — not available in local dev (override swaps nginx.conf).
   # nginx.conf mount is in the base compose file; this file only adds production certs.
