@@ -48,7 +48,6 @@ import math
 import os
 from typing import Any
 
-import redis as _redis_lib
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session

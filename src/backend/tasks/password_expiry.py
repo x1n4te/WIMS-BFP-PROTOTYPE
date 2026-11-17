@@ -74,7 +74,9 @@ def enforce_password_expiry() -> dict:
                 try:
                     added = add_required_action(m["id"], REQUIRED_ACTION)
                 except Exception:
-                    logger.exception("Could not flag user %s for password expiry", m.get("username"))
+                    logger.exception(
+                        "Could not flag user %s for password expiry", m.get("username")
+                    )
                     summary["errors"] += 1
                     continue
                 if not added:

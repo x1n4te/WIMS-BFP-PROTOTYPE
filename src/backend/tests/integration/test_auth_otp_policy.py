@@ -80,7 +80,9 @@ def test_direct_grant_otp_is_conditional_on_user_having_otp():
     realm = _load_import_realm()
     dg = _flow_by_alias(realm, "direct grant")
     cond_execs = [
-        e for e in dg["authenticationExecutions"] if e.get("flowAlias") == "Direct Grant - Conditional OTP"
+        e
+        for e in dg["authenticationExecutions"]
+        if e.get("flowAlias") == "Direct Grant - Conditional OTP"
     ]
     assert len(cond_execs) == 1 and cond_execs[0]["requirement"] == "CONDITIONAL"
     assert "direct-grant-validate-otp" not in {

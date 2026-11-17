@@ -551,7 +551,6 @@ class TestDetectBehavioralAnomaliesTask:
         # First _write_anomaly: INSERT succeeds (returns row)
         insert_result_new = MagicMock()
         insert_result_new.fetchone.return_value = (1,)
-        threat_result_1 = MagicMock()
 
         # Second _write_anomaly: ON CONFLICT fires (returns None)
         insert_result_dedup = MagicMock()

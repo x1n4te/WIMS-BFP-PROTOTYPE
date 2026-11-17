@@ -2,7 +2,6 @@
 
 from typing import Annotated
 
-import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session

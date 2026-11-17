@@ -141,7 +141,9 @@ class TestResolveImportRegion:
 
     def test_encoder_without_region_forbidden(self):
         with pytest.raises(HTTPException) as e:
-            resolve_import_region(MagicMock(), {"role": "REGIONAL_ENCODER", "assigned_region_id": None}, None)
+            resolve_import_region(
+                MagicMock(), {"role": "REGIONAL_ENCODER", "assigned_region_id": None}, None
+            )
         assert e.value.status_code == 403
 
 
@@ -153,7 +155,10 @@ class TestResolveImportRegion:
 def _rows(region_text="Region III - Central Luzon"):
     return [
         AforParsedRow(
-            row_index=0, status="VALID", errors=[], data={"_region_text": region_text, "region_id": 5}
+            row_index=0,
+            status="VALID",
+            errors=[],
+            data={"_region_text": region_text, "region_id": 5},
         )
     ]
 
@@ -222,9 +227,7 @@ class TestAforImportRoute:
         db.execute.return_value.fetchone.return_value = (1,)
         _as(ENCODER, db)
         p1, p2, p3 = self._patches("Region III - Central Luzon")
-        with p1, p2, p3, patch(
-            "api.routes.regional.afor.text", side_effect=lambda s: s
-        ):
+        with p1, p2, p3, patch("api.routes.regional.afor.text", side_effect=lambda s: s):
             db.execute.return_value.fetchone.side_effect = [(1,), ("National Capital Region",)]
             r = _post_import(client)
         assert r.status_code == 400
@@ -338,7 +341,9 @@ class TestTemporaryPassword:
         from keycloak.exceptions import KeycloakError
 
         _as(ADMIN, _db_with_user())
-        err = KeycloakError(f'400: {{"error":"password_policy","error_description":"Invalid password: {SECRET}"}}')
+        err = KeycloakError(
+            f'400: {{"error":"password_policy","error_description":"Invalid password: {SECRET}"}}'
+        )
         with (
             patch("api.routes.admin.users.set_temporary_password", side_effect=err),
             patch("api.routes.admin.users.log_system_audit") as audit,
@@ -386,7 +391,9 @@ class TestTemporaryPassword:
         adm = MagicMock()
         with patch.object(ka, "_get_admin_client", return_value=adm):
             ka.set_temporary_password(KC_ID, SECRET)
-        adm.set_user_password.assert_called_once_with(user_id=KC_ID, password=SECRET, temporary=True)
+        adm.set_user_password.assert_called_once_with(
+            user_id=KC_ID, password=SECRET, temporary=True
+        )
         adm.user_logout.assert_called_once_with(user_id=KC_ID)
 
 
@@ -449,7 +456,11 @@ class TestKeycloakAdminCredentials:
         services = yaml.safe_load(compose.read_text(encoding="utf-8"))["services"]
         for name in ("backend", "celery-worker"):
             env = services[name]["environment"]
-            flat = "\n".join(env) if isinstance(env, list) else "\n".join(f"{k}={v}" for k, v in env.items())
+            flat = (
+                "\n".join(env)
+                if isinstance(env, list)
+                else "\n".join(f"{k}={v}" for k, v in env.items())
+            )
             assert "KEYCLOAK_ADMIN_USER=" in flat, name
             assert "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?error}" in flat, name
 
@@ -516,7 +527,10 @@ class TestEnforcePasswordExpiry:
     def test_flags_only_old_admin_and_validator_and_audits(self):
         summary, added, audit, lst = self._run(
             {
-                "SYSTEM_ADMIN": [self.member("a1", "old.admin", 120), self.member("a2", "new.admin", 10)],
+                "SYSTEM_ADMIN": [
+                    self.member("a1", "old.admin", 120),
+                    self.member("a2", "new.admin", 10),
+                ],
                 "NATIONAL_VALIDATOR": [self.member("v1", "old.validator", 91)],
             }
         )
@@ -550,7 +564,9 @@ class TestEnforcePasswordExpiry:
 
         session = MagicMock()
         with (
-            patch.object(pe, "list_role_members_with_password_age", side_effect=RuntimeError("kc down")),
+            patch.object(
+                pe, "list_role_members_with_password_age", side_effect=RuntimeError("kc down")
+            ),
             patch.object(pe, "_AdminSessionLocal", return_value=session),
             patch.object(pe, "set_rls_context"),
             patch.object(pe, "log_system_audit") as audit,

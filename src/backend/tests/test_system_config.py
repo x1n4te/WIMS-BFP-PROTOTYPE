@@ -110,7 +110,11 @@ class TestGetConfig:
         assert "config" in data
         keys = [entry["key"] for entry in data["config"]]
         # AI / Suricata keys are hidden (turnover Phase 3)
-        for hidden in ("ai_timeout_seconds", "alert_severity_threshold", "auto_ai_analysis_enabled"):
+        for hidden in (
+            "ai_timeout_seconds",
+            "alert_severity_threshold",
+            "auto_ai_analysis_enabled",
+        ):
             assert hidden not in keys
         assert "offline_storage_mb" in keys
         assert "session_timeout_minutes" in keys
@@ -255,7 +259,9 @@ class TestPatchConfig:
         mock_db, mock_get_db = _mock_config_db(fetchone_row=None)
         app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-        response = client.patch("/api/admin/config/worker_stale_timeout_seconds", json={"value": "30"})
+        response = client.patch(
+            "/api/admin/config/worker_stale_timeout_seconds", json={"value": "30"}
+        )
         assert response.status_code == 404
 
     def test_requires_admin(self, client: TestClient):
@@ -264,7 +270,9 @@ class TestPatchConfig:
         _, mock_get_db = _mock_config_db()
         app.dependency_overrides[get_db_with_rls] = mock_get_db
 
-        response = client.patch("/api/admin/config/worker_stale_timeout_seconds", json={"value": "99"})
+        response = client.patch(
+            "/api/admin/config/worker_stale_timeout_seconds", json={"value": "99"}
+        )
         assert response.status_code in (401, 403)
 
     def test_audit_log_includes_forensic_old_new_values(self, client: TestClient):

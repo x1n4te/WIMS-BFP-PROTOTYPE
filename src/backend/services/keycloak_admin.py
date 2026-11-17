@@ -44,6 +44,7 @@ def _kc_admin_credentials() -> tuple[str, str]:
         )
     return user, password
 
+
 # Password alphabet: upper + lower + digits + safe special chars.
 # Avoids confusable chars (0/O, l/1) and shell-sensitive chars.
 _PWD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*"
@@ -356,7 +357,11 @@ def list_role_members_with_password_age(role_name: str) -> list[dict]:
     out: list[dict] = []
     for m in members:
         creds = adm.get_credentials(user_id=m["id"]) or []
-        dates = [c.get("createdDate") for c in creds if c.get("type") == "password" and c.get("createdDate")]
+        dates = [
+            c.get("createdDate")
+            for c in creds
+            if c.get("type") == "password" and c.get("createdDate")
+        ]
         out.append(
             {
                 "id": m["id"],

@@ -133,8 +133,20 @@ class TestRoutes:
 def _breach_row(breach_id=7, log_id=99, detected=None, deadline=None, status="DETECTED"):
     detected = detected or datetime.now(timezone.utc)
     deadline = deadline or detected + timedelta(hours=72)
-    return (breach_id, log_id, detected, deadline, status, "Portal", "Contact data", "n", ADMIN["user_id"],
-            None, detected, detected)
+    return (
+        breach_id,
+        log_id,
+        detected,
+        deadline,
+        status,
+        "Portal",
+        "Contact data",
+        "n",
+        ADMIN["user_id"],
+        None,
+        detected,
+        detected,
+    )
 
 
 class TestManualBreach:
@@ -152,20 +164,27 @@ class TestManualBreach:
     def test_admin_creates_breach_without_hitl(self, client):
         db = self._db()
         _as(ADMIN, db)
-        with patch("api.routes.admin.breach.log_system_audit") as audit, patch(
-            "tasks.notifications.send_email_task"
-        ) as mail:
+        with (
+            patch("api.routes.admin.breach.log_system_audit") as audit,
+            patch("tasks.notifications.send_email_task") as mail,
+        ):
             r = client.post(
                 "/api/admin/breach",
-                json={"summary": "Laptop with exported AFOR data lost", "severity": "HIGH",
-                      "affected_systems": "Portal", "data_scope": "Contact data"},
+                json={
+                    "summary": "Laptop with exported AFOR data lost",
+                    "severity": "HIGH",
+                    "affected_systems": "Portal",
+                    "data_scope": "Contact data",
+                },
             )
         assert r.status_code == 201, r.text
         body = r.json()
         assert body["breach_id"] == 7 and body["status"] == "DETECTED"
         # backing threat-log row (NOT NULL FK) then the breach row, in one transaction
         sql = [str(c.args[0]) for c in db.execute.call_args_list]
-        assert "INSERT INTO wims.security_threat_logs" in sql[0] and "MANUAL_BREACH_REPORT" in sql[0]
+        assert (
+            "INSERT INTO wims.security_threat_logs" in sql[0] and "MANUAL_BREACH_REPORT" in sql[0]
+        )
         assert "INSERT INTO wims.breach_notifications" in sql[1]
         assert db.execute.call_args_list[1].args[1]["log_id"] == 99
         db.commit.assert_called_once()
@@ -180,8 +199,14 @@ class TestManualBreach:
         db = self._db()
         _as(ADMIN, db)
         detected = datetime.now(timezone.utc) - timedelta(hours=5)
-        with patch("api.routes.admin.breach.log_system_audit"), patch("tasks.notifications.send_email_task"):
-            r = client.post("/api/admin/breach", json={"summary": "Misdirected email", "detected_at": detected.isoformat()})
+        with (
+            patch("api.routes.admin.breach.log_system_audit"),
+            patch("tasks.notifications.send_email_task"),
+        ):
+            r = client.post(
+                "/api/admin/breach",
+                json={"summary": "Misdirected email", "detected_at": detected.isoformat()},
+            )
         assert r.status_code == 201
         params = db.execute.call_args_list[1].args[1]
         assert params["deadline"] - params["detected_at"] == timedelta(hours=72)
@@ -198,7 +223,12 @@ class TestManualBreach:
     def test_validation(self, client):
         _as(ADMIN, self._db())
         assert client.post("/api/admin/breach", json={"summary": "ab"}).status_code == 422
-        assert client.post("/api/admin/breach", json={"summary": "valid text", "severity": "BOGUS"}).status_code == 422
+        assert (
+            client.post(
+                "/api/admin/breach", json={"summary": "valid text", "severity": "BOGUS"}
+            ).status_code
+            == 422
+        )
 
     def test_non_admin_forbidden(self, client):
         db = self._db()
@@ -209,7 +239,10 @@ class TestManualBreach:
     def test_email_failure_does_not_fail_committed_record(self, client):
         db = self._db()
         _as(ADMIN, db)
-        with patch("api.routes.admin.breach.log_system_audit"), patch("tasks.notifications.send_email_task") as mail:
+        with (
+            patch("api.routes.admin.breach.log_system_audit"),
+            patch("tasks.notifications.send_email_task") as mail,
+        ):
             mail.delay.side_effect = RuntimeError("broker down")
             r = client.post("/api/admin/breach", json={"summary": "valid text"})
         assert r.status_code == 201
@@ -226,8 +259,15 @@ class TestAnomalyDetachedFromThreatFlow:
 
         db = MagicMock()
         db.execute.return_value.fetchone.return_value = (5,)
-        ok = ad._write_anomaly(db, anomaly_type="OFF_HOURS", subject_user_id=ADMIN["user_id"], severity="HIGH",
-                               details={"a": 1}, dedup_key="k", source_ip="1.2.3.4")
+        ok = ad._write_anomaly(
+            db,
+            anomaly_type="OFF_HOURS",
+            subject_user_id=ADMIN["user_id"],
+            severity="HIGH",
+            details={"a": 1},
+            dedup_key="k",
+            source_ip="1.2.3.4",
+        )
         assert ok is True
         assert db.execute.call_count == 1
         assert "anomaly_detections" in str(db.execute.call_args.args[0])
@@ -238,10 +278,22 @@ class TestAnomalyDetachedFromThreatFlow:
 
         db = MagicMock()
         db.execute.return_value.fetchone.return_value = None
-        assert ad._write_anomaly(db, anomaly_type="X", subject_user_id=None, severity="LOW", details={}, dedup_key="k") is False
+        assert (
+            ad._write_anomaly(
+                db,
+                anomaly_type="X",
+                subject_user_id=None,
+                severity="LOW",
+                details={},
+                dedup_key="k",
+            )
+            is False
+        )
 
     def test_detectors_only_read_audit_trails(self):
-        src = (pathlib.Path(__file__).resolve().parents[1] / "tasks" / "anomaly_detection.py").read_text(encoding="utf-8")
+        src = (
+            pathlib.Path(__file__).resolve().parents[1] / "tasks" / "anomaly_detection.py"
+        ).read_text(encoding="utf-8")
         assert "suricata_ingestion" not in src and "FROM wims.security_threat_logs" not in src
         assert "INSERT INTO wims.security_threat_logs" not in src
 
@@ -251,9 +303,15 @@ class TestAnomalyDetachedFromThreatFlow:
 # ---------------------------------------------------------------------------
 
 REMOVED_BEAT = {
-    "ingest-suricata-eve", "subscribe-suricata-alerts", "update-suricata-rules-weekly", "process-ai-queue",
-    "timeout-pending-civilian-reports", "cleanup-orphan-civilian-photos", "resync-device-blocklist",
-    "expire-community-content", "resync-ip-blocklist",
+    "ingest-suricata-eve",
+    "subscribe-suricata-alerts",
+    "update-suricata-rules-weekly",
+    "process-ai-queue",
+    "timeout-pending-civilian-reports",
+    "cleanup-orphan-civilian-photos",
+    "resync-device-blocklist",
+    "expire-community-content",
+    "resync-ip-blocklist",
 }
 
 
@@ -265,21 +323,48 @@ class TestCelery:
         assert not (REMOVED_BEAT & set(sched))
         for entry in sched.values():
             t = entry["task"]
-            assert not any(x in t for x in ("suricata", "ai_forwarding", "civilian", "device_blocklist",
-                                            "ip_blocklist", "expire_content", "report_photos", "routing")), t
+            assert not any(
+                x in t
+                for x in (
+                    "suricata",
+                    "ai_forwarding",
+                    "civilian",
+                    "device_blocklist",
+                    "ip_blocklist",
+                    "expire_content",
+                    "report_photos",
+                    "routing",
+                )
+            ), t
         # in-scope jobs survive
-        for keep in ("detect-behavioral-anomalies", "expire-stale-drafts-daily", "enforce-password-expiry-daily",
-                     "refresh-analytics-mvs", "execute-scheduled-reports", "execute-scheduled-backup",
-                     "send-weekly-report-email", "ensure-pii-key-rotation-daily", "worker-heartbeat"):
+        for keep in (
+            "detect-behavioral-anomalies",
+            "expire-stale-drafts-daily",
+            "enforce-password-expiry-daily",
+            "refresh-analytics-mvs",
+            "execute-scheduled-reports",
+            "execute-scheduled-backup",
+            "send-weekly-report-email",
+            "ensure-pii-key-rotation-daily",
+            "worker-heartbeat",
+        ):
             assert keep in sched, keep
 
     def test_removed_task_modules_not_registered(self):
         from celery_config import celery_app
 
         mods = set(celery_app.conf.imports) | set(celery_app.conf.include or ())
-        for m in ("tasks.suricata", "tasks.suricata_redis", "tasks.ai_forwarding", "tasks.civilian_reports",
-                  "tasks.expire_content", "tasks.device_blocklist", "tasks.ip_blocklist", "tasks.report_photos",
-                  "tasks.routing"):
+        for m in (
+            "tasks.suricata",
+            "tasks.suricata_redis",
+            "tasks.ai_forwarding",
+            "tasks.civilian_reports",
+            "tasks.expire_content",
+            "tasks.device_blocklist",
+            "tasks.ip_blocklist",
+            "tasks.report_photos",
+            "tasks.routing",
+        ):
             assert m not in mods, m
 
     def test_fcm_removed_email_tasks_kept(self):
@@ -287,7 +372,9 @@ class TestCelery:
 
         assert not hasattr(n, "send_status_notification") and not hasattr(n, "_get_messaging")
         assert hasattr(n, "send_email_task") and hasattr(n, "send_weekly_report_email")
-        assert "firebase" not in pathlib.Path(n.__file__).read_text(encoding="utf-8").lower().replace("(fcm push removed", "")
+        assert "firebase" not in pathlib.Path(n.__file__).read_text(
+            encoding="utf-8"
+        ).lower().replace("(fcm push removed", "")
 
 
 # ---------------------------------------------------------------------------
@@ -305,15 +392,20 @@ class TestHealthAndConfig:
         assert {"database", "redis", "keycloak"} <= set(comps)
         assert "suricata" not in comps and "ollama" not in comps
 
-    @pytest.mark.parametrize("key", ["ai_timeout_seconds", "alert_severity_threshold", "auto_ai_analysis_enabled"])
+    @pytest.mark.parametrize(
+        "key", ["ai_timeout_seconds", "alert_severity_threshold", "auto_ai_analysis_enabled"]
+    )
     def test_hidden_config_keys_cannot_be_patched(self, client, key):
         _as(ADMIN)
         assert client.patch(f"/api/admin/config/{key}", json={"value": "1"}).status_code == 400
 
     def test_hidden_config_keys_not_listed(self, client):
         db = MagicMock()
-        rows = [("ai_timeout_seconds", "60", "x", None, None), ("session_timeout_minutes", "30", "y", None, None),
-                ("auto_ai_analysis_enabled", "false", "z", None, None)]
+        rows = [
+            ("ai_timeout_seconds", "60", "x", None, None),
+            ("session_timeout_minutes", "30", "y", None, None),
+            ("auto_ai_analysis_enabled", "false", "z", None, None),
+        ]
         db.execute.return_value.fetchall.return_value = rows
         _as(ADMIN, db)
         keys = [c["key"] for c in client.get("/api/admin/config").json()["config"]]
@@ -346,7 +438,10 @@ class TestHealthAndConfig:
 
         req = MagicMock()
         req.url.path = "/api/ref/regions"
-        with patch.object(main, "_get_redis", _get_redis), patch.object(main, "_get_request_client_ip", lambda _r: "1.2.3.4"):
+        with (
+            patch.object(main, "_get_redis", _get_redis),
+            patch.object(main, "_get_request_client_ip", lambda _r: "1.2.3.4"),
+        ):
             assert asyncio.run(main.blocked_ip_middleware(req, call_next)) == "passed"
 
     def test_compose_has_no_removed_services_or_references(self):
@@ -362,11 +457,21 @@ class TestHealthAndConfig:
             for gone in ("wims-suricata", "ollama", "ollama-model-pull", "osrm"):
                 assert gone not in svcs, (name, gone)
             text_ = f.read_text(encoding="utf-8").lower()
-            for needle in ("ollama", "osrm", "suricata", "firebase_", "turnstile_secret", "docker.sock",
-                           "device_token_signing", "civilian_photo"):
+            for needle in (
+                "ollama",
+                "osrm",
+                "suricata",
+                "firebase_",
+                "turnstile_secret",
+                "docker.sock",
+                "device_token_signing",
+                "civilian_photo",
+            ):
                 if name == "docker-compose.yml" and needle in ("firebase_",):
                     # frontend NEXT_PUBLIC_FIREBASE_* build args stay until the frontend trim (Phase 4)
-                    text_ = "\n".join(l for l in text_.splitlines() if "next_public_firebase" not in l)
+                    text_ = "\n".join(
+                        ln for ln in text_.splitlines() if "next_public_firebase" not in ln
+                    )
                 assert needle not in text_, (name, needle)
             for svc in svcs.values():
                 deps = svc.get("depends_on") or {}

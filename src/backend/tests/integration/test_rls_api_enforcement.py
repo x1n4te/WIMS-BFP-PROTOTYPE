@@ -100,7 +100,6 @@ class TestProtectedEndpointRejectsNoAuth:
         [
             ("get", "/api/user/me", None),
             ("get", "/api/admin/users", None),
-            ("get", "/api/triage/pending", None),
             ("get", "/api/regional/incidents", None),
             ("get", "/api/analytics/heatmap", None),
             (

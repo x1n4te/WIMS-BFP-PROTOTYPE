@@ -3,7 +3,7 @@ set -eu
 
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak:8080/auth}"
 KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
-KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
+KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required}"
 KCADM="/opt/keycloak/bin/kcadm.sh"
 
 echo "Waiting for Keycloak HTTP endpoint at ${KEYCLOAK_URL}"

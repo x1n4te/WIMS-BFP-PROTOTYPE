@@ -259,8 +259,7 @@ def set_user_temporary_password(
         raise HTTPException(status_code=404, detail="User not found")
     row = db.execute(
         text(
-            "SELECT user_id, username, role FROM wims.users "
-            "WHERE keycloak_id = CAST(:kid AS uuid)"
+            "SELECT user_id, username, role FROM wims.users WHERE keycloak_id = CAST(:kid AS uuid)"
         ),
         {"kid": keycloak_id},
     ).fetchone()

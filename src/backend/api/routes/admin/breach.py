@@ -194,7 +194,12 @@ def create_breach(
             " VALUES (:ts, :sev, :payload, 'MANUAL_BREACH_REPORT', CAST(:uid AS uuid))"
             " RETURNING log_id"
         ),
-        {"ts": detected_at, "sev": body.severity.value, "payload": payload, "uid": _admin["user_id"]},
+        {
+            "ts": detected_at,
+            "sev": body.severity.value,
+            "payload": payload,
+            "uid": _admin["user_id"],
+        },
     ).scalar()
 
     row = db.execute(
@@ -264,6 +269,8 @@ def create_breach(
                 },
             )
         except Exception as exc:  # broker hiccup must not fail a committed record
-            logger.warning("breach_alert email dispatch failed (breach_id=%s): %s", result["breach_id"], exc)
+            logger.warning(
+                "breach_alert email dispatch failed (breach_id=%s): %s", result["breach_id"], exc
+            )
 
     return result

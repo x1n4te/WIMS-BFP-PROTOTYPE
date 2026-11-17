@@ -114,7 +114,9 @@ async def detect_afor_region(
             if _region_text_matches(rname, region_text):
                 suggested = rid
                 break
-    return AforRegionDetectResponse(file_region_text=region_text or None, suggested_region_id=suggested)
+    return AforRegionDetectResponse(
+        file_region_text=region_text or None, suggested_region_id=suggested
+    )
 
 
 @router.post("/afor/import", response_model=AforParseResponse)
@@ -280,7 +282,9 @@ async def commit_afor_import(
             new_values={
                 "form_kind": body.form_kind,
                 "region_id": (
-                    body.region_id if user.get("role") == "SYSTEM_ADMIN" else user["assigned_region_id"]
+                    body.region_id
+                    if user.get("role") == "SYSTEM_ADMIN"
+                    else user["assigned_region_id"]
                 ),
                 **(
                     {
