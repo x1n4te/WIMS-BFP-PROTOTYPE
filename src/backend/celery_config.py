@@ -8,6 +8,10 @@ from celery.schedules import crontab
 
 SCHEDULE_CHECK_INTERVAL = int(os.environ.get("SCHEDULE_CHECK_INTERVAL", 300))
 
+KMS_ROTATION_ENABLED = (
+    os.environ.get("WIMS_KMS_ROTATION_ENABLED", "true").strip().lower() != "false"
+)
+
 MV_REFRESH_INTERVAL = int(os.environ.get("CELERY_MV_REFRESH_INTERVAL", 3600 * 6))
 SCHEDULE_CHECK_INTERVAL = int(os.environ.get("SCHEDULE_CHECK_INTERVAL", 300))
 
@@ -91,11 +95,18 @@ celery_app.conf.update(
             "task": "tasks.notifications.send_weekly_report_email",
             "schedule": crontab(day_of_week=1, hour=7, minute=0),
         },
-        # GH #152 Phase 6: Daily KMS key rotation check (03:30 UTC)
-        "ensure-pii-key-rotation-daily": {
-            "task": "tasks.kms_rotation.ensure_pii_key_rotation",
-            "schedule": crontab(hour=3, minute=30),
-        },
+        # GH #152 Phase 6: Daily KMS key rotation check (03:30 UTC). Needs OpenBao; client
+        # installs run without it and set WIMS_KMS_ROTATION_ENABLED=false.
+        **(
+            {
+                "ensure-pii-key-rotation-daily": {
+                    "task": "tasks.kms_rotation.ensure_pii_key_rotation",
+                    "schedule": crontab(hour=3, minute=30),
+                }
+            }
+            if KMS_ROTATION_ENABLED
+            else {}
+        ),
         # Turnover Phase 2: 90-day password expiry for SYSTEM_ADMIN / NATIONAL_VALIDATOR
         # (adds UPDATE_PASSWORD in Keycloak; daily 03:45 UTC)
         "enforce-password-expiry-daily": {

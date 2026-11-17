@@ -1,0 +1,28 @@
+# Used ONLY by build-bundle.ps1 on a build machine (x86 Docker host, internet needed).
+# Never shipped to or used on the client PC.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+# The frontend bakes the public hostname into the JavaScript bundle at build time, so a
+# different hostname needs a rebuilt bundle: build-bundle.ps1 -WimsHost <name>.
+services:
+  backend:
+    platform: linux/amd64
+    build:
+      context: ../../src/backend
+  celery-worker:
+    platform: linux/amd64
+    build:
+      context: ../../src/backend
+  keycloak:
+    platform: linux/amd64
+    build:
+      context: ../../src/keycloak
+  frontend:
+    platform: linux/amd64
+    build:
+      context: ../../src/frontend
+      args:
+        NEXT_PUBLIC_API_URL: /api
+        NEXT_PUBLIC_AUTH_API_URL: /auth
+        NEXT_PUBLIC_BASE_URL: https://${WIMS_HOST:-wims.bfp.lan}
+        NEXT_PUBLIC_OIDC_REDIRECT_URI: https://${WIMS_HOST:-wims.bfp.lan}/callback
+        NEXT_PUBLIC_OIDC_AUTHORITY: https://${WIMS_HOST:-wims.bfp.lan}/auth/realms/bfp

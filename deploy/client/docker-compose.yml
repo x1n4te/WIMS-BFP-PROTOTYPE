@@ -1,0 +1,274 @@
+# WIMS-BFP client deployment - ONE office PC (Windows, ~8 GB RAM) serving the office LAN.
+#
+# Run from this folder with the generated .env (setup-secrets.ps1). Images come from the
+# offline bundle (install.ps1 -> docker load); nothing is pulled or built on the client PC.
+# Images are built by build-bundle.ps1 using docker-compose.build.yml.
+#
+# Differences from src/docker-compose.yml (dev):
+#   - no openbao, suricata, ollama, osrm, mailhog; WIMS_CRYPTO_PROVIDER=env_aesgcm
+#   - only nginx publishes ports (443; 80 redirects to 443)
+#   - one hostname (WIMS_HOST, default wims.bfp.lan) drives every URL setting
+#   - memory limits sized for an 8 GB PC with the WSL2 cap in INSTALL.md (4 GB)
+#   - no static IPs / extra_hosts: default compose network DNS
+#
+# Memory budget (mem_limit, sum = 2,976 MB inside the 4 GB WSL2 cap; ~1 GB left for the VM
+# kernel and page cache). These are ESTIMATES until measured (DEPLOYMENT_TEST_CHECKLIST.md).
+#   postgres   640m  shared_buffers 192MB + work_mem 4MB x <=50 connections
+#   redis       96m  maxmemory 64mb (session blacklist, rate limits, Celery broker)
+#   keycloak   768m  JVM heap capped at 448m (-Xms256m -Xmx448m); rest is metaspace/native
+#   backend    512m  uvicorn, ONE worker
+#   celery     640m  worker --concurrency 2 + embedded beat (exports/PDF are the heavy part)
+#   frontend   256m  Next.js standalone server
+#   nginx       64m
+#
+# CPU: cpus is a ceiling per service, not a reservation; the 2-4 vCPU WSL2 cap is shared.
+
+name: wims
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    <<: [*restart, *logging]
+    image: postgis/postgis:15-3.4-alpine
+    container_name: wims-postgres
+    command:
+      - postgres
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=50
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run setup-secrets.ps1}
+      POSTGRES_DB: wims
+      # Read by init-extra/zz_client_set_passwords.sh on first boot only.
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?run setup-secrets.ps1}
+      WIMS_APP_DB_PASSWORD: ${WIMS_APP_DB_PASSWORD:?run setup-secrets.ps1}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Assembled by build-bundle.ps1 from init-files.txt (+ init-extra/).
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    mem_limit: 640m
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wims"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 120s # first boot runs ~115 SQL files
+
+  redis:
+    <<: [*restart, *logging]
+    image: redis:8.8-alpine
+    container_name: wims-redis
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 96m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  keycloak:
+    <<: [*restart, *logging]
+    image: wims-keycloak:client
+    container_name: wims-keycloak
+    # start-dev matches what src/docker-compose.yml (VPS) already runs. Switching to
+    # `start --optimized` needs a build-time --db=postgres image; tracked as a follow-up.
+    command: start-dev --import-realm --http-host=0.0.0.0
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?run setup-secrets.ps1}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-kcadmin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run setup-secrets.ps1}
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      # Fixed public URL: every token issuer is https://<WIMS_HOST>/auth/realms/bfp no matter
+      # how Keycloak is reached. Containers may use http://keycloak:8080/auth (backchannel).
+      KC_HOSTNAME: https://${WIMS_HOST:-wims.bfp.lan}/auth
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_LOG_LEVEL: INFO
+      JAVA_OPTS_KC_HEAP: "-Xms256m -Xmx448m"
+      # Realm ${env.SMTP_*} placeholders. Email is optional; see INSTALL.md (internet down).
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_FROM: ${SMTP_FROM:-noreply@wims.bfp.lan}
+      SMTP_FROM_DISPLAY: ${SMTP_FROM_DISPLAY:-WIMS-BFP}
+      SMTP_REPLYTO: ${SMTP_REPLYTO:-noreply@wims.bfp.lan}
+      SMTP_REPLYTO_DISPLAY: ${SMTP_REPLYTO_DISPLAY:-WIMS-BFP No Reply}
+      SMTP_SSL: ${SMTP_SSL:-false}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_AUTH: ${SMTP_AUTH:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      WIMS_AUDIT_INGEST_URL: http://backend:8000/api/auth/keycloak-event
+      WIMS_KEYCLOAK_EVENT_SECRET: ${WIMS_KEYCLOAK_EVENT_SECRET:-}
+    volumes:
+      # Rendered by install.ps1 (tools/render_realm.py): src realm + redirect URIs for WIMS_HOST.
+      - ./runtime/realm:/opt/keycloak/data/import:ro
+    mem_limit: 768m
+    cpus: 1.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /auth/ HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && timeout 8 cat <&3 | head -1 | grep -qE '^HTTP'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  backend:
+    <<: [*restart, *logging]
+    image: wims-backend:client
+    container_name: wims-backend
+    # ONE worker, lifespan off: same as the dev stack. entrypoint.sh runs `alembic upgrade head`
+    # first (a no-op baseline when postgres-init already built the schema).
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "100", "--timeout-keep-alive", "5", "--lifespan", "off"]
+    environment:
+      DATABASE_URL: postgresql://wims_app_user:${WIMS_APP_DB_PASSWORD:?run setup-secrets.ps1}@postgres:5432/wims
+      DATABASE_ADMIN_URL: postgresql://postgres:${POSTGRES_PASSWORD:?run setup-secrets.ps1}@postgres:5432/wims
+      POSTGRES_INIT_DIR: /postgres-init
+      PYTHONPATH: /app
+      REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_REALM_URL: http://keycloak:8080/auth/realms/bfp
+      KEYCLOAK_ISSUER: https://${WIMS_HOST:-wims.bfp.lan}/auth/realms/bfp
+      KEYCLOAK_CLIENT_ID: wims-web
+      KEYCLOAK_AUDIENCE: wims-web
+      KEYCLOAK_ADMIN_USER: ${KEYCLOAK_ADMIN:-kcadmin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run setup-secrets.ps1}
+      AFOR_TEMPLATE_PATH: /app/AFOR-FORMATTED.xlsx
+      CSRF_TRUSTED_ORIGINS: https://${WIMS_HOST:-wims.bfp.lan}
+      NEXT_PUBLIC_APP_URL: https://${WIMS_HOST:-wims.bfp.lan}
+      WIMS_CRYPTO_PROVIDER: env_aesgcm
+      WIMS_MASTER_KEY: ${WIMS_MASTER_KEY:?run setup-secrets.ps1}
+      WIMS_KEYCLOAK_EVENT_SECRET: ${WIMS_KEYCLOAK_EVENT_SECRET:-}
+      BACKUP_DIR: /app/storage/backups
+    volumes:
+      - attachments:/app/storage
+      - ./postgres-init:/postgres-init:ro
+    mem_limit: 512m
+    cpus: 1.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 6s
+      retries: 10
+      start_period: 90s
+
+  celery-worker:
+    <<: [*restart, *logging]
+    image: wims-backend:client
+    container_name: wims-celery-worker
+    # Exactly ONE container: --beat embeds the scheduler. Never scale this service.
+    command: celery -A main.celery_app worker --beat --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql://wims_app_user:${WIMS_APP_DB_PASSWORD:?run setup-secrets.ps1}@postgres:5432/wims
+      DATABASE_ADMIN_URL: postgresql://postgres:${POSTGRES_PASSWORD:?run setup-secrets.ps1}@postgres:5432/wims
+      PYTHONPATH: /app
+      REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_REALM_URL: http://keycloak:8080/auth/realms/bfp
+      KEYCLOAK_ADMIN_USER: ${KEYCLOAK_ADMIN:-kcadmin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run setup-secrets.ps1}
+      EXPORT_DIR: /app/storage/exports
+      BACKUP_DIR: /app/storage/backups
+      AFOR_TEMPLATE_PATH: /app/AFOR-FORMATTED.xlsx
+      NEXT_PUBLIC_APP_URL: https://${WIMS_HOST:-wims.bfp.lan}
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_FROM: ${SMTP_FROM:-noreply@wims.bfp.lan}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      WIMS_CRYPTO_PROVIDER: env_aesgcm
+      WIMS_MASTER_KEY: ${WIMS_MASTER_KEY:?run setup-secrets.ps1}
+      # OpenBao is not part of the client stack; skip the daily rotation job.
+      WIMS_KMS_ROTATION_ENABLED: "false"
+    volumes:
+      - attachments:/app/storage
+      - ./postgres-init:/postgres-init:ro
+    mem_limit: 640m
+    cpus: 1.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    <<: [*restart, *logging]
+    image: wims-frontend:client
+    container_name: wims-frontend
+    environment:
+      # Build-time values are baked into the image (docker-compose.build.yml); these are the
+      # runtime copies and must match them.
+      NEXT_PUBLIC_API_URL: /api
+      NEXT_PUBLIC_AUTH_API_URL: /auth
+      NEXT_PUBLIC_BASE_URL: https://${WIMS_HOST:-wims.bfp.lan}
+      NEXT_PUBLIC_OIDC_REDIRECT_URI: https://${WIMS_HOST:-wims.bfp.lan}/callback
+      NEXT_PUBLIC_OIDC_AUTHORITY: https://${WIMS_HOST:-wims.bfp.lan}/auth/realms/bfp
+      NEXT_PUBLIC_OIDC_CLIENT_ID: wims-web
+      NEXT_PUBLIC_APP_URL: https://${WIMS_HOST:-wims.bfp.lan}
+      AUTH_SERVER_URL: http://keycloak:8080/auth
+      BACKEND_URL: http://backend:8000
+      NODE_OPTIONS: --max-old-space-size=192
+    mem_limit: 256m
+    cpus: 1.0
+    depends_on:
+      - backend
+
+  nginx:
+    <<: [*restart, *logging]
+    image: nginx:1.30.3-alpine
+    container_name: wims-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Rendered by install.ps1 from nginx.conf (WIMS_HOST / WIMS_SERVER_IP substituted).
+      - ./runtime/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs/server:/etc/nginx/certs:ro
+    mem_limit: 64m
+    cpus: 0.5
+    depends_on:
+      - backend
+      - frontend
+      - keycloak
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/health || exit 1"] # port 80 default server answers /health
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:
+    name: wims_postgres_data
+  attachments:
+    name: wims_attachments

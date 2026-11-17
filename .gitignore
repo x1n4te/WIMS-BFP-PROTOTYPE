@@ -87,3 +87,10 @@ system-wiki/.obsidian/
 # Browser QA artifacts (screenshots, traces, logs; auto-pruned by the
 # wims-browser extension, but never committed)
 .pi/browser/
+
+# Client deployment package: generated at build/install time, never committed
+deploy/client/.env
+deploy/client/postgres-init/
+deploy/client/runtime/
+deploy/client/certs/
+deploy/client/dist/

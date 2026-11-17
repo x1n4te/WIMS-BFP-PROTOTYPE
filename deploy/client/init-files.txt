@@ -1,0 +1,134 @@
+# Explicit include list of src/postgres-init files for CLIENT installs.
+# One file name per line, applied in sorted (codepoint) order - same order as the dev stack.
+# Maintained by hand on purpose: a new file in postgres-init is NOT shipped until listed here
+# (tests/test_client_init_files.py fails if a file is neither listed nor excluded).
+#
+# EXCLUDED (dev/demo data, never shipped):
+#   03a_dev_users.sql                        dev users (encoder_*, validator_test, team accounts)
+#   14a_assign_ncr_to_test_users.sql         region assignment for dev users
+#   14b_assign_ncr_to_team_accounts.sql      region assignment for dev team accounts
+#   29_seed_incidents.sql                    demo incidents, import batch and analytics facts
+#   38_seed_security_threat_logs.sql         demo security threat logs
+#
+# Kept service accounts: svc_task (03_users.sql). svc_suricata (03_users.sql) is kept: harmless,
+# no Python code references it, only comments in 75/77 and scripts/asvs-l2-audit-v13.py.
+# Reference data kept: 14_seed_ncr, 21_all_regions, 25/26 cities, 27_reference_sequence,
+# 32_ref_fire_stations, system_config inserts (49, 65, 68, 75, 78, 94).
+
+00_keycloak_bootstrap.sql
+01_extensions_roles.sql
+02_ref_geography.sql
+03_users.sql
+04_import_incidents.sql
+04a_fire_incidents_composite_index.sql
+05_citizen_reports.sql
+06_incident_details.sql
+07_wildland_afor.sql
+08_security_audit.sql
+09_rls_helpers.sql
+10_rls_policies.sql
+10a_m4_incident_scope.sql
+11_analytics_facts.sql
+12_analytics_mvs.sql
+13_export_reports.sql
+14_seed_ncr.sql
+15_validator_workflow.sql
+16_fix_ivh_legacy.sql
+17_cross_region_validator.sql
+17_immutable_records.sql
+18_submitted_snapshot.sql
+19_reference_number.sql
+20_parent_incident_id.sql
+21_all_regions.sql
+22_duplicate_flags.sql
+23_archived_at.sql
+24_replaced_status_action_label.sql
+25_cities_region4.sql
+25_extent_fields.sql
+26_cities_remaining_regions.sql
+27_reference_sequence.sql
+28_analytics_geography_denorm.sql
+28_general_description_column.sql
+29_fix_immutable_rule.sql
+30_ivh_hash_chain.sql
+31_barangay_geometry.sql
+32_ref_fire_stations.sql
+32_worker_heartbeat.sql
+32b_citizen_reports_station_fk.sql
+33_incident_ai_narrative.sql
+33_report_notification_tokens.sql
+34_security_incident.sql
+35_barangay_text.sql
+35_citizen_report_clusters.sql
+36_ref_fire_stations_phone_null.sql
+37_citizen_reports_description.sql
+39_hitl_decision.sql
+39_remove_station_code.sql
+40_add_resubmitted_flag.sql
+40_verification_audit_fields.sql
+41_fix_immutable_rule_for_archive.sql
+42_ref_table_rls.sql
+43_app_login_role.sql
+44_add_email_to_users.sql
+45_add_client_id_to_incidents.sql
+45_unique_detail_incident_id.sql
+46_system_metrics.sql
+47_notification_preferences.sql
+48_log_search_vectors.sql
+49_system_config.sql
+50_unique_security_alert.sql
+51_operations.sql
+52_breach_notifications.sql
+52_operations_map.sql
+53_incident_pii_key_version.sql
+53_ref_table_rls.sql
+54_openbao_provider_metadata.sql
+55_kms_key_rotation_runs.sql
+56_add_client_id_to_verification_history.sql
+57_anomaly_detections.sql
+58_attachment_encryption.sql
+59_citizen_report_followups.sql
+59_consent_log.sql
+60_audit_forensics_columns.sql
+61_check_constraints.sql
+62_audit_correlation_columns.sql
+62_security_threat_classification.sql
+63_fire_incidents_insert_audit_trigger.sql
+63_ivh_ip_address.sql
+64_consent_log_ip_hash.sql
+65_ip_blocklist.sql
+66_security_threat_logs_indexes.sql
+67_repudiation_hardening.sql
+68_correction_data_hash_fix.sql
+68_data_retention.sql
+69_citizen_reports_pii_encryption.sql
+70_incident_ai_narrative_encryption.sql
+71_operation_report_unique.sql
+72_partition_audit_trail.sql
+73_ncr_province_backfill.sql
+74_backup_schedule.sql
+75_security_log_rollups.sql
+76_add_xai_confidence_breakdown.sql
+77_security_log_rollups_policy_fix.sql
+78_siem_config_patch.sql
+79_operations_day_reset.sql
+80_civilian_contributor_tables.sql
+81_civilian_routing_columns.sql
+82_civilian_report_photos.sql
+83_photo_exif_metadata.sql
+84_photo_idempotency_key.sql
+85_citizen_report_idempotency.sql
+86_civilian_contributor_snapshot.sql
+87_photo_preupload_schema.sql
+88_anonymous_photo_ownership.sql
+89_anonymous_pending_photo_insert.sql
+90_registered_photo_ownership.sql
+91_community_content_schema.sql
+92_remove_legacy_photo_bonus_function.sql
+93_information_cms.sql
+94_device_blocklist.sql
+95_report_status_updates.sql
+96_fire_incident_perimeters.sql
+97_information_emergency_draft_source_unique.sql
+98_capability_tracking_projection.sql
+99_citizen_report_geoip_reporter_envelope.sql

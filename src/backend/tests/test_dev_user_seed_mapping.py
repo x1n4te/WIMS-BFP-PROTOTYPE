@@ -56,7 +56,10 @@ def test_seed_scripts_use_canonical_encoder_region_mapping() -> None:
 
 
 def test_postgres_bootstrap_assigns_canonical_encoder_regions() -> None:
-    users_sql = (REPO_ROOT / "src" / "postgres-init" / "03_users.sql").read_text(encoding="utf-8")
+    # dev users live in 03a_dev_users.sql (split out of 03_users.sql so client installs skip them)
+    users_sql = (REPO_ROOT / "src" / "postgres-init" / "03a_dev_users.sql").read_text(
+        encoding="utf-8"
+    )
     regions_sql = (REPO_ROOT / "src" / "postgres-init" / "21_all_regions.sql").read_text(
         encoding="utf-8"
     )
