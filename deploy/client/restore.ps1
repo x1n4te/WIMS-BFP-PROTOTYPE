@@ -12,8 +12,7 @@
 #>
 param(
     [Parameter(Mandatory)][string]$BackupFolder,
-    [string]$SecretsFolder,
-    [switch]$Yes
+    [string]$SecretsFolder
 )
 
 . "$PSScriptRoot\common.ps1"
@@ -22,6 +21,14 @@ Assert-Docker
 foreach ($f in 'wims.dump', 'keycloak.dump', 'attachments.tar.gz', 'manifest.json') {
     if (-not (Test-Path -LiteralPath (Join-Path $BackupFolder $f))) { Fail "Backup folder is missing $f" }
 }
+
+# Confirmation FIRST: nothing below changes anything until the operator types the database
+# name (wims) or RESTORE exactly. There is deliberately no -Yes switch.
+Write-Host ''
+Write-Host 'This REPLACES all current WIMS data on this PC (the wims and keycloak databases and the uploaded files) with the backup.' -ForegroundColor Yellow
+Write-Host "Backup: $BackupFolder"
+$answer = Read-Host 'To continue type the database name (wims) or RESTORE'
+if ($answer -cne 'wims' -and $answer -cne 'RESTORE') { Fail 'Not confirmed. Nothing was changed.' }
 
 Write-Step 'Checking backup integrity'
 $manifest = Get-Content -LiteralPath (Join-Path $BackupFolder 'manifest.json') -Raw | ConvertFrom-Json
@@ -49,11 +56,6 @@ if ($SecretsFolder) {
 }
 if (-not (Test-Path -LiteralPath $script:EnvFile)) { Fail 'No .env on this PC. Pass -SecretsFolder with the backed-up secrets folder.' }
 $cfg = Read-DotEnv
-
-if (-not $Yes) {
-    $answer = Read-Host 'This REPLACES all current WIMS data on this PC with the backup. Type RESTORE to continue'
-    if ($answer -cne 'RESTORE') { Fail 'Cancelled.' }
-}
 
 # Stack: make sure the images are loaded and postgres is up ------------------------------------
 if (-not (Test-ImageLoaded $script:BackendImage)) { Write-Step 'Images not loaded: running install.ps1 first'; & "$PSScriptRoot\install.ps1" -SkipBackup }

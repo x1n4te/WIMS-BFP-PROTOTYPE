@@ -20,6 +20,8 @@ first run. Write the result in the **Result** column (PASS / FAIL + note). A FAI
 | 1.2 | Memory cap active | `.wslconfig` has `memory=4GB`; after `wsl --shutdown` and restart: `wsl -e free -m` | total ≈ 3.9 GB | |
 | 1.3 | Bundle intact | `install.ps1` checksum step | every line `ok`; tamper test: change one byte in a copy → `CORRUPT`, install refuses | |
 | 1.4 | Fixed IP and name | `ping wims.bfp.lan` from server **and** second device | answers from the server IP | |
+| 1.5 | Engine is dockerd (moby) | in a **new** PowerShell: `docker version` shows a `Server: ... Engine` block; `docker compose version` works | both succeed; with containerd selected `docker` is not found | |
+| 1.6 | Script execution on copied files | bundle copied from USB; run `.\install.ps1` **before** unblocking | PowerShell refuses ("not digitally signed / from another computer"); after `Get-ChildItem C:\WIMS -Recurse -File \| Unblock-File` and `Set-ExecutionPolicy -Scope Process Bypass` it runs | |
 
 ## 2. Install from the bundle with the internet **disconnected**
 
@@ -42,6 +44,10 @@ first run. Write the result in the **Result** column (PASS / FAIL + note). A FAI
 | 3.4 | Backend start log | `docker compose logs backend \| findstr /i "alembic Skipping baseline Startup checks"` | "Core WIMS tables exist – skipping baseline bootstrap" (baseline must **not** have re-run seeds), "Startup checks done" | |
 | 3.5 | Celery beat | `docker compose logs celery-worker \| findstr /i "beat Scheduler"`; no `ensure_pii_key_rotation` scheduled/erroring | beat started; no OpenBao/KMS errors | |
 | 3.6 | Health endpoint | `curl.exe -k https://wims.bfp.lan/health` (from second device) | `{"status":"ok",...}` | |
+| 3.7 | Keycloak runs in production mode | `docker inspect -f "{{.Config.Cmd}}" wims-keycloak`; `docker compose logs keycloak \| findstr /i "Profile Optimized"` | command is `start --optimized --import-realm`; log shows `Profile(s) ... prod` (not `dev`); no "build time options have changed" error | |
+| 3.8 | Keycloak build options baked in | `docker compose exec -T keycloak /opt/keycloak/bin/kc.sh show-config \| findstr /i "kc.db kc.http-relative-path kc.health-enabled kc.hostname"` | `kc.db=postgres`, `kc.http-relative-path=/auth`, `kc.health-enabled=true`, `kc.hostname=https://wims.bfp.lan/auth`, `kc.hostname-strict=true` | |
+| 3.9 | Keycloak not reachable except through nginx | from the second device: `Test-NetConnection 192.168.1.50 -Port 8080` | fails (port not published); `https://wims.bfp.lan/auth/` works | |
+| 3.10 | WIMS login theme present | open the login page | the WIMS-BFP themed login (not the plain Keycloak theme); `docker compose logs keycloak \| findstr /i "theme"` shows no "theme not found" | |
 
 ## 4. Clean data: no dev users, no demo incidents (exact SQL)
 
@@ -66,6 +72,10 @@ first run. Write the result in the **Result** column (PASS / FAIL + note). A FAI
 | 5.4 | Lands on admin | after login | `/admin/system` | |
 | 5.5 | Keycloak admin works for the backend | Admin → System → create a user (role encoder, a region) | user created, listed (proves the backend's Keycloak admin login works after the temporary-admin profile step) | |
 | 5.6 | Create validator, analyst, encoder | same page; use the temporary-password fallback for each (email will fail offline) | each can sign in and must change the password; validator must also enrol OTP; encoder/analyst need no OTP | |
+| 5.7 | Login through the fixed name works | sign in at `https://wims.bfp.lan` (by **name**) | succeeds end to end; app pages load with data | |
+| 5.8 | Token issuer matches | from the second device: `curl.exe -s https://wims.bfp.lan/auth/realms/bfp/.well-known/openid-configuration` and decode the `access_token` payload (jwt.io offline copy or `docker compose exec -T backend python -c ...`) | discovery `issuer` and token `iss` are both exactly `https://wims.bfp.lan/auth/realms/bfp`; equals `KEYCLOAK_ISSUER` in `docker compose exec backend env`; an API call with that token returns 200, not 401 | |
+| 5.9 | Issuer is stable from inside | `docker compose exec -T backend python -c "import urllib.request,json;print(json.load(urllib.request.urlopen('http://keycloak:8080/auth/realms/bfp/.well-known/openid-configuration'))['issuer'])"` | same `https://wims.bfp.lan/auth/realms/bfp` (strict hostname) | |
+| 5.10 | Wrong Host does not change the issuer | `curl.exe -sk -H "Host: evil.example" https://192.168.1.50/auth/realms/bfp/.well-known/openid-configuration` | refused (421) or the same issuer; never `evil.example` | |
 
 ## 6. Analytics policies (Phase 3b static check, now on a live database)
 
@@ -155,8 +165,9 @@ Use test data from sections 5–10 (users with OTP, incidents with PII, an AFOR 
 | 12.1 | Note counts: `sql "select (select count(*) from wims.fire_incidents), (select count(*) from wims.users)"`; open one incident with caller/owner names | write numbers and the names down | |
 | 12.2 | `.\backup.ps1 -Destination E:\WIMS-Backups -SecretsDestination F:\WIMS-Secrets` | "Backup complete"; two folders; `manifest.json` has sizes and checksums | |
 | 12.3 | Break test: edit one byte of `wims.dump` in a **copy** and run `restore.ps1` on it | refuses: "does not match its checksum" | |
+| 12.3b | Confirmation gate | run `restore.ps1` and answer `no`, then an empty line, then `WIMS` (wrong case) | each aborts with "Not confirmed. Nothing was changed."; `docker ps` and the database counts are unchanged; `wims` or `RESTORE` is accepted | |
 | 12.4 | **Wipe** (test PC only): `docker compose down -v`; `Remove-Item .env -Force`; `Remove-Item certs -Recurse -Force`; `Remove-Item runtime -Recurse -Force`; restart the PC | no WIMS data left | |
-| 12.5 | `.\restore.ps1 -BackupFolder … -SecretsFolder …` (type `RESTORE`) | images load, data restored, all containers healthy | |
+| 12.5 | `.\restore.ps1 -BackupFolder … -SecretsFolder …` (type `wims` or `RESTORE`) | images load, data restored, all containers healthy | |
 | 12.6 | Counts and incidents | same numbers as 12.1 | |
 | 12.7 | Encrypted PII readable | the incident from 12.1 shows the same names (proves the master key was restored) | |
 | 12.8 | Logins survive | the administrator signs in with the **same** password and the **same** phone code; other users too | |
@@ -186,7 +197,7 @@ sessions; (c) after 1 hour idle. Compare with the **limit** (`MEM LIMIT` column)
 | 13.1 | No service killed for memory | `docker inspect -f "{{.Name}} OOMKilled={{.State.OOMKilled}} restarts={{.RestartCount}}" wims-postgres wims-redis wims-keycloak wims-backend wims-celery-worker wims-frontend wims-nginx` | all `OOMKilled=false`, `restarts=0` | |
 | 13.2 | Headroom | every service ≤ 85 % of its limit at peak; if not, raise that service's `mem_limit` (and the WSL cap if needed) and record the new number | |
 | 13.3 | Windows stays usable | Task Manager during the walkthrough | ≥ 2 GB free, no heavy paging | |
-| 13.4 | Keycloak heap | `docker compose exec keycloak sh -c "ps aux \| grep -o 'Xmx[0-9a-z]*'"` | `Xmx448m` | |
+| 13.4 | Keycloak heap (production mode: re-measure; expect lower than a start-dev run) | `docker compose exec keycloak sh -c "ps aux \| grep -o 'Xmx[0-9a-z]*'"` | `Xmx448m` | |
 | 13.5 | Response feel | dashboard and analytics screens | each loads in < 5 s on the LAN | |
 
 ## 14. Restart, power and update behaviour

@@ -34,6 +34,12 @@ this. Do not install Docker Desktop on this PC.)*
 3. Open it. On first start choose **dockerd (moby)** as the container engine (*Preferences →
    Container Engine*) and **disable Kubernetes** (*Preferences → Kubernetes*). Kubernetes would
    waste about 1.5 GB of memory.
+
+   > **The engine choice matters.** Rancher Desktop offers two engines: **dockerd (moby)** and
+   > *containerd*. Only **dockerd (moby)** provides the `docker` and `docker compose` commands in
+   > PowerShell that every WIMS script uses. If you picked *containerd*, `docker` is not found:
+   > change it under *Preferences → Container Engine → dockerd (moby)*, apply, and wait for
+   > Rancher Desktop to restart.
 4. *Preferences → Application → Behavior*: tick **Automatically start at login** and
    **Start in the background**.
 5. Wait until Rancher Desktop says it is running, then open a new PowerShell and check:
@@ -108,14 +114,22 @@ The bundle is a folder that contains `images\wims-images.tar` (about 2–3 GB), 
 this guide. Copy the **whole folder** from the USB drive to **`C:\WIMS`**. Do not compress it
 with Windows "Send to → Compressed folder" (the large file does not fit).
 
-Open PowerShell **in that folder**:
+Files copied from a USB stick or downloaded are marked by Windows as "from another computer"
+and PowerShell refuses to run them. Remove that mark once, then allow scripts for this window.
+Open PowerShell (administrator is not needed) and run, line by line:
 
 ```powershell
 cd C:\WIMS
+Get-ChildItem -Path C:\WIMS -Recurse -File | Unblock-File
 Set-ExecutionPolicy -Scope Process Bypass
 ```
 
-(The second line only lasts for this PowerShell window and only allows these scripts to run.)
+- `Unblock-File` clears the "from another computer" mark on every copied file. Run it again
+  after copying an update bundle (section 13).
+- `Set-ExecutionPolicy -Scope Process Bypass` allows scripts **only in this PowerShell window**
+  and changes nothing permanently. Type it again in every new PowerShell window before running
+  a `.\something.ps1` script. If PowerShell asks "Do you want to change the execution policy?",
+  answer **Y**.
 
 ## 6. Install WIMS
 
@@ -167,6 +181,7 @@ step, browsers show a "not secure" warning, and **offline mode will not work**.
 
    ```powershell
    cd <folder with the two files>
+   Get-ChildItem -File | Unblock-File
    Set-ExecutionPolicy -Scope Process Bypass
    .\install-ca-office-pc.ps1
    ```
@@ -223,8 +238,15 @@ Two folders are created by each backup:
 | `wims-backup-<date>` | the databases, uploaded files | on external media |
 | `wims-backup-<date>-secrets` | `.env` (**master key**, passwords) and the certificate authority | **somewhere else** – a different USB stick or the safe |
 
-The master key unlocks the encrypted personal data. Data and key must **not** travel together:
-anyone who finds both can read everything.
+> **WARNING – read this once, carefully.**
+> Backups are **encrypted with `WIMS_MASTER_KEY`**, and so is the personal data inside WIMS. The key
+> lives in the `.env` file (and in each `…-secrets` backup folder).
+> - **Store the key copy separately from the backup drive.** Backup drive and key together in
+>   one bag means anyone who finds the bag can read everything. Keep the key on a different USB
+>   stick, in the safe or with a second responsible person.
+> - **If the key is lost, the backups can never be recovered.** There is no reset, no recovery
+>   service, and nobody (including the developers) can decrypt them. A new server then starts
+>   empty. Check **today** that a second copy of the key exists and that you can read it.
 
 **Set it up once** (backs up every day at 18:00 to the PC, administrator not needed):
 
@@ -275,6 +297,7 @@ You receive a new bundle folder (same layout as in section 5).
 
    ```powershell
    cd C:\WIMS
+   Get-ChildItem -Path C:\WIMS -Recurse -File | Unblock-File
    Set-ExecutionPolicy -Scope Process Bypass
    .\install.ps1
    ```
@@ -298,7 +321,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 It restores the passwords, master key and certificate authority, loads the programs, replaces
 the data, and starts WIMS. Because the authority is restored, office PCs keep trusting the
-site. Type `RESTORE` when asked. On the same PC the command is the same; it **replaces the
+site. The script first asks you to type the database name (`wims`) or `RESTORE`; anything else stops it before it changes anything. On the same PC the command is the same; it **replaces the
 current data** with the backup.
 
 ## 15. If something is wrong

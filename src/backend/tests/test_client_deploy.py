@@ -373,3 +373,95 @@ def test_kms_rotation_is_scheduled_by_default_and_off_for_clients(monkeypatch):
         monkeypatch.delenv("WIMS_KMS_ROTATION_ENABLED", raising=False)
         sys.modules.pop("celery_config", None)
         importlib.import_module("celery_config")
+
+
+# ── Keycloak production mode ─────────────────────────────────────────────────────────────────────
+
+
+def test_client_keycloak_runs_optimized_with_strict_hostname_behind_nginx():
+    kc = _compose()["services"]["keycloak"]
+    assert kc["command"][:2] == ["start", "--optimized"]
+    assert "start-dev" not in " ".join(kc["command"])
+    env = kc["environment"]
+    assert env["KC_HOSTNAME"] == "https://${WIMS_HOST:-wims.bfp.lan}/auth"
+    assert env["KC_HOSTNAME_STRICT"] == "true"
+    assert env["KC_PROXY_HEADERS"] == "xforwarded"
+    assert env["KC_HTTP_ENABLED"] == "true"
+    # build-time options must live in the image, not be passed (and ignored) at runtime
+    for build_time in ("KC_DB", "KC_HTTP_RELATIVE_PATH", "KC_HEALTH_ENABLED"):
+        assert build_time not in env, build_time
+    assert "ports" not in kc  # reachable only through nginx
+
+
+def test_client_keycloak_image_bakes_in_build_options_provider_and_theme():
+    dockerfile = (CLIENT / "keycloak.Dockerfile").read_text(encoding="utf-8")
+    build = next(
+        ln for ln in dockerfile.splitlines() if "kc.sh build" in ln and not ln.startswith("#")
+    )
+    for option in ("--db=postgres", "--health-enabled=true", "--http-relative-path=/auth"):
+        assert option in build
+    assert "wims-audit-event-listener.jar" in dockerfile
+    assert "themes/wims-bfp" in dockerfile
+    assert (REPO / "src" / "keycloak" / "themes" / "wims-bfp").is_dir()
+    realm = json.loads((REPO / "src" / "keycloak" / "import" / "bfp-realm.json").read_text("utf-8"))
+    assert realm["loginTheme"] == "wims-bfp" and realm["emailTheme"] == "wims-bfp"
+    build_cfg = yaml.safe_load((CLIENT / "docker-compose.build.yml").read_text(encoding="utf-8"))
+    kc_build = build_cfg["services"]["keycloak"]["build"]
+    assert kc_build["context"] == "../../src/keycloak"
+    assert (CLIENT / kc_build["dockerfile"].split("deploy/client/")[-1]).is_file()
+
+
+def test_dev_and_vps_keycloak_are_unchanged():
+    dev = yaml.safe_load((REPO / "src" / "docker-compose.yml").read_text(encoding="utf-8"))
+    assert dev["services"]["keycloak"]["command"].startswith("start-dev")
+    dockerfile = (REPO / "src" / "keycloak" / "Dockerfile").read_text(encoding="utf-8")
+    assert "RUN /opt/keycloak/bin/kc.sh build\n" in dockerfile + "\n"
+    assert "--db=postgres" not in dockerfile
+
+
+# ── restore confirmation, INSTALL.md ──────────────────────────────────────────────────────────────
+
+
+def test_restore_requires_typed_confirmation_before_any_destructive_step():
+    text = (CLIENT / "restore.ps1").read_text(encoding="utf-8")
+    code = re.sub(r"<#.*?#>", "", text, flags=re.S)
+    code = "\n".join(ln for ln in code.splitlines() if not ln.lstrip().startswith("#"))
+    assert "$Yes" not in code and "-Yes" not in code  # no bypass switch
+    confirm = code.index("Read-Host 'To continue type the database name (wims) or RESTORE'")
+    assert "-cne 'wims'" in code and "-cne 'RESTORE'" in code
+    assert "Nothing was changed" in code
+    for destructive in (
+        "'stop'",
+        "DROP DATABASE",
+        "pg_restore",
+        "find /data -mindepth 1 -delete",
+        "Copy-Item -LiteralPath $savedEnv",
+        "install.ps1",
+        "'up'",
+    ):
+        assert destructive in code, destructive
+        assert code.index(destructive) > confirm, destructive
+
+
+def test_install_guide_covers_script_policy_key_warning_and_engine():
+    guide = (CLIENT / "INSTALL.md").read_text(encoding="utf-8")
+    assert "Set-ExecutionPolicy -Scope Process Bypass" in guide
+    assert "Unblock-File" in guide
+    assert "encrypted with `WIMS_MASTER_KEY`" in guide
+    assert "separately from the backup drive" in guide
+    assert "can never be recovered" in guide
+    assert "dockerd (moby)" in guide and "containerd" in guide
+    assert "docker compose version" in guide
+
+
+def test_checklist_has_the_production_keycloak_and_restore_gate_items():
+    checklist = (CLIENT / "DEPLOYMENT_TEST_CHECKLIST.md").read_text(encoding="utf-8")
+    for needle in (
+        "start --optimized",
+        "Token issuer matches",
+        "https://wims.bfp.lan/auth/realms/bfp",
+        "Confirmation gate",
+        "Engine is dockerd (moby)",
+        "Unblock-File",
+    ):
+        assert needle in checklist, needle

@@ -16,6 +16,7 @@ services:
     platform: linux/amd64
     build:
       context: ../../src/keycloak
+      dockerfile: ../../deploy/client/keycloak.Dockerfile
   frontend:
     platform: linux/amd64
     build:

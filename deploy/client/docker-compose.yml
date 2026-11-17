@@ -89,22 +89,23 @@ services:
     <<: [*restart, *logging]
     image: wims-keycloak:client
     container_name: wims-keycloak
-    # start-dev matches what src/docker-compose.yml (VPS) already runs. Switching to
-    # `start --optimized` needs a build-time --db=postgres image; tracked as a follow-up.
-    command: start-dev --import-realm --http-host=0.0.0.0
+    # Production mode. Build-time options (db=postgres, health, /auth path) are baked into the
+    # image by keycloak.Dockerfile, hence --optimized. The dev/VPS stack keeps start-dev.
+    command: ["start", "--optimized", "--import-realm", "--http-host=0.0.0.0"]
     environment:
-      KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KC_DB_PASSWORD:?run setup-secrets.ps1}
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-kcadmin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run setup-secrets.ps1}
-      KC_HTTP_RELATIVE_PATH: /auth
+      # HTTP is enabled because TLS ends at nginx; Keycloak is not published on any host port,
+      # so it is reachable only through nginx (https) and the compose network.
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
-      # Fixed public URL: every token issuer is https://<WIMS_HOST>/auth/realms/bfp no matter
-      # how Keycloak is reached. Containers may use http://keycloak:8080/auth (backchannel).
+      # Strict hostname: every token issuer and redirect is https://<WIMS_HOST>/auth/realms/bfp
+      # whatever Host header arrives. Containers use the backchannel http://keycloak:8080/auth.
       KC_HOSTNAME: https://${WIMS_HOST:-wims.bfp.lan}/auth
+      KC_HOSTNAME_STRICT: "true"
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_LOG_LEVEL: INFO
       JAVA_OPTS_KC_HEAP: "-Xms256m -Xmx448m"
